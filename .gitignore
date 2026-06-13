@@ -1,0 +1,5 @@
+src/training_outputs/
+*.pth
+__pycache__/
+*.pyc
+.git/objects/

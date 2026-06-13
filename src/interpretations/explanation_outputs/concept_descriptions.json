@@ -1,0 +1,1072 @@
+[
+  {
+    "concept_id": "c_tr_000",
+    "global_concept_index": 0,
+    "concept_type": "tr",
+    "concept_number": 0,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_000",
+        "global_concept_index": 0,
+        "concept_type": "tr",
+        "concept_number": 0,
+        "candidate_name": "high-contrast, dynamic visual elements with motion or texture variation",
+        "explanation": "The samples consistently feature regions with high visual salience: bright colors (green, blue, red), sharp edges, or textured surfaces (e.g., fabric, water, book spines). Many show motion or changes across frames (e.g., hands moving, fire flickering, water splashing), which naturally attract and maintain visual attention. The eye is drawn to these areas because they provide strong visual contrast, motion cues, or detailed patterns that stand out against the background or surrounding static elements.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 9.986469748923809e-08,
+        "mean_activation_score": 0.0031829566694796087,
+        "mean_retrieval_score": 0.0031829566694796087,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_000\",\n  \"candidate_name\": \"high-contrast, dynamic visual elements with motion or texture variation\",\n  \"explanation\": \"The samples consistently feature regions with high visual salience: bright colors (green, blue, red), sharp edges, or textured surfaces (e.g., fabric, water, book spines). Many show motion or changes across frames (e.g., hands moving, fire flickering, water splashing), which naturally attract and maintain visual attention. The eye is drawn to these areas because they provide strong visual contrast, motion cues, or detailed patterns that stand out against the background or surrounding static elements.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "high-contrast, dynamic visual elements with motion or texture variation",
+    "explanation": "The samples consistently feature regions with high visual salience: bright colors (green, blue, red), sharp edges, or textured surfaces (e.g., fabric, water, book spines). Many show motion or changes across frames (e.g., hands moving, fire flickering, water splashing), which naturally attract and maintain visual attention. The eye is drawn to these areas because they provide strong visual contrast, motion cues, or detailed patterns that stand out against the background or surrounding static elements.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_000\",\n  \"candidate_name\": \"high-contrast, dynamic visual elements with motion or texture variation\",\n  \"explanation\": \"The samples consistently feature regions with high visual salience: bright colors (green, blue, red), sharp edges, or textured surfaces (e.g., fabric, water, book spines). Many show motion or changes across frames (e.g., hands moving, fire flickering, water splashing), which naturally attract and maintain visual attention. The eye is drawn to these areas because they provide strong visual contrast, motion cues, or detailed patterns that stand out against the background or surrounding static elements.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 9.986469748923809e-08,
+    "mean_activation_score": 0.0031829566694796087,
+    "mean_retrieval_score": 0.0031829566694796087,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_001",
+    "global_concept_index": 1,
+    "concept_type": "tr",
+    "concept_number": 1,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_001",
+        "global_concept_index": 1,
+        "concept_type": "tr",
+        "concept_number": 1,
+        "candidate_name": "crowd scenes with dynamic human activity",
+        "explanation": "All samples depict human crowds, often in motion or engaged in expressive actions (clapping, cheering, gesturing). The visual pattern is characterized by high human density, varied clothing colors, and dynamic movement, which naturally captures attention due to the social and emotional cues conveyed by the crowd. Eye attention is fixated on these patches because they represent the most salient and behaviorally rich regions in the scene, contrasting with static or less interactive backgrounds.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.3787241286422615e-07,
+        "mean_activation_score": 0.0006447770458180458,
+        "mean_retrieval_score": 0.0006447770458180458,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_001\",\n  \"candidate_name\": \"crowd scenes with dynamic human activity\",\n  \"explanation\": \"All samples depict human crowds, often in motion or engaged in expressive actions (clapping, cheering, gesturing). The visual pattern is characterized by high human density, varied clothing colors, and dynamic movement, which naturally captures attention due to the social and emotional cues conveyed by the crowd. Eye attention is fixated on these patches because they represent the most salient and behaviorally rich regions in the scene, contrasting with static or less interactive backgrounds.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "crowd scenes with dynamic human activity",
+    "explanation": "All samples depict human crowds, often in motion or engaged in expressive actions (clapping, cheering, gesturing). The visual pattern is characterized by high human density, varied clothing colors, and dynamic movement, which naturally captures attention due to the social and emotional cues conveyed by the crowd. Eye attention is fixated on these patches because they represent the most salient and behaviorally rich regions in the scene, contrasting with static or less interactive backgrounds.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_001\",\n  \"candidate_name\": \"crowd scenes with dynamic human activity\",\n  \"explanation\": \"All samples depict human crowds, often in motion or engaged in expressive actions (clapping, cheering, gesturing). The visual pattern is characterized by high human density, varied clothing colors, and dynamic movement, which naturally captures attention due to the social and emotional cues conveyed by the crowd. Eye attention is fixated on these patches because they represent the most salient and behaviorally rich regions in the scene, contrasting with static or less interactive backgrounds.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.3787241286422615e-07,
+    "mean_activation_score": 0.0006447770458180458,
+    "mean_retrieval_score": 0.0006447770458180458,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_002",
+    "global_concept_index": 2,
+    "concept_type": "tr",
+    "concept_number": 2,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_002",
+        "global_concept_index": 2,
+        "concept_type": "tr",
+        "concept_number": 2,
+        "candidate_name": "High-contrast, low-resolution, or motion-blurred visual fragments",
+        "explanation": "All 10 examples are visually fragmented, low-resolution, or motion-blurred patches. They lack coherent structure or context, appearing as isolated, noisy, or indistinct visual elements. Eye attention is fixated on these patches because they are the only salient, albeit ambiguous, stimuli in the visual field \u2014 they stand out due to their high contrast, motion artifacts, or abrupt changes compared to the surrounding uniform or static background. The brain prioritizes processing these anomalous or dynamic regions, even if they are not meaningful.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.0983627056759815e-07,
+        "mean_activation_score": 0.0006059337814804166,
+        "mean_retrieval_score": 0.0006059337814804166,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_002\",\n  \"candidate_name\": \"High-contrast, low-resolution, or motion-blurred visual fragments\",\n  \"explanation\": \"All 10 examples are visually fragmented, low-resolution, or motion-blurred patches. They lack coherent structure or context, appearing as isolated, noisy, or indistinct visual elements. Eye attention is fixated on these patches because they are the only salient, albeit ambiguous, stimuli in the visual field \u2014 they stand out due to their high contrast, motion artifacts, or abrupt changes compared to the surrounding uniform or static background. The brain prioritizes processing these anomalous or dynamic regions, even if they are not meaningful.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "High-contrast, low-resolution, or motion-blurred visual fragments",
+    "explanation": "All 10 examples are visually fragmented, low-resolution, or motion-blurred patches. They lack coherent structure or context, appearing as isolated, noisy, or indistinct visual elements. Eye attention is fixated on these patches because they are the only salient, albeit ambiguous, stimuli in the visual field \u2014 they stand out due to their high contrast, motion artifacts, or abrupt changes compared to the surrounding uniform or static background. The brain prioritizes processing these anomalous or dynamic regions, even if they are not meaningful.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_002\",\n  \"candidate_name\": \"High-contrast, low-resolution, or motion-blurred visual fragments\",\n  \"explanation\": \"All 10 examples are visually fragmented, low-resolution, or motion-blurred patches. They lack coherent structure or context, appearing as isolated, noisy, or indistinct visual elements. Eye attention is fixated on these patches because they are the only salient, albeit ambiguous, stimuli in the visual field \u2014 they stand out due to their high contrast, motion artifacts, or abrupt changes compared to the surrounding uniform or static background. The brain prioritizes processing these anomalous or dynamic regions, even if they are not meaningful.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.0983627056759815e-07,
+    "mean_activation_score": 0.0006059337814804166,
+    "mean_retrieval_score": 0.0006059337814804166,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_003",
+    "global_concept_index": 3,
+    "concept_type": "tr",
+    "concept_number": 3,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_003",
+        "global_concept_index": 3,
+        "concept_type": "tr",
+        "concept_number": 3,
+        "candidate_name": "High-contrast, low-resolution, or motion-blurred visual fragments",
+        "explanation": "All 10 examples are visually fragmented, low-resolution, or motion-blurred patches that lack coherent structure or context. They appear as isolated, non-descriptive visual noise or partial objects (e.g., car grilles, fingers, abstract lights, blurred faces, feet, or textured surfaces). Eye attention is fixated on these patches likely because they are the only salient, high-contrast elements in their respective frames, even if they are meaningless or ambiguous. The model may be learning to detect these types of visually 'noisy' or 'unstructured' regions as a common pattern, possibly for anomaly detection or as a baseline for visual attention in low-quality or dynamic scenes.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.0426402425878223e-07,
+        "mean_activation_score": 0.028200577571988107,
+        "mean_retrieval_score": 0.028200577571988107,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_003\",\n  \"candidate_name\": \"High-contrast, low-resolution, or motion-blurred visual fragments\",\n  \"explanation\": \"All 10 examples are visually fragmented, low-resolution, or motion-blurred patches that lack coherent structure or context. They appear as isolated, non-descriptive visual noise or partial objects (e.g., car grilles, fingers, abstract lights, blurred faces, feet, or textured surfaces). Eye attention is fixated on these patches likely because they are the only salient, high-contrast elements in their respective frames, even if they are meaningless or ambiguous. The model may be learning to detect these types of visually 'noisy' or 'unstructured' regions as a common pattern, possibly for anomaly detection or as a baseline for visual attention in low-quality or dynamic scenes.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "High-contrast, low-resolution, or motion-blurred visual fragments",
+    "explanation": "All 10 examples are visually fragmented, low-resolution, or motion-blurred patches that lack coherent structure or context. They appear as isolated, non-descriptive visual noise or partial objects (e.g., car grilles, fingers, abstract lights, blurred faces, feet, or textured surfaces). Eye attention is fixated on these patches likely because they are the only salient, high-contrast elements in their respective frames, even if they are meaningless or ambiguous. The model may be learning to detect these types of visually 'noisy' or 'unstructured' regions as a common pattern, possibly for anomaly detection or as a baseline for visual attention in low-quality or dynamic scenes.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_003\",\n  \"candidate_name\": \"High-contrast, low-resolution, or motion-blurred visual fragments\",\n  \"explanation\": \"All 10 examples are visually fragmented, low-resolution, or motion-blurred patches that lack coherent structure or context. They appear as isolated, non-descriptive visual noise or partial objects (e.g., car grilles, fingers, abstract lights, blurred faces, feet, or textured surfaces). Eye attention is fixated on these patches likely because they are the only salient, high-contrast elements in their respective frames, even if they are meaningless or ambiguous. The model may be learning to detect these types of visually 'noisy' or 'unstructured' regions as a common pattern, possibly for anomaly detection or as a baseline for visual attention in low-quality or dynamic scenes.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.0426402425878223e-07,
+    "mean_activation_score": 0.028200577571988107,
+    "mean_retrieval_score": 0.028200577571988107,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_004",
+    "global_concept_index": 4,
+    "concept_type": "tr",
+    "concept_number": 4,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_004",
+        "global_concept_index": 4,
+        "concept_type": "tr",
+        "concept_number": 4,
+        "candidate_name": "high-contrast motion edges and blurred dynamic scenes",
+        "explanation": "The samples consistently feature areas with high contrast, sharp edges, or rapid motion blur, which naturally attract visual attention. These include: 1) sharp boundaries between colors (e.g., blue/red surfaces, snowboard edges); 2) motion-blurred objects (e.g., blue smoke, people in motion); 3) high-contrast static structures (e.g., power lines, scaffolding). These elements stand out due to their visual salience, creating strong edges or motion cues that the visual system prioritizes for processing.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 9.29648599878874e-08,
+        "mean_activation_score": 0.0006750025437213481,
+        "mean_retrieval_score": 0.0006750025437213481,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_004\",\n  \"candidate_name\": \"high-contrast motion edges and blurred dynamic scenes\",\n  \"explanation\": \"The samples consistently feature areas with high contrast, sharp edges, or rapid motion blur, which naturally attract visual attention. These include: 1) sharp boundaries between colors (e.g., blue/red surfaces, snowboard edges); 2) motion-blurred objects (e.g., blue smoke, people in motion); 3) high-contrast static structures (e.g., power lines, scaffolding). These elements stand out due to their visual salience, creating strong edges or motion cues that the visual system prioritizes for processing.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "high-contrast motion edges and blurred dynamic scenes",
+    "explanation": "The samples consistently feature areas with high contrast, sharp edges, or rapid motion blur, which naturally attract visual attention. These include: 1) sharp boundaries between colors (e.g., blue/red surfaces, snowboard edges); 2) motion-blurred objects (e.g., blue smoke, people in motion); 3) high-contrast static structures (e.g., power lines, scaffolding). These elements stand out due to their visual salience, creating strong edges or motion cues that the visual system prioritizes for processing.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_004\",\n  \"candidate_name\": \"high-contrast motion edges and blurred dynamic scenes\",\n  \"explanation\": \"The samples consistently feature areas with high contrast, sharp edges, or rapid motion blur, which naturally attract visual attention. These include: 1) sharp boundaries between colors (e.g., blue/red surfaces, snowboard edges); 2) motion-blurred objects (e.g., blue smoke, people in motion); 3) high-contrast static structures (e.g., power lines, scaffolding). These elements stand out due to their visual salience, creating strong edges or motion cues that the visual system prioritizes for processing.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 9.29648599878874e-08,
+    "mean_activation_score": 0.0006750025437213481,
+    "mean_retrieval_score": 0.0006750025437213481,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_005",
+    "global_concept_index": 5,
+    "concept_type": "tr",
+    "concept_number": 5,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_005",
+        "global_concept_index": 5,
+        "concept_type": "tr",
+        "concept_number": 5,
+        "candidate_name": "highly blurred or overexposed visual fragments",
+        "explanation": "All 10 examples are characterized by extreme blurriness, low resolution, or overexposure, making them visually indistinct. Eye attention is fixated on these patches likely because they represent the most salient or most frequently occurring visual artifacts in the dataset \u2014 such as motion blur, camera shake, or sensor saturation \u2014 which the model has learned to recognize as a common pattern despite their lack of semantic content. The model may be prioritizing these patches because they are recurrent, even if they are not informative.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.1554386105672166e-07,
+        "mean_activation_score": 0.0009565627726260573,
+        "mean_retrieval_score": 0.0009565627726260573,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_005\",\n  \"candidate_name\": \"highly blurred or overexposed visual fragments\",\n  \"explanation\": \"All 10 examples are characterized by extreme blurriness, low resolution, or overexposure, making them visually indistinct. Eye attention is fixated on these patches likely because they represent the most salient or most frequently occurring visual artifacts in the dataset \u2014 such as motion blur, camera shake, or sensor saturation \u2014 which the model has learned to recognize as a common pattern despite their lack of semantic content. The model may be prioritizing these patches because they are recurrent, even if they are not informative.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "highly blurred or overexposed visual fragments",
+    "explanation": "All 10 examples are characterized by extreme blurriness, low resolution, or overexposure, making them visually indistinct. Eye attention is fixated on these patches likely because they represent the most salient or most frequently occurring visual artifacts in the dataset \u2014 such as motion blur, camera shake, or sensor saturation \u2014 which the model has learned to recognize as a common pattern despite their lack of semantic content. The model may be prioritizing these patches because they are recurrent, even if they are not informative.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_005\",\n  \"candidate_name\": \"highly blurred or overexposed visual fragments\",\n  \"explanation\": \"All 10 examples are characterized by extreme blurriness, low resolution, or overexposure, making them visually indistinct. Eye attention is fixated on these patches likely because they represent the most salient or most frequently occurring visual artifacts in the dataset \u2014 such as motion blur, camera shake, or sensor saturation \u2014 which the model has learned to recognize as a common pattern despite their lack of semantic content. The model may be prioritizing these patches because they are recurrent, even if they are not informative.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.1554386105672166e-07,
+    "mean_activation_score": 0.0009565627726260573,
+    "mean_retrieval_score": 0.0009565627726260573,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_006",
+    "global_concept_index": 6,
+    "concept_type": "tr",
+    "concept_number": 6,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_006",
+        "global_concept_index": 6,
+        "concept_type": "tr",
+        "concept_number": 6,
+        "candidate_name": "highly dynamic or blurred motion patches",
+        "explanation": "The samples consistently show regions with motion blur, rapid movement, or low-resolution artifacts, which are visually salient and likely to capture attention due to their high contrast, unpredictability, or association with action. These patches stand out from static or clearly defined areas, making them prime candidates for fixation in visual processing.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.438692329713831e-07,
+        "mean_activation_score": 0.004347002366557717,
+        "mean_retrieval_score": 0.004347002366557717,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_006\",\n  \"candidate_name\": \"highly dynamic or blurred motion patches\",\n  \"explanation\": \"The samples consistently show regions with motion blur, rapid movement, or low-resolution artifacts, which are visually salient and likely to capture attention due to their high contrast, unpredictability, or association with action. These patches stand out from static or clearly defined areas, making them prime candidates for fixation in visual processing.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "highly dynamic or blurred motion patches",
+    "explanation": "The samples consistently show regions with motion blur, rapid movement, or low-resolution artifacts, which are visually salient and likely to capture attention due to their high contrast, unpredictability, or association with action. These patches stand out from static or clearly defined areas, making them prime candidates for fixation in visual processing.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_006\",\n  \"candidate_name\": \"highly dynamic or blurred motion patches\",\n  \"explanation\": \"The samples consistently show regions with motion blur, rapid movement, or low-resolution artifacts, which are visually salient and likely to capture attention due to their high contrast, unpredictability, or association with action. These patches stand out from static or clearly defined areas, making them prime candidates for fixation in visual processing.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.438692329713831e-07,
+    "mean_activation_score": 0.004347002366557717,
+    "mean_retrieval_score": 0.004347002366557717,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_007",
+    "global_concept_index": 7,
+    "concept_type": "tr",
+    "concept_number": 7,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_007",
+        "global_concept_index": 7,
+        "concept_type": "tr",
+        "concept_number": 7,
+        "candidate_name": "textured ground surfaces and low-resolution blurry scenes",
+        "explanation": "The samples predominantly feature close-up, low-resolution views of textured ground (e.g., dirt, gravel, grass) and blurry, indistinct scenes (e.g., crowds, indoor walls, reflections). Eye attention is fixated on these patches because they represent high-contrast, granular textures that stand out against the surrounding blur or uniform backgrounds, making them visually salient and likely to capture attention even in low-quality or noisy imagery.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.4468199225348143e-07,
+        "mean_activation_score": 0.0004936306882882491,
+        "mean_retrieval_score": 0.0004936306882882491,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_007\",\n  \"candidate_name\": \"textured ground surfaces and low-resolution blurry scenes\",\n  \"explanation\": \"The samples predominantly feature close-up, low-resolution views of textured ground (e.g., dirt, gravel, grass) and blurry, indistinct scenes (e.g., crowds, indoor walls, reflections). Eye attention is fixated on these patches because they represent high-contrast, granular textures that stand out against the surrounding blur or uniform backgrounds, making them visually salient and likely to capture attention even in low-quality or noisy imagery.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "textured ground surfaces and low-resolution blurry scenes",
+    "explanation": "The samples predominantly feature close-up, low-resolution views of textured ground (e.g., dirt, gravel, grass) and blurry, indistinct scenes (e.g., crowds, indoor walls, reflections). Eye attention is fixated on these patches because they represent high-contrast, granular textures that stand out against the surrounding blur or uniform backgrounds, making them visually salient and likely to capture attention even in low-quality or noisy imagery.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_007\",\n  \"candidate_name\": \"textured ground surfaces and low-resolution blurry scenes\",\n  \"explanation\": \"The samples predominantly feature close-up, low-resolution views of textured ground (e.g., dirt, gravel, grass) and blurry, indistinct scenes (e.g., crowds, indoor walls, reflections). Eye attention is fixated on these patches because they represent high-contrast, granular textures that stand out against the surrounding blur or uniform backgrounds, making them visually salient and likely to capture attention even in low-quality or noisy imagery.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.4468199225348143e-07,
+    "mean_activation_score": 0.0004936306882882491,
+    "mean_retrieval_score": 0.0004936306882882491,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_008",
+    "global_concept_index": 8,
+    "concept_type": "tr",
+    "concept_number": 8,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_008",
+        "global_concept_index": 8,
+        "concept_type": "tr",
+        "concept_number": 8,
+        "candidate_name": "High-contrast, salient visual elements with strong color or motion cues",
+        "explanation": "All 10 examples feature regions that are visually striking due to high contrast, saturated colors, or dynamic motion. These include: (1) bright blue against white, (2) vivid yellow backpack, (3) red lipstick against white, (4) bright pink in stained glass, (5) glowing blue lights, (6) a person's ear with a piercing, (7) a person in a white shirt against dark background, (8) a person in a red shirt, (9) a person in a white shirt, and (10) a person in a white shirt. These elements naturally attract visual attention because they stand out from their surroundings, creating strong visual anchors that the eye is drawn to. The pattern is not about specific object types but about the visual salience and contrast that make these patches the most prominent in each frame.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.1673160074110456e-07,
+        "mean_activation_score": 0.0006094256648793816,
+        "mean_retrieval_score": 0.0006094256648793816,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_008\",\n  \"candidate_name\": \"High-contrast, salient visual elements with strong color or motion cues\",\n  \"explanation\": \"All 10 examples feature regions that are visually striking due to high contrast, saturated colors, or dynamic motion. These include: (1) bright blue against white, (2) vivid yellow backpack, (3) red lipstick against white, (4) bright pink in stained glass, (5) glowing blue lights, (6) a person's ear with a piercing, (7) a person in a white shirt against dark background, (8) a person in a red shirt, (9) a person in a white shirt, and (10) a person in a white shirt. These elements naturally attract visual attention because they stand out from their surroundings, creating strong visual anchors that the eye is drawn to. The pattern is not about specific object types but about the visual salience and contrast that make these patches the most prominent in each frame.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "High-contrast, salient visual elements with strong color or motion cues",
+    "explanation": "All 10 examples feature regions that are visually striking due to high contrast, saturated colors, or dynamic motion. These include: (1) bright blue against white, (2) vivid yellow backpack, (3) red lipstick against white, (4) bright pink in stained glass, (5) glowing blue lights, (6) a person's ear with a piercing, (7) a person in a white shirt against dark background, (8) a person in a red shirt, (9) a person in a white shirt, and (10) a person in a white shirt. These elements naturally attract visual attention because they stand out from their surroundings, creating strong visual anchors that the eye is drawn to. The pattern is not about specific object types but about the visual salience and contrast that make these patches the most prominent in each frame.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_008\",\n  \"candidate_name\": \"High-contrast, salient visual elements with strong color or motion cues\",\n  \"explanation\": \"All 10 examples feature regions that are visually striking due to high contrast, saturated colors, or dynamic motion. These include: (1) bright blue against white, (2) vivid yellow backpack, (3) red lipstick against white, (4) bright pink in stained glass, (5) glowing blue lights, (6) a person's ear with a piercing, (7) a person in a white shirt against dark background, (8) a person in a red shirt, (9) a person in a white shirt, and (10) a person in a white shirt. These elements naturally attract visual attention because they stand out from their surroundings, creating strong visual anchors that the eye is drawn to. The pattern is not about specific object types but about the visual salience and contrast that make these patches the most prominent in each frame.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.1673160074110456e-07,
+    "mean_activation_score": 0.0006094256648793816,
+    "mean_retrieval_score": 0.0006094256648793816,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  },
+  {
+    "concept_id": "c_tr_009",
+    "global_concept_index": 9,
+    "concept_type": "tr",
+    "concept_number": 9,
+    "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+    "top_k": 10,
+    "num_clusters": 1,
+    "difference_clustering_enabled": false,
+    "cluster_explanations": [
+      {
+        "concept_id": "c_tr_009",
+        "global_concept_index": 9,
+        "concept_type": "tr",
+        "concept_number": 9,
+        "candidate_name": "Highly detailed close-ups of hands interacting with objects or textures",
+        "explanation": "All 10 examples feature extreme close-ups focused on hands or fingers engaging with items (e.g., holding objects, applying nail polish, manipulating fabric, or gripping tools). The visual pattern is characterized by high detail, texture, and motion blur, which naturally draws attention due to the salience of human interaction and fine-grained visual cues. Eye attention is fixated on these patches because they represent dynamic, tactile, and often personally relevant actions that are visually rich and behaviorally significant.",
+        "confidence": "high",
+        "num_salient_examples": 10,
+        "mean_patch_pred_saliency": 1.1743444900957911e-07,
+        "mean_activation_score": 0.0006025726674124598,
+        "mean_retrieval_score": 0.0006025726674124598,
+        "saliency_filter_mode": "gt_top_percent",
+        "saliency_threshold": 0.0,
+        "saliency_top_percent": 0.2,
+        "low_saliency_coverage": false,
+        "llm_model": "Qwen/Qwen3-VL-8B-Instruct",
+        "top_k": 10,
+        "top_examples_dir": "top_examples",
+        "top_examples_metadata": "top_examples/examples_metadata.json",
+        "raw_llm_output": "{\n  \"concept_id\": \"c_tr_009\",\n  \"candidate_name\": \"Highly detailed close-ups of hands interacting with objects or textures\",\n  \"explanation\": \"All 10 examples feature extreme close-ups focused on hands or fingers engaging with items (e.g., holding objects, applying nail polish, manipulating fabric, or gripping tools). The visual pattern is characterized by high detail, texture, and motion blur, which naturally draws attention due to the salience of human interaction and fine-grained visual cues. Eye attention is fixated on these patches because they represent dynamic, tactile, and often personally relevant actions that are visually rich and behaviorally significant.\",\n  \"confidence\": \"high\"\n}",
+        "parse_success": true,
+        "cluster_id": 0,
+        "cluster_size": 10,
+        "cluster_examples": [
+          {
+            "rank": 0,
+            "pair_path": ""
+          },
+          {
+            "rank": 1,
+            "pair_path": ""
+          },
+          {
+            "rank": 2,
+            "pair_path": ""
+          },
+          {
+            "rank": 3,
+            "pair_path": ""
+          },
+          {
+            "rank": 4,
+            "pair_path": ""
+          },
+          {
+            "rank": 5,
+            "pair_path": ""
+          },
+          {
+            "rank": 6,
+            "pair_path": ""
+          },
+          {
+            "rank": 7,
+            "pair_path": ""
+          },
+          {
+            "rank": 8,
+            "pair_path": ""
+          },
+          {
+            "rank": 9,
+            "pair_path": ""
+          }
+        ],
+        "llm_contact_sheet_path": "top_examples/contact_sheet.png",
+        "clustering": {
+          "enabled": false
+        }
+      }
+    ],
+    "candidate_name": "Highly detailed close-ups of hands interacting with objects or textures",
+    "explanation": "All 10 examples feature extreme close-ups focused on hands or fingers engaging with items (e.g., holding objects, applying nail polish, manipulating fabric, or gripping tools). The visual pattern is characterized by high detail, texture, and motion blur, which naturally draws attention due to the salience of human interaction and fine-grained visual cues. Eye attention is fixated on these patches because they represent dynamic, tactile, and often personally relevant actions that are visually rich and behaviorally significant.",
+    "confidence": "high",
+    "parse_success": true,
+    "raw_llm_output": "{\n  \"concept_id\": \"c_tr_009\",\n  \"candidate_name\": \"Highly detailed close-ups of hands interacting with objects or textures\",\n  \"explanation\": \"All 10 examples feature extreme close-ups focused on hands or fingers engaging with items (e.g., holding objects, applying nail polish, manipulating fabric, or gripping tools). The visual pattern is characterized by high detail, texture, and motion blur, which naturally draws attention due to the salience of human interaction and fine-grained visual cues. Eye attention is fixated on these patches because they represent dynamic, tactile, and often personally relevant actions that are visually rich and behaviorally significant.\",\n  \"confidence\": \"high\"\n}",
+    "num_salient_examples": 10,
+    "mean_patch_pred_saliency": 1.1743444900957911e-07,
+    "mean_activation_score": 0.0006025726674124598,
+    "mean_retrieval_score": 0.0006025726674124598,
+    "saliency_filter_mode": "gt_top_percent",
+    "saliency_threshold": 0.0,
+    "saliency_top_percent": 0.2,
+    "low_saliency_coverage": false,
+    "top_examples_dir": "top_examples",
+    "top_examples_metadata": "top_examples/examples_metadata.json",
+    "clustering": {
+      "enabled": false
+    },
+    "difference_clustering": {
+      "enabled": false,
+      "feature": "abs(frame_t1 - frame_t) grayscale 2D flattened",
+      "max_clusters": 4,
+      "diff_image_size": 64
+    }
+  }
+]

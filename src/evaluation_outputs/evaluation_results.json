@@ -1,0 +1,17 @@
+{
+  "checkpoint": "/home/zaimaz/Desktop/research1/ExplainableVidSal/src/training_outputs/ckpts/20260612_212908/epoch_001.pth",
+  "test_dir": "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/testing",
+  "num_samples": 4912,
+  "num_windows": 4912,
+  "window_len": 32,
+  "batch_size": 4,
+  "mean_loss": 0,
+  "metrics": {
+    "CC": 0.5102519823889724,
+    "SIM": 0.3744997189892911,
+    "AUC": 0.9212164956505989,
+    "sAUC": 0.5518721961431472,
+    "NSS": 2.2732480490513463
+  },
+  "checkpoint_epoch": 1
+}
