@@ -591,6 +591,7 @@ def compute_total_loss(
     lambda_dense: float = 1.0,
     lambda_bce: float = 0.0,
     lambda_kl: float = 0.0,
+    lambda_fid: float = 1.0,
     lambda_topk: float = 0.0,
     topk_percent: float = 0.05,
     topk_bg_weight: float = 0.15,
@@ -663,7 +664,7 @@ def compute_total_loss(
         loss_concept_dense = loss_concept_kl = zero
 
     loss_total = (
-        loss_fid
+        lambda_fid * loss_fid
         + lambda_align * loss_align
         + lambda_sparse * loss_sparse
         + lambda_div * loss_div

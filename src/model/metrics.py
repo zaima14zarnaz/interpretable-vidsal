@@ -8,6 +8,7 @@ from metrics import (
     nss_score,
     sauc_score,
     sim_score,
+    validate_fixation_map,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "nss_score",
     "sauc_score",
     "sim_score",
+    "validate_fixation_map",
 ]

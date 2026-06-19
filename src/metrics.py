@@ -1,8 +1,11 @@
 """
 Evaluation metrics for video saliency prediction (last-frame GT).
 
-ViNet-style CC, SIM, and NSS on continuous density / binary fixation maps.
-AUC (Judd) and sAUC unchanged (pseudo-fixations from density when needed).
+CC and SIM use continuous saliency density maps.
+NSS, AUC, and sAUC use binary fixation maps.
+Pseudo-fixation fallback from density maps is debug-only and must be
+explicitly enabled via ``allow_pseudo_fixations=True``.
+
 Pure PyTorch — no sklearn/scipy required.
 """
 
@@ -298,40 +301,47 @@ def _is_binary_fixation_map(x: torch.Tensor, eps: float = 1e-6) -> bool:
     return bool((close_to_binary & in_range).all())
 
 
+def validate_fixation_map(fixation: torch.Tensor, name: str = "fixation") -> None:
+    if fixation.dim() != 4 or fixation.shape[1] != 1:
+        raise ValueError(f"{name} must be [B,1,H,W], got {tuple(fixation.shape)}")
+    if fixation.numel() > 0:
+        mn = float(fixation.min().detach().cpu())
+        mx = float(fixation.max().detach().cpu())
+        if mn < 0 or mx > 1:
+            raise ValueError(f"{name} values must be in [0,1], got min={mn}, max={mx}")
+
+
 def nss_score(
     pred: torch.Tensor,
     fixation_map: torch.Tensor,
-    fixation_threshold: float = 0.5,
-    top_percent: Optional[float] = None,
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """
-    Normalized Scanpath Saliency (NSS).
+    True NSS.
 
-    Formula:
-      1. Resize prediction to fixation-map size.
-      2. Z-score prediction per sample.
-      3. Average z-scored prediction values at fixation locations.
+    Prediction is z-scored per sample.
+    NSS is the mean z-scored prediction value at binary fixation locations.
 
-    If ``fixation_map`` is a continuous saliency density map, binary fixations
-    are derived with ``make_fixation_binary`` (threshold or top_percent).
+    Args:
+        pred: predicted saliency map [B,H,W] or [B,1,H,W]
+        fixation_map: binary fixation map [B,H,W], [B,1,H,W], [B,T,H,W],
+                      [B,1,T,H,W], or [B,T,1,H,W].
+                      Only the last frame is used for temporal inputs.
+
+    Returns:
+        scalar mean NSS over batch.
     """
     pred, fixation = resize_pred_to_target(pred, fixation_map)
 
-    if not _is_binary_fixation_map(fixation):
-        fixation = make_fixation_binary(
-            fixation,
-            threshold=fixation_threshold,
-            top_percent=top_percent,
-            eps=eps,
-        ).float()
+    # Force binary fixation map. Any positive value is treated as a fixation.
+    fixation = (fixation > 0).float()
 
     B = pred.shape[0]
     pred_f = pred.reshape(B, -1)
-    fix_f = fixation.reshape(B, -1) > fixation_threshold
+    fix_f = fixation.reshape(B, -1) > 0
 
     pred_mean = pred_f.mean(dim=1, keepdim=True)
-    pred_std = pred_f.std(dim=1, unbiased=True, keepdim=True).clamp(min=eps)
+    pred_std = pred_f.std(dim=1, unbiased=False, keepdim=True).clamp(min=eps)
     pred_z = (pred_f - pred_mean) / pred_std
 
     scores = []
@@ -339,6 +349,7 @@ def nss_score(
         if fix_f[i].any():
             scores.append(pred_z[i][fix_f[i]].mean())
         else:
+            # No fixation pixels: return 0 for this sample instead of crashing.
             scores.append(pred_z.new_zeros(()))
 
     return torch.stack(scores).mean()
@@ -465,59 +476,76 @@ def sauc_score(
     return torch.stack(aucs).mean()
 
 
-def _resolve_fixation_map(
-    target_density: torch.Tensor,
-    fixation_target: Optional[torch.Tensor],
-    top_percent: Optional[float],
-    fixation_threshold: float,
-) -> Tuple[torch.Tensor, float, Optional[float]]:
-    """
-    Return fixation map and kwargs for fixation-based metrics.
-
-    Uses ``fixation_target`` when provided; otherwise falls back to the
-    continuous ``target_density`` with pseudo-fixations (top_percent / threshold).
-    """
-    if fixation_target is not None:
-        fix_map = prepare_target_last_map(fixation_target)
-        return fix_map, fixation_threshold, None
-
-    return prepare_target_last_map(target_density), fixation_threshold, top_percent
-
-
 def compute_saliency_metrics(
     pred: torch.Tensor,
     target_density: torch.Tensor,
     fixation_target: Optional[torch.Tensor] = None,
     fixation_threshold: float = 0.5,
-    top_percent: Optional[float] = 0.05,
+    top_percent: Optional[float] = None,
+    allow_pseudo_fixations: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """
     Compute saliency metrics.
 
-    CC and SIM use continuous ``target_density``.
+    CC and SIM use continuous saliency density maps.
 
-    AUC, sAUC, and NSS use ``fixation_target`` when provided; otherwise they
-    derive binary fixations from ``target_density`` via ``top_percent`` /
-    ``fixation_threshold`` (same fallback for all three).
+    NSS, AUC, and sAUC should use true binary fixation maps.
+    If fixation_target is missing, these metrics are returned as NaN unless
+    allow_pseudo_fixations=True.
     """
     out = {
         "CC": cc_score(pred, target_density),
         "SIM": sim_score(pred, target_density),
     }
 
-    fix_map, fix_thresh, fix_top = _resolve_fixation_map(
-        target_density, fixation_target, top_percent, fixation_threshold
-    )
+    if fixation_target is not None:
+        fix_map = prepare_target_last_map(fixation_target)
+        fix_map = (fix_map > 0).float()
 
-    out["AUC"] = auc_judd_score(pred, fix_map, fix_thresh, fix_top)
-    out["sAUC"] = sauc_score(pred, fix_map, fix_thresh, fix_top)
-    out["NSS"] = nss_score(
-        pred,
+        out["AUC"] = auc_judd_score(
+            pred,
+            fix_map,
+            fixation_threshold=0.5,
+            top_percent=None,
+        )
+        out["sAUC"] = sauc_score(
+            pred,
+            fix_map,
+            fixation_threshold=0.5,
+            top_percent=None,
+        )
+        out["NSS"] = nss_score(pred, fix_map)
+        return out
+
+    if not allow_pseudo_fixations:
+        nan = prepare_prediction_map(pred).new_tensor(float("nan"))
+        out["AUC"] = nan
+        out["sAUC"] = nan
+        out["NSS"] = nan
+        return out
+
+    # Debug-only pseudo-fixation fallback.
+    # WARNING: these are not true fixation-based metrics.
+    fix_map = prepare_target_last_map(target_density)
+    pseudo_fix = make_fixation_binary(
         fix_map,
-        fixation_threshold=fix_thresh,
-        top_percent=fix_top,
-    )
+        threshold=fixation_threshold,
+        top_percent=top_percent,
+    ).float()
 
+    out["AUC"] = auc_judd_score(
+        pred,
+        pseudo_fix,
+        fixation_threshold=0.5,
+        top_percent=None,
+    )
+    out["sAUC"] = sauc_score(
+        pred,
+        pseudo_fix,
+        fixation_threshold=0.5,
+        top_percent=None,
+    )
+    out["NSS"] = nss_score(pred, pseudo_fix)
     return out
 
 

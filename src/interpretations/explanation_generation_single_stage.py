@@ -2482,7 +2482,7 @@ def retrieve_and_save_top_examples(
             if not retrieve_indices:
                 break
 
-            video_filenames, rgb_batch, sal_batch, n_frames, valid_mask = batch
+            video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask = batch
             rgb_device = rgb_batch.to(device, non_blocking=True)
             sal_device = (
                 sal_batch.to(device, non_blocking=True) if torch.is_tensor(sal_batch) else None

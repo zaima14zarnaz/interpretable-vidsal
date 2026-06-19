@@ -59,6 +59,13 @@ class ExplainableVidSalModel(nn.Module):
         gated_trajectory_residual_scale: float = 0.2,
         output_activation: str = "sigmoid",
         return_details: bool = False,
+        use_subpatch_head: bool = True,
+        subpatch_factor: int = 16,
+        subpatch_hidden_dim: Optional[int] = None,
+        subpatch_residual_scale: float = 1.0,
+        use_temporal_transition_aggregation: bool = False,
+        temporal_aggregation_hidden_channels: int = 64,
+        temporal_aggregation_temperature: float = 1.0,
     ):
         super().__init__()
 
@@ -75,6 +82,7 @@ class ExplainableVidSalModel(nn.Module):
         self.input_format = input_format
         self.return_details = return_details
         self.last_transition_only = last_transition_only
+        self.use_temporal_transition_aggregation = use_temporal_transition_aggregation
         self._backbone_frozen = freeze_backbone
 
         self.backbone = VideoSwinTransformer(
@@ -93,6 +101,12 @@ class ExplainableVidSalModel(nn.Module):
         }
 
         self.concept_creations = nn.ModuleDict()
+        # Option 2: when enabled, ConceptCreation emits all adjacent transitions and
+        # SaliencyPrediction explicitly aggregates them over time before predicting the
+        # last-frame saliency map.
+        concept_last_transition_only = (
+            False if use_temporal_transition_aggregation else last_transition_only
+        )
         for stage in self.backbone_stages:
             self.concept_creations[stage] = ConceptCreation(
                 in_channels=self.stage_channels[stage],
@@ -105,7 +119,7 @@ class ExplainableVidSalModel(nn.Module):
                 max_source_patches=max_source_patches,
                 concept_residual_weight=concept_residual_weight,
                 use_target_centric=True,
-                last_transition_only=last_transition_only,
+                last_transition_only=concept_last_transition_only,
             )
 
         self.saliency_prediction = MultiScaleSaliencyPrediction(
@@ -123,6 +137,13 @@ class ExplainableVidSalModel(nn.Module):
             predict_delta=True,
             use_gated_trajectory_head=use_gated_trajectory_head,
             gated_trajectory_residual_scale=gated_trajectory_residual_scale,
+            use_subpatch_head=use_subpatch_head,
+            subpatch_factor=subpatch_factor,
+            subpatch_hidden_dim=subpatch_hidden_dim,
+            subpatch_residual_scale=subpatch_residual_scale,
+            use_temporal_transition_aggregation=use_temporal_transition_aggregation,
+            temporal_aggregation_hidden_channels=temporal_aggregation_hidden_channels,
+            temporal_aggregation_temperature=temporal_aggregation_temperature,
         )
 
         if freeze_backbone:
@@ -218,10 +239,12 @@ class ExplainableVidSalModel(nn.Module):
         return params
 
     def optimize_for_inference(self) -> "ExplainableVidSalModel":
-        """Enable cudnn benchmark for fixed-size inference (no math changes)."""
+        """Enable cudnn benchmark and TF32 matmul for fixed-size inference."""
         self.eval()
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
+            if hasattr(torch, "set_float32_matmul_precision"):
+                torch.set_float32_matmul_precision("high")
         return self
 
     def forward(
@@ -230,6 +253,7 @@ class ExplainableVidSalModel(nn.Module):
         saliency_maps: Optional[torch.Tensor] = None,
         return_details: Optional[bool] = None,
         return_concept_losses: Optional[bool] = None,
+        collect_gate_debug: bool = False,
     ) -> Union[torch.Tensor, Dict[str, Any]]:
         """
         Args:
@@ -269,6 +293,7 @@ class ExplainableVidSalModel(nn.Module):
                     concept_features,
                     saliency_maps=saliency_maps,
                     return_losses=return_concept_losses,
+                    collect_gate_debug=collect_gate_debug,
                 )
 
             pred_out = self.saliency_prediction(
@@ -276,6 +301,7 @@ class ExplainableVidSalModel(nn.Module):
                 last_rgb_frame,
                 video_features_dict=concept_features_dict,
                 return_details=return_details,
+                last_rgb_prepared=True,
             )
 
             if not return_details:

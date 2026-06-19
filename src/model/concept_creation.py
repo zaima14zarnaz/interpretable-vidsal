@@ -127,6 +127,13 @@ class ConceptCreation(nn.Module):
         self._init_concept_parameters()
         self._grid_cache: Dict[Tuple[int, int, torch.device, torch.dtype], torch.Tensor] = {}
         self._source_idx_cache: Dict[Tuple[int, torch.device, Optional[int]], torch.Tensor] = {}
+        self._time_indices_cache: Dict[int, list] = {}
+        self._target_idx_cache: Dict[Tuple[int, torch.device], torch.Tensor] = {}
+        self.register_buffer(
+            "inv_tau_concept",
+            torch.tensor(1.0 / tau_concept),
+            persistent=False,
+        )
 
     def _init_concept_parameters(self) -> None:
         with torch.no_grad():
@@ -187,6 +194,10 @@ class ConceptCreation(nn.Module):
 
     def _transition_time_indices(self, T: int) -> list[int]:
         """Adjacent transition source times t for t -> t+1."""
+        cached = self._time_indices_cache.get(T)
+        if cached is not None:
+            return cached
+
         if T < 2:
             raise ValueError(
                 f"Need T>=2 for adjacent trajectories, got T={T}"
@@ -198,8 +209,19 @@ class ConceptCreation(nn.Module):
                     f"last_transition_only requires valid source time T-2={t_last} "
                     f"for T={T}"
                 )
-            return [t_last]
-        return list(range(T - 1))
+            cached = [t_last]
+        else:
+            cached = list(range(T - 1))
+        self._time_indices_cache[T] = cached
+        return cached
+
+    def _target_idx_base(self, N: int, device: torch.device) -> torch.Tensor:
+        key = (N, device)
+        cached = self._target_idx_cache.get(key)
+        if cached is None:
+            cached = torch.arange(N, device=device, dtype=torch.long)
+            self._target_idx_cache[key] = cached
+        return cached
 
     @staticmethod
     def _package_metadata(
@@ -273,7 +295,7 @@ class ConceptCreation(nn.Module):
             "affinity_logit": [],
         }
 
-        target_idx_base = torch.arange(N, device=device, dtype=torch.long)
+        target_idx_base = self._target_idx_base(N, device)
 
         time_indices = self._transition_time_indices(T)
         for t in time_indices:
@@ -537,6 +559,7 @@ class ConceptCreation(nn.Module):
         metadata: Dict[str, torch.Tensor],
         gate_probs: torch.Tensor,
         feature_shape: Tuple[int, ...],
+        collect_gate_debug: bool = False,
     ) -> torch.Tensor:
         """
         Soft weak regularization for transition/persistence gate.
@@ -639,54 +662,63 @@ class ConceptCreation(nn.Module):
         hard_per = valid & (y_per > y_tr)
         hard_ambiguous = ~valid | (y_tr == y_per)
 
-        with torch.no_grad():
-            total = max(float(gate_probs.shape[0]), 1.0)
-            n_valid = max(float(valid.sum().item()), 1.0)
+        if collect_gate_debug:
+            with torch.no_grad():
+                total = max(float(gate_probs.shape[0]), 1.0)
+                n_valid = max(float(valid.sum().item()), 1.0)
 
-            def _masked_mean_std(x: torch.Tensor, mask: torch.Tensor) -> tuple[float, float]:
-                if mask.any():
-                    vals = x[mask]
-                    mean = float(vals.mean().item())
-                    std = float(vals.std().item()) if vals.numel() > 1 else 0.0
-                    return mean, std
-                return 0.0, 0.0
+                def _masked_mean_std(
+                    x: torch.Tensor, mask: torch.Tensor
+                ) -> tuple[float, float]:
+                    if mask.any():
+                        vals = x[mask]
+                        mean = float(vals.mean().item())
+                        std = float(vals.std().item()) if vals.numel() > 1 else 0.0
+                        return mean, std
+                    return 0.0, 0.0
 
-            visual_sim_tr_mean, visual_sim_tr_std = _masked_mean_std(visual_sim, hard_tr)
-            visual_sim_per_mean, visual_sim_per_std = _masked_mean_std(visual_sim, hard_per)
-            visual_sim_valid_mean, visual_sim_valid_std = _masked_mean_std(
-                visual_sim, valid
-            )
+                visual_sim_tr_mean, visual_sim_tr_std = _masked_mean_std(
+                    visual_sim, hard_tr
+                )
+                visual_sim_per_mean, visual_sim_per_std = _masked_mean_std(
+                    visual_sim, hard_per
+                )
+                visual_sim_valid_mean, visual_sim_valid_std = _masked_mean_std(
+                    visual_sim, valid
+                )
 
-            self._last_gate_debug = {
-                "gate_valid_frac_total": float(valid.float().mean().item()),
-                "gate_transition_frac_total": float(hard_tr.float().mean().item()),
-                "gate_persistence_frac_total": float(hard_per.float().mean().item()),
-                "gate_ambiguous_frac_total": float(hard_ambiguous.float().mean().item()),
-                "gate_transition_frac_valid": float(hard_tr.sum().item() / n_valid),
-                "gate_persistence_frac_valid": float(hard_per.sum().item() / n_valid),
-                "gate_confidence_mean": float(confidence.mean().item()),
-                "gate_confidence_valid_mean": float(
-                    confidence[valid].mean().item() if valid.any() else 0.0
-                ),
-                "gate_y_tr_mean": float(y_tr.mean().item()),
-                "gate_y_per_mean": float(y_per.mean().item()),
-                "gate_visual_sim_mean": float(visual_sim.mean().item()),
-                "gate_visual_sim_std": float(
-                    visual_sim.std().item() if visual_sim.numel() > 1 else 0.0
-                ),
-                "gate_visual_sim_transition_mean": visual_sim_tr_mean,
-                "gate_visual_sim_transition_std": visual_sim_tr_std,
-                "gate_visual_sim_persistence_mean": visual_sim_per_mean,
-                "gate_visual_sim_persistence_std": visual_sim_per_std,
-                "gate_visual_sim_valid_mean": visual_sim_valid_mean,
-                "gate_visual_sim_valid_std": visual_sim_valid_std,
-                "gate_transition_count": int(hard_tr.sum().item()),
-                "gate_persistence_count": int(hard_per.sum().item()),
-                "gate_valid_count": int(valid.sum().item()),
-                "gate_total_count": int(gate_probs.shape[0]),
-                "gate_delta_abs_mean": float(delta_abs.mean().item()),
-                "gate_dist_mean": float(dist.mean().item()),
-            }
+                self._last_gate_debug = {
+                    "gate_valid_frac_total": float(valid.float().mean().item()),
+                    "gate_transition_frac_total": float(hard_tr.float().mean().item()),
+                    "gate_persistence_frac_total": float(hard_per.float().mean().item()),
+                    "gate_ambiguous_frac_total": float(
+                        hard_ambiguous.float().mean().item()
+                    ),
+                    "gate_transition_frac_valid": float(hard_tr.sum().item() / n_valid),
+                    "gate_persistence_frac_valid": float(hard_per.sum().item() / n_valid),
+                    "gate_confidence_mean": float(confidence.mean().item()),
+                    "gate_confidence_valid_mean": float(
+                        confidence[valid].mean().item() if valid.any() else 0.0
+                    ),
+                    "gate_y_tr_mean": float(y_tr.mean().item()),
+                    "gate_y_per_mean": float(y_per.mean().item()),
+                    "gate_visual_sim_mean": float(visual_sim.mean().item()),
+                    "gate_visual_sim_std": float(
+                        visual_sim.std().item() if visual_sim.numel() > 1 else 0.0
+                    ),
+                    "gate_visual_sim_transition_mean": visual_sim_tr_mean,
+                    "gate_visual_sim_transition_std": visual_sim_tr_std,
+                    "gate_visual_sim_persistence_mean": visual_sim_per_mean,
+                    "gate_visual_sim_persistence_std": visual_sim_per_std,
+                    "gate_visual_sim_valid_mean": visual_sim_valid_mean,
+                    "gate_visual_sim_valid_std": visual_sim_valid_std,
+                    "gate_transition_count": int(hard_tr.sum().item()),
+                    "gate_persistence_count": int(hard_per.sum().item()),
+                    "gate_valid_count": int(valid.sum().item()),
+                    "gate_total_count": int(gate_probs.shape[0]),
+                    "gate_delta_abs_mean": float(delta_abs.mean().item()),
+                    "gate_dist_mean": float(dist.mean().item()),
+                }
 
         if not valid.any():
             return torch.zeros((), device=device, dtype=dtype)
@@ -713,6 +745,7 @@ class ConceptCreation(nn.Module):
         saliency_maps: Optional[torch.Tensor],
         metadata: Dict[str, torch.Tensor],
         feature_shape: Tuple[int, ...],
+        collect_gate_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         w = self.loss_weights
         loss_recon = self._reconstruction_loss(q, recon_q)
@@ -723,18 +756,23 @@ class ConceptCreation(nn.Module):
             saliency_maps
         ):
             loss_gate = self._gate_regularization_loss(
-                saliency_maps, metadata, gate_probs, feature_shape
+                saliency_maps,
+                metadata,
+                gate_probs,
+                feature_shape,
+                collect_gate_debug=collect_gate_debug,
             )
         else:
-            self._last_gate_debug = {
-                "gate_valid_frac_total": 0.0,
-                "gate_transition_frac_total": 0.0,
-                "gate_persistence_frac_total": 0.0,
-                "gate_ambiguous_frac_total": 1.0,
-            }
+            if collect_gate_debug:
+                self._last_gate_debug = {
+                    "gate_valid_frac_total": 0.0,
+                    "gate_transition_frac_total": 0.0,
+                    "gate_persistence_frac_total": 0.0,
+                    "gate_ambiguous_frac_total": 1.0,
+                }
             loss_gate = torch.zeros((), device=q.device, dtype=q.dtype)
 
-        gate_debug = getattr(self, "_last_gate_debug", {})
+        gate_debug = getattr(self, "_last_gate_debug", {}) if collect_gate_debug else {}
 
         loss_total_concept = (
             w["recon"] * loss_recon
@@ -759,6 +797,7 @@ class ConceptCreation(nn.Module):
         features: torch.Tensor,
         saliency_maps: Optional[torch.Tensor] = None,
         return_losses: bool = True,
+        collect_gate_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
@@ -787,8 +826,10 @@ class ConceptCreation(nn.Module):
         gate_probs = F.softmax(self.gate(q), dim=-1)  # [:,0]=transition, [:,1]=persistence
 
         c_tr, c_per = self._normalized_concepts()
-        logits_tr = q @ c_tr.T / self.tau_concept
-        logits_per = q @ c_per.T / self.tau_concept
+        logits_both = (q @ torch.cat([c_tr, c_per], dim=0).T) * self.inv_tau_concept
+        logits_tr, logits_per = logits_both.split(
+            [self.num_concepts, self.num_concepts], dim=1
+        )
         a_tr = F.softmax(logits_tr, dim=-1)
         a_per = F.softmax(logits_per, dim=-1)
 
@@ -815,6 +856,7 @@ class ConceptCreation(nn.Module):
                 saliency_maps,
                 metadata,
                 tuple(features.shape),
+                collect_gate_debug=collect_gate_debug,
             )
 
         return {

@@ -57,11 +57,20 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
         gated_trajectory_residual_scale: float = 0.2,
         output_activation: str = "sigmoid",
         predict_delta: bool = True,
+        use_subpatch_head: bool = True,
+        subpatch_factor: int = 4,
+        subpatch_hidden_dim: Optional[int] = None,
+        subpatch_residual_scale: float = 0.5,
+        use_temporal_transition_aggregation: bool = False,
+        temporal_aggregation_hidden_channels: int = 64,
+        temporal_aggregation_temperature: float = 1.0,
     ):
         super().__init__()
 
         if output_activation not in ("sigmoid", "none"):
             raise ValueError("output_activation must be 'sigmoid' or 'none'")
+        if subpatch_factor < 1:
+            raise ValueError("subpatch_factor must be >= 1")
 
         self.concept_dim = concept_dim
         self.hidden_dim = hidden_dim
@@ -83,6 +92,15 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
         self.gated_trajectory_residual_scale = gated_trajectory_residual_scale
         self.output_activation = output_activation
         self.predict_delta = predict_delta
+        self.use_subpatch_head = use_subpatch_head
+        self.subpatch_factor = subpatch_factor
+        self.subpatch_residual_scale = subpatch_residual_scale
+        self.use_temporal_transition_aggregation = use_temporal_transition_aggregation
+        self.temporal_aggregation_hidden_channels = temporal_aggregation_hidden_channels
+        self.temporal_aggregation_temperature = temporal_aggregation_temperature
+        if subpatch_hidden_dim is None:
+            subpatch_hidden_dim = hidden_dim
+        self.subpatch_hidden_dim = subpatch_hidden_dim
 
         self.saliency_head = self._make_prediction_head()
         self.delta_head = self._make_prediction_head() if predict_delta else None
@@ -145,6 +163,41 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             )
         else:
             self.feature_refiner = None
+
+        subpatch_input_dim = concept_dim + 2
+        if use_subpatch_head and subpatch_factor > 1:
+            self.subpatch_saliency_head = nn.Sequential(
+                nn.Conv2d(concept_dim + 2, 64, kernel_size=1),
+                nn.GELU(),
+                nn.Conv2d(64, 64, kernel_size=3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(64, subpatch_factor * subpatch_factor, kernel_size=1),
+            )
+            nn.init.zeros_(self.subpatch_saliency_head[-1].weight)
+            nn.init.zeros_(self.subpatch_saliency_head[-1].bias)
+        else:
+            self.subpatch_saliency_head = None
+
+        self.register_buffer(
+            "_scalar_feature_residual_scale",
+            torch.tensor(feature_residual_scale),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_scalar_gated_trajectory_residual_scale",
+            torch.tensor(gated_trajectory_residual_scale),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_scalar_subpatch_factor",
+            torch.tensor(float(subpatch_factor)),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_scalar_subpatch_residual_scale",
+            torch.tensor(subpatch_residual_scale),
+            persistent=False,
+        )
 
     def _make_prediction_head(self, input_dim: Optional[int] = None) -> nn.Sequential:
         if input_dim is None:
@@ -361,7 +414,10 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
         return tensor[mask]
 
     def _incoming_softmax(
-        self, scores: torch.Tensor, group_ids: torch.Tensor
+        self,
+        scores: torch.Tensor,
+        group_ids: torch.Tensor,
+        num_groups: int,
     ) -> torch.Tensor:
         """
         Softmax over incoming trajectories sharing the same target patch.
@@ -369,6 +425,7 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
         Args:
             scores: [M] incoming scores (affinity_logit or alpha).
             group_ids: [M] with group_id = batch_idx * N + target_idx.
+            num_groups: upper bound on group ids (typically B * N).
 
         Returns:
             pi: [M] normalized incoming weights.
@@ -378,7 +435,6 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
 
         scaled = scores / self.tau_pi
         group_ids_long = group_ids.long()
-        num_groups = int(group_ids_long.max().item()) + 1
 
         group_max = torch.full(
             (num_groups,),
@@ -485,6 +541,105 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
 
         return patch_flat.view(B, H, W, D).permute(0, 3, 1, 2).contiguous()
 
+    def _apply_grid_subpatch_head(
+        self,
+        base_patch_logits: torch.Tensor,
+        patch_concept_context: torch.Tensor,
+        patch_concept_gate: torch.Tensor,
+    ) -> Tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
+        """
+        Apply concept-conditioned subpatch decoding on the aggregated patch grid.
+
+        Args:
+            base_patch_logits: [B,1,H,W]
+            patch_concept_context: [B,concept_dim,H,W]
+            patch_concept_gate: [B,1,H,W]
+
+        Returns:
+            subpatch_patch_logits: [B,r*r,H,W]
+            subpatch_logits: [B,1,H*r,W*r]
+            subpatch_offset_logits: [B,1,H*r,W*r]
+            subpatch_scalar_base_logits: [B,1,H*r,W*r]
+        """
+        if (
+            not self.use_subpatch_head
+            or self.subpatch_saliency_head is None
+            or self.subpatch_factor <= 1
+        ):
+            return None, None, None, None
+
+        if base_patch_logits.dim() != 4 or base_patch_logits.shape[1] != 1:
+            raise ValueError(
+                f"base_patch_logits must be [B,1,H,W], got {tuple(base_patch_logits.shape)}"
+            )
+        if patch_concept_context.dim() != 4:
+            raise ValueError(
+                f"patch_concept_context must be [B,D,H,W], got {tuple(patch_concept_context.shape)}"
+            )
+        if patch_concept_gate.dim() != 4 or patch_concept_gate.shape[1] != 1:
+            raise ValueError(
+                f"patch_concept_gate must be [B,1,H,W], got {tuple(patch_concept_gate.shape)}"
+            )
+
+        if patch_concept_context.shape[0] != base_patch_logits.shape[0]:
+            raise ValueError(
+                "Batch mismatch between patch_concept_context and base_patch_logits"
+            )
+        if patch_concept_context.shape[-2:] != base_patch_logits.shape[-2:]:
+            raise ValueError(
+                "Spatial mismatch between patch_concept_context and base_patch_logits"
+            )
+        if patch_concept_gate.shape[-2:] != base_patch_logits.shape[-2:]:
+            raise ValueError(
+                "Spatial mismatch between patch_concept_gate and base_patch_logits"
+            )
+
+        subpatch_input = torch.cat(
+            [
+                patch_concept_context,
+                base_patch_logits,
+                patch_concept_gate,
+            ],
+            dim=1,
+        )
+
+        subpatch_offsets = self.subpatch_saliency_head(subpatch_input)
+
+        # Zero-mean offsets preserve the scalar patch logit's role as the patch-level score.
+        subpatch_offsets = subpatch_offsets - subpatch_offsets.mean(dim=1, keepdim=True)
+
+        r = self.subpatch_factor
+        base_repeated = base_patch_logits.repeat(1, r * r, 1, 1)
+
+        subpatch_patch_logits = (
+            base_repeated + self.subpatch_residual_scale * subpatch_offsets
+        )
+
+        subpatch_logits = F.pixel_shuffle(
+            subpatch_patch_logits,
+            upscale_factor=r,
+        )
+
+        subpatch_scalar_base_logits = F.interpolate(
+            base_patch_logits,
+            scale_factor=r,
+            mode="nearest",
+        )
+
+        subpatch_offset_logits = subpatch_logits - subpatch_scalar_base_logits
+
+        return (
+            subpatch_patch_logits,
+            subpatch_logits,
+            subpatch_offset_logits,
+            subpatch_scalar_base_logits,
+        )
+
     def _prepare_target_features(
         self,
         video_features: Optional[torch.Tensor],
@@ -544,6 +699,21 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
         B, C, H, W = target_features.shape
         return target_features.permute(0, 2, 3, 1).reshape(B, H * W, C)
 
+    @staticmethod
+    def _align_video_features(
+        video_features: torch.Tensor,
+        H: int,
+        W: int,
+    ) -> torch.Tensor:
+        if video_features.shape[-2:] == (H, W):
+            return video_features
+        return F.interpolate(
+            video_features,
+            size=(video_features.shape[2], H, W),
+            mode="trilinear",
+            align_corners=False,
+        )
+
     def _gather_source_features_for_trajectories(
         self,
         video_features: torch.Tensor,
@@ -567,12 +737,7 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             )
 
         if video_features.shape[-2:] != (H, W):
-            video_features = F.interpolate(
-                video_features,
-                size=(video_features.shape[2], H, W),
-                mode="trilinear",
-                align_corners=False,
-            )
+            video_features = self._align_video_features(video_features, H, W)
 
         batch_idx = selected_meta["batch_idx"].long()
         time_idx = selected_meta["time_idx"].long()
@@ -614,12 +779,7 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             )
 
         if video_features.shape[-2:] != (H, W):
-            video_features = F.interpolate(
-                video_features,
-                size=(video_features.shape[2], H, W),
-                mode="trilinear",
-                align_corners=False,
-            )
+            video_features = self._align_video_features(video_features, H, W)
 
         batch_idx = selected_meta["batch_idx"].long()
         time_idx = selected_meta["time_idx"].long()
@@ -745,6 +905,9 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
                 f"last_rgb_frame batch {last_rgb.shape[0]} != feature batch {B}"
             )
 
+        if video_features is not None:
+            video_features = self._align_video_features(video_features, H, W)
+
         concept_repr, selected_meta, last_transition_mask = self._select_last_transition(
             concept_out, metadata, B, T
         )
@@ -839,7 +1002,7 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
         )
 
         group_ids = batch_idx * N + target_idx
-        pi = self._incoming_softmax(incoming_score, group_ids)
+        pi = self._incoming_softmax(incoming_score, group_ids, B * N)
 
         patch_concept_gate_logits = self._aggregate_to_patch_grid(
             trajectory_concept_strength,
@@ -932,6 +1095,12 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             patch_delta_logits = self._aggregate_to_patch_grid(
                 delta_logits, pi, batch_idx, target_idx, B, H, W
             )
+
+        subpatch_patch_logits = None
+        subpatch_logits = None
+        subpatch_offset_logits = None
+        subpatch_scalar_base_logits = None
+        final_fine_logits = None
 
         coarse_patch_logits = patch_saliency_logits
         peak_residual_logits = None
@@ -1030,12 +1199,33 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             feature_residual_patch_logits = None
             final_patch_logits = concept_context_patch_logits
 
-        final_logits = F.interpolate(
+        (
+            subpatch_patch_logits,
+            subpatch_logits,
+            subpatch_offset_logits,
+            subpatch_scalar_base_logits,
+        ) = self._apply_grid_subpatch_head(
             final_patch_logits,
-            size=last_rgb.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
+            patch_concept_context,
+            patch_concept_gate,
         )
+
+        if subpatch_logits is not None:
+            final_fine_logits = subpatch_logits
+            final_logits = F.interpolate(
+                final_fine_logits,
+                size=last_rgb.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+        else:
+            final_fine_logits = None
+            final_logits = F.interpolate(
+                final_patch_logits,
+                size=last_rgb.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
 
         if self.output_activation == "sigmoid":
             saliency_map = torch.sigmoid(final_logits)
@@ -1053,7 +1243,9 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             concept_only_saliency_map = torch.sigmoid(concept_only_logits)
         else:
             concept_only_saliency_map = concept_only_logits
-        sharpened_saliency_map = self.sharpen_saliency_map(saliency_map)
+        sharpened_saliency_map = (
+            self.sharpen_saliency_map(saliency_map) if return_details else None
+        )
         out: Dict[str, torch.Tensor] = {
             "saliency_map": saliency_map,
             "sharpened_saliency_map": sharpened_saliency_map,
@@ -1076,8 +1268,7 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             "gated_target_features": gated_target_features,
             "source_evidence_features": source_evidence_features,
             "target_minus_source_features": target_minus_source_features,
-            "feature_residual_scale": torch.as_tensor(
-                self.feature_residual_scale,
+            "feature_residual_scale": self._scalar_feature_residual_scale.to(
                 device=final_patch_logits.device,
                 dtype=final_patch_logits.dtype,
             ),
@@ -1097,10 +1288,26 @@ s_hat_b = sum_a pi_ab * s_tilde_b(a)
             "concept_only_patch_saliency_logits": concept_only_patch_saliency_logits,
             "concept_only_trajectory_saliency_logits": concept_only_saliency_logits,
             "gated_trajectory_residual_logits": gated_trajectory_residual_logits,
-            "gated_trajectory_residual_scale": torch.as_tensor(
-                self.gated_trajectory_residual_scale,
+            "gated_trajectory_residual_scale": self._scalar_gated_trajectory_residual_scale.to(
                 device=saliency_logits.device,
                 dtype=saliency_logits.dtype,
+            ),
+            "subpatch_patch_logits": subpatch_patch_logits,
+            "subpatch_logits": subpatch_logits,
+            "subpatch_offset_logits": subpatch_offset_logits,
+            "subpatch_scalar_base_logits": subpatch_scalar_base_logits,
+            "final_fine_logits": final_fine_logits,
+            "subpatch_offset_abs_mean": (
+                subpatch_offset_logits.abs().mean()
+                if subpatch_offset_logits is not None
+                else None
+            ),
+            "subpatch_factor": self._scalar_subpatch_factor.to(
+                device=final_logits.device,
+            ),
+            "subpatch_residual_scale": self._scalar_subpatch_residual_scale.to(
+                device=final_logits.device,
+                dtype=final_logits.dtype,
             ),
         }
         if return_details:
@@ -1130,8 +1337,15 @@ class MultiScaleSaliencyPrediction(nn.Module):
         peak_residual_scale: float = 0.3,
         fusion_hidden_channels: int = 64,
         predict_delta: bool = True,
-        use_gated_trajectory_head: bool = True,
+        use_gated_trajectory_head: bool = False,
         gated_trajectory_residual_scale: float = 0.2,
+        use_subpatch_head: bool = True,
+        subpatch_factor: int = 16,
+        subpatch_hidden_dim: Optional[int] = None,
+        subpatch_residual_scale: float = 1.0,
+        use_temporal_transition_aggregation: bool = False,
+        temporal_aggregation_hidden_channels: int = 64,
+        temporal_aggregation_temperature: float = 1.0,
     ):
         super().__init__()
 
@@ -1141,6 +1355,7 @@ class MultiScaleSaliencyPrediction(nn.Module):
         self.stage_names = tuple(stage_channels.keys())
         self.stage_channels = dict(stage_channels)
         self.output_activation = output_activation
+        self.use_temporal_transition_aggregation = use_temporal_transition_aggregation
 
         self.stage_predictors = nn.ModuleDict()
         for stage, channels in self.stage_channels.items():
@@ -1159,6 +1374,13 @@ class MultiScaleSaliencyPrediction(nn.Module):
                 predict_delta=predict_delta,
                 use_gated_trajectory_head=use_gated_trajectory_head,
                 gated_trajectory_residual_scale=gated_trajectory_residual_scale,
+                use_subpatch_head=use_subpatch_head,
+                subpatch_factor=subpatch_factor,
+                subpatch_hidden_dim=subpatch_hidden_dim,
+                subpatch_residual_scale=subpatch_residual_scale,
+                use_temporal_transition_aggregation=use_temporal_transition_aggregation,
+                temporal_aggregation_hidden_channels=temporal_aggregation_hidden_channels,
+                temporal_aggregation_temperature=temporal_aggregation_temperature,
             )
 
         num_stages = len(self.stage_names)
@@ -1193,14 +1415,24 @@ class MultiScaleSaliencyPrediction(nn.Module):
         last_rgb_frame: torch.Tensor,
         video_features_dict: Dict[str, torch.Tensor],
         return_details: bool = False,
+        last_rgb_prepared: bool = False,
     ) -> Dict[str, Any]:
         stage_outs: Dict[str, Dict[str, Any]] = {}
         stage_logits = []
         stage_concept_logits = []
         stage_concept_only_logits = []
 
-        first_stage = self.stage_names[0]
-        last_rgb = self.stage_predictors[first_stage]._prepare_last_frame(last_rgb_frame)
+        if last_rgb_prepared:
+            last_rgb = last_rgb_frame
+        else:
+            first_stage = self.stage_names[0]
+            last_rgb = self.stage_predictors[first_stage]._prepare_last_frame(
+                last_rgb_frame
+            )
+
+        detail_stage = (
+            "stage1" if "stage1" in self.stage_names else self.stage_names[0]
+        )
 
         for stage in self.stage_names:
             if stage not in concept_outs:
@@ -1208,11 +1440,13 @@ class MultiScaleSaliencyPrediction(nn.Module):
             if stage not in video_features_dict:
                 raise ValueError(f"Missing video features for stage {stage}")
 
+            stage_return_details = return_details and stage == detail_stage
+
             out_s = self.stage_predictors[stage](
                 concept_outs[stage],
                 last_rgb,
                 video_features=video_features_dict[stage],
-                return_details=return_details,
+                return_details=stage_return_details,
                 last_rgb_prepared=True,
             )
 
@@ -1272,62 +1506,49 @@ class MultiScaleSaliencyPrediction(nn.Module):
             "stage_fusion_weights": stage_weights.detach().reshape(-1),
         }
 
-        for key in [
-            "concept_context_patch_logits",
-            "concept_context_residual_logits",
-            "patch_concept_context",
-            "patch_concept_gate",
-            "patch_concept_gate_logits",
-            "gated_target_features",
-            "source_evidence_features",
-            "patch_transition_activation",
-            "patch_persistence_activation",
-            "patch_transition_region",
-            "patch_persistence_region",
-        ]:
-            if key in main_out:
-                out[key] = main_out[key]
+        if return_details:
+            for key in [
+                "concept_context_patch_logits",
+                "concept_context_residual_logits",
+                "patch_concept_context",
+                "patch_concept_gate",
+                "patch_concept_gate_logits",
+                "gated_target_features",
+                "source_evidence_features",
+                "patch_transition_activation",
+                "patch_persistence_activation",
+                "patch_transition_region",
+                "patch_persistence_region",
+            ]:
+                if key in main_out:
+                    out[key] = main_out[key]
 
-        for key in [
-            "coarse_patch_logits",
-            "peak_residual_logits",
-            "final_patch_logits",
-            "patch_saliency_logits",
-            "concept_patch_saliency_logits",
-            "concept_only_patch_saliency_logits",
-            "concept_only_trajectory_saliency_logits",
-            "gated_trajectory_residual_logits",
-            "gated_trajectory_residual_scale",
-            "incoming_weights",
-            "incoming_scores",
-            "patch_coverage_count",
-            "trajectory_saliency_logits",
-            "trajectory_delta_logits",
-            "patch_delta_logits",
-            "selected_metadata",
-        ]:
-            if key in main_out:
-                out[key] = main_out[key]
-
-        rgb_size = final_logits.shape[-2:]
-        transition_regions = [
-            F.interpolate(tr, size=rgb_size, mode="bilinear", align_corners=False)
-            for out_s in stage_outs.values()
-            if (tr := out_s.get("patch_transition_region")) is not None
-        ]
-        persistence_regions = [
-            F.interpolate(per, size=rgb_size, mode="bilinear", align_corners=False)
-            for out_s in stage_outs.values()
-            if (per := out_s.get("patch_persistence_region")) is not None
-        ]
-
-        if transition_regions:
-            out["multiscale_transition_region"] = torch.stack(
-                transition_regions, dim=0
-            ).mean(dim=0)
-        if persistence_regions:
-            out["multiscale_persistence_region"] = torch.stack(
-                persistence_regions, dim=0
-            ).mean(dim=0)
+            for key in [
+                "coarse_patch_logits",
+                "peak_residual_logits",
+                "final_patch_logits",
+                "patch_saliency_logits",
+                "concept_patch_saliency_logits",
+                "concept_only_patch_saliency_logits",
+                "concept_only_trajectory_saliency_logits",
+                "gated_trajectory_residual_logits",
+                "gated_trajectory_residual_scale",
+                "subpatch_patch_logits",
+                "subpatch_logits",
+                "subpatch_offset_logits",
+                "subpatch_scalar_base_logits",
+                "final_fine_logits",
+                "subpatch_factor",
+                "subpatch_residual_scale",
+                "incoming_weights",
+                "incoming_scores",
+                "patch_coverage_count",
+                "trajectory_saliency_logits",
+                "trajectory_delta_logits",
+                "patch_delta_logits",
+                "selected_metadata",
+            ]:
+                if key in main_out:
+                    out[key] = main_out[key]
 
         return out

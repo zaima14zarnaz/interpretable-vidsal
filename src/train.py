@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
@@ -36,19 +37,21 @@ TRAIN_DATASET_DIR = (
 VAL_DATASET_DIR = ( 
     "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/testing"
 )
-WINDOW_LEN = 32
+WINDOW_LEN = 16
 
 EPOCHS = 20
-BATCH_SIZE = 8  # multiscale + 32 frames is VRAM-heavy; try 2 if OOM persists
+BATCH_SIZE = 4  # multiscale + 32 frames is VRAM-heavy; try 2 if OOM persists
 LR = 1e-4
 WEIGHT_DECAY = 1e-4
-NUM_WORKERS = 16
+NUM_WORKERS = 4
 SEED = 42
 OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
+MAP_SAVE_INTERVAL = 100000
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
-MAX_SAMPLES = 50
+MAX_SAMPLES = 500
+USE_AMP = True
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -57,9 +60,10 @@ LOSS_LAMBDA = {
     "lambda_delta": 0.0,
     "lambda_dense": 0.25,
     "lambda_bce": 0.0,
-    "lambda_kl": 6.0,
-    "lambda_topk": 1.0,
-    "topk_percent": 0.05,
+    "lambda_kl": 4.0,
+    "lambda_fid": 5.0,
+    "lambda_topk": 5.0,
+    "topk_percent": 0.005,
     "topk_bg_weight": 0.15,
     "lambda_concept_dense": 0.25,
     "lambda_concept_kl": 1.0,
@@ -69,6 +73,16 @@ LOSS_LAMBDA = {
     "lambda_gate": 0.5,
     "patch_from_logits": True,
 }
+
+
+def _amp_dtype(device: torch.device) -> torch.dtype:
+    if device.type == "cuda" and torch.cuda.is_bf16_supported():
+        return torch.bfloat16
+    return torch.float16
+
+
+def _amp_enabled(device: torch.device) -> bool:
+    return USE_AMP and device.type == "cuda"
 
 
 def _return_concept_losses() -> bool:
@@ -192,18 +206,31 @@ def save_rgb_png(rgb_tensor: torch.Tensor, save_path: str) -> None:
     plt.imsave(save_path, arr)
 
 
-def save_first_batch_maps(
+def save_batch_maps(
     model_out: dict,
     sal_batch: torch.Tensor,
+    fix_batch: torch.Tensor,
     rgb_batch: torch.Tensor,
     output_dir: str,
+    epoch: int,
+    batch_idx: int,
 ) -> None:
+    vis_dir = os.path.join(
+        output_dir,
+        "maps",
+        f"epoch_{epoch:03d}",
+        f"batch_{batch_idx:05d}",
+    )
+    os.makedirs(vis_dir, exist_ok=True)
+
     gt_map = prepare_last_saliency_for_visualization(sal_batch)
+    fix_map = prepare_last_saliency_for_visualization(fix_batch)
     pred_map = prepare_pred_for_visualization(model_out["saliency_map"])
     rgb_frame = prepare_last_rgb_for_visualization(rgb_batch)
-    save_map_png(gt_map, os.path.join(output_dir, "gt_sal_map.png"))
-    save_map_png(pred_map, os.path.join(output_dir, "pred_sal_map.png"))
-    save_rgb_png(rgb_frame, os.path.join(output_dir, "rgb_frame.png"))
+    save_map_png(gt_map, os.path.join(vis_dir, "gt_sal_map.png"))
+    save_map_png(fix_map, os.path.join(vis_dir, "gt_fixation_map.png"))
+    save_map_png(pred_map, os.path.join(vis_dir, "pred_sal_map.png"))
+    save_rgb_png(rgb_frame, os.path.join(vis_dir, "rgb_frame.png"))
 
     pred_out = model_out.get("prediction_out")
     if pred_out is not None:
@@ -216,7 +243,17 @@ def save_first_batch_maps(
         for filename, tensor in optional_patch_maps.items():
             if tensor is not None and torch.is_tensor(tensor):
                 vis = prepare_patch_map_for_visualization(tensor)
-                save_map_png(vis, os.path.join(output_dir, filename))
+                save_map_png(vis, os.path.join(vis_dir, filename))
+
+
+def save_first_batch_maps(
+    model_out: dict,
+    sal_batch: torch.Tensor,
+    fix_batch: torch.Tensor,
+    rgb_batch: torch.Tensor,
+    output_dir: str,
+) -> None:
+    save_batch_maps(model_out, sal_batch, fix_batch, rgb_batch, output_dir, epoch=1, batch_idx=0)
 
 
 def update_loss_curve(
@@ -250,6 +287,27 @@ def tensor_stats(name: str, x: torch.Tensor) -> None:
     )
 
 
+def _print_temporal_aggregation_debug(model_out: dict) -> None:
+    pred_out = model_out.get("prediction_out")
+    if pred_out is None:
+        return
+
+    tw = pred_out.get("temporal_transition_weights")
+    if tw is not None:
+        print("temporal_transition_weights shape:", tuple(tw.shape))
+        print(
+            "temporal weight min/max/mean:",
+            tw.min().item(),
+            tw.max().item(),
+            tw.mean().item(),
+        )
+        print("temporal weight sum over time mean:", tw.sum(dim=1).mean().item())
+
+    tpl = pred_out.get("temporal_patch_saliency_logits")
+    if tpl is not None:
+        print("temporal_patch_saliency_logits shape:", tuple(tpl.shape))
+
+
 def _print_first_batch_debug(model_out: dict, sal_batch: torch.Tensor) -> None:
     tensor_stats("pred_saliency", model_out["saliency_map"])
     tensor_stats("sal_batch", sal_batch.float())
@@ -263,6 +321,7 @@ def _print_first_batch_debug(model_out: dict, sal_batch: torch.Tensor) -> None:
             f"min={cov.min().item():.4f} max={cov.max().item():.4f} "
             f"mean={cov.mean().item():.4f}"
         )
+    _print_temporal_aggregation_debug(model_out)
 
 
 def _print_gate_debug(model_out: dict) -> None:
@@ -337,14 +396,17 @@ def _print_gate_debug(model_out: dict) -> None:
 
 
 def _compute_batch_metrics(
-    model_out: dict, sal_batch: torch.Tensor
+    model_out: dict,
+    sal_batch: torch.Tensor,
+    fix_batch: torch.Tensor,
 ) -> Dict[str, torch.Tensor]:
     return compute_saliency_metrics(
         model_out["saliency_map"],
-        sal_batch,
-        fixation_target=None,
-        fixation_threshold=FIXATION_THRESHOLD,
-        top_percent=TOP_PERCENT,
+        target_density=sal_batch,
+        fixation_target=fix_batch,
+        fixation_threshold=0.5,
+        top_percent=None,
+        allow_pseudo_fixations=False,
     )
 
 
@@ -357,6 +419,7 @@ def train_one_epoch(
     epoch: int,
     output_dir: str,
     calculate_metrics: bool = True,
+    scaler: Optional[GradScaler] = None,
 ) -> Tuple[float, Optional[Dict[str, float]]]:
     model.train()
     running_loss = 0.0
@@ -373,6 +436,7 @@ def train_one_epoch(
         video_filenames,
         rgb_batch,
         sal_batch,
+        fix_batch,
         n_frames,
         valid_mask,
     ) in enumerate(pbar):
@@ -380,23 +444,35 @@ def train_one_epoch(
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
         sal_batch = sal_batch.to(device, non_blocking=True)
+        fix_batch = fix_batch.to(device, non_blocking=True)
+        fix_batch = (fix_batch > 0).float()
 
         optimizer.zero_grad(set_to_none=True)
 
-        model_out = model(
-            rgb_batch,
-            saliency_maps=sal_batch,
-            return_details=True,
-            return_concept_losses=_return_concept_losses(),
-        )
+        with autocast(
+            device.type,
+            dtype=_amp_dtype(device),
+            enabled=_amp_enabled(device),
+        ):
+            model_out = model(
+                rgb_batch,
+                saliency_maps=sal_batch,
+                return_details=True,
+                return_concept_losses=_return_concept_losses(),
+                collect_gate_debug=(batch_idx == 0),
+            )
 
-        if batch_idx == 0:
-            save_first_batch_maps(model_out, sal_batch, rgb_batch, output_dir)
-            _print_first_batch_debug(model_out, sal_batch)
-            _print_gate_debug(model_out)
+            if batch_idx == 0:
+                _print_first_batch_debug(model_out, sal_batch)
+                _print_gate_debug(model_out)
 
-        loss_dict = _compute_batch_loss(model_out, sal_batch)
-        loss = loss_dict["loss_total"]
+            if batch_idx % MAP_SAVE_INTERVAL == 0:
+                save_batch_maps(
+                    model_out, sal_batch, fix_batch, rgb_batch, output_dir, epoch, batch_idx
+                )
+
+            loss_dict = _compute_batch_loss(model_out, sal_batch)
+            loss = loss_dict["loss_total"]
 
         if batch_idx == 0:
             with torch.no_grad():
@@ -419,6 +495,18 @@ def train_one_epoch(
                     float(target_last.mean().cpu()),
                     float(target_last.std().cpu()),
                 )
+                target_fix_last = fix_batch[:, -1:].detach().float()
+                print(
+                    "DEBUG fixation pixels per sample:",
+                    target_fix_last.flatten(1).sum(dim=1).detach().cpu().tolist(),
+                )
+                print(
+                    "DEBUG fix_batch min/max/mean/std:",
+                    float(fix_batch.min().detach().cpu()),
+                    float(fix_batch.max().detach().cpu()),
+                    float(fix_batch.mean().detach().cpu()),
+                    float(fix_batch.std().detach().cpu()),
+                )
                 print(
                     "DEBUG losses:",
                     {
@@ -428,13 +516,20 @@ def train_one_epoch(
                     },
                 )
 
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-        optimizer.step()
+        if scaler is not None and _amp_enabled(device):
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            optimizer.step()
 
         if calculate_metrics:
             with torch.no_grad():
-                metric_dict = _compute_batch_metrics(model_out, sal_batch)
+                metric_dict = _compute_batch_metrics(model_out, sal_batch, fix_batch)
                 metric_averager.update(metric_dict, batch_size=rgb_batch.shape[0])
 
         running_loss += loss.item()
@@ -443,9 +538,7 @@ def train_one_epoch(
         pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         # Drop graph references so activations can be freed before the next batch.
-        del model_out, loss_dict, loss, rgb_batch, sal_batch
-        if device.type == "cuda" and batch_idx % 4 == 3:
-            torch.cuda.empty_cache()
+        del model_out, loss_dict, loss, rgb_batch, sal_batch, fix_batch
 
     mean_loss = running_loss / max(num_batches, 1)
     if calculate_metrics:
@@ -472,28 +565,35 @@ def validate_one_epoch(
         leave=False,
         # disable=not SHOW_PROGRESS_BAR,
     )
-    for video_filenames, rgb_batch, sal_batch, n_frames, valid_mask in pbar:
+    for video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask in pbar:
         rgb_batch = rgb_batch.to(device, non_blocking=True)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
         sal_batch = sal_batch.to(device, non_blocking=True)
+        fix_batch = fix_batch.to(device, non_blocking=True)
+        fix_batch = (fix_batch > 0).float()
 
-        model_out = model(
-            rgb_batch,
-            saliency_maps=sal_batch,
-            return_details=True,
-            return_concept_losses=_return_concept_losses(),
-        )
-        loss_dict = _compute_batch_loss(model_out, sal_batch)
-        batch_loss = loss_dict["loss_total"].item()
+        with autocast(
+            device.type,
+            dtype=_amp_dtype(device),
+            enabled=_amp_enabled(device),
+        ):
+            model_out = model(
+                rgb_batch,
+                saliency_maps=sal_batch,
+                return_details=True,
+                return_concept_losses=_return_concept_losses(),
+            )
+            loss_dict = _compute_batch_loss(model_out, sal_batch)
+            batch_loss = loss_dict["loss_total"].item()
         running_loss += batch_loss
         num_batches += 1
 
-        metric_dict = _compute_batch_metrics(model_out, sal_batch)
+        metric_dict = _compute_batch_metrics(model_out, sal_batch, fix_batch)
         metric_averager.update(metric_dict, batch_size=rgb_batch.shape[0])
         pbar.set_postfix(loss=f"{batch_loss:.4f}")
 
-        del model_out, loss_dict, rgb_batch, sal_batch
+        del model_out, loss_dict, rgb_batch, sal_batch, fix_batch
 
     mean_loss = running_loss / max(num_batches, 1)
     if device.type == "cuda":
@@ -532,7 +632,7 @@ def main() -> None:
     }
     if NUM_WORKERS > 0:
         loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 2
+        loader_kwargs["prefetch_factor"] = 4
 
     train_loader = DataLoader(
         train_dataset,
@@ -557,23 +657,30 @@ def main() -> None:
     model = ExplainableVidSalModel(
         backbone_stages=("stage1", "stage2", "stage3", "stage4"),
         pretrained_backbone=True,
-        freeze_backbone=True,
+        freeze_backbone=False,
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=256,
         num_concepts=1024,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=3,
+        top_k=1,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
         tau_concept=0.2,
         concept_residual_weight=0.0,
+        last_transition_only=True,
         use_rgb_refinement=False,
         use_feature_refinement=False,
         output_activation="sigmoid",
         return_details=True,
+        use_subpatch_head=False,
+        subpatch_factor=4,
+        subpatch_residual_scale=0.5,
+        use_temporal_transition_aggregation=True,
+        temporal_aggregation_hidden_channels=128,
+        temporal_aggregation_temperature=1.0,
     ).to(device)
 
     trainable_params = list(model.get_trainable_parameters())
@@ -587,6 +694,7 @@ def main() -> None:
         T_max=EPOCHS,
         eta_min=1e-6,
     )
+    scaler = GradScaler(device.type, enabled=_amp_enabled(device))
 
     if OVERFIT_ONE_BATCH:
         _run_overfit_one_batch(
@@ -602,6 +710,8 @@ def main() -> None:
 
     for epoch in range(1, EPOCHS + 1):
         print(f"\nEpoch {epoch}/{EPOCHS}")
+        if epoch == 2:
+            break
 
         train_loss, train_metrics = train_one_epoch(
             model,
@@ -612,6 +722,7 @@ def main() -> None:
             epoch,
             OUTPUT_DIR,
             calculate_metrics=False,
+            scaler=scaler,
         )
         # if epoch == 3:
             # val_loss, val_metrics = validate_one_epoch(model, val_loader, device, epoch)
@@ -682,9 +793,11 @@ def _run_overfit_one_batch(
     print(f"OVERFIT_ONE_BATCH: {OVERFIT_STEPS} steps on first batch")
 
     batch = next(iter(loader))
-    video_filenames, rgb_batch, sal_batch, n_frames, valid_mask = batch
+    video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask = batch
     rgb_batch = rgb_batch.to(device)
     sal_batch = sal_batch.to(device)
+    fix_batch = fix_batch.to(device)
+    fix_batch = (fix_batch > 0).float()
 
     model.train()
     for step in range(1, OVERFIT_STEPS + 1):
@@ -696,7 +809,7 @@ def _run_overfit_one_batch(
             return_concept_losses=_return_concept_losses(),
         )
         if step == 1:
-            save_first_batch_maps(model_out, sal_batch, rgb_batch, output_dir)
+            save_first_batch_maps(model_out, sal_batch, fix_batch, rgb_batch, output_dir)
             _print_first_batch_debug(model_out, sal_batch)
             _print_gate_debug(model_out)
 

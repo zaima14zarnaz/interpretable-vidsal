@@ -82,6 +82,13 @@ class VideoSwinTransformer(nn.Module):
                 param.requires_grad = False
             self.backbone.eval()
 
+        self._requested_stage_indices = frozenset(
+            self.STAGE_INDICES[s] for s in self.return_stages
+        )
+        self._index_to_stage = {
+            idx: name for name, idx in self.STAGE_INDICES.items()
+        }
+
     def get_feature_channels(self) -> Dict[str, int]:
         """Per-stage channel counts for ``swin3d_t``."""
         return dict(self.FEATURE_CHANNELS)
@@ -151,14 +158,11 @@ class VideoSwinTransformer(nn.Module):
         x = self.backbone.patch_embed(x)
         x = self.backbone.pos_drop(x)
 
-        requested_indices = {self.STAGE_INDICES[s] for s in self.return_stages}
-        index_to_stage = {idx: name for name, idx in self.STAGE_INDICES.items()}
-
         outputs: Dict[str, torch.Tensor] = {}
         for i, layer in enumerate(self.backbone.features):
             x = layer(x)
-            if i in requested_indices:
-                stage_name = index_to_stage[i]
+            if i in self._requested_stage_indices:
+                stage_name = self._index_to_stage[i]
                 outputs[stage_name] = self._to_output_format(x)
 
         return outputs

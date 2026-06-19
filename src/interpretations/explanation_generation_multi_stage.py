@@ -154,7 +154,7 @@ except Exception:  # pragma: no cover - optional dependency
 # Reproducibility / model setup
 # -----------------------------
 
-DEFAULT_CHECKPOINT = "/home/zaimaz/Desktop/research1/ExplainableVidSal/src/training_outputs/ckpts/20260611_035436/epoch_018.pth"
+DEFAULT_CHECKPOINT = "/home/zaimaz/Desktop/research1/ExplainableVidSal/src/training_outputs/ckpts/20260613_162402/epoch_002.pth"
 DEFAULT_CONCEPTS_ROOT = (
     "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/concepts"
 )
@@ -276,9 +276,12 @@ def build_model(device: torch.device) -> ExplainableVidSalModel:
         tau_concept=0.2,
         concept_residual_weight=0.0,
         use_rgb_refinement=False,
-        use_feature_refinement=False,
+        use_feature_refinement=True,
         output_activation="sigmoid",
         return_details=True,
+        use_subpatch_head=True,
+        subpatch_factor=16,
+        subpatch_residual_scale=1.0,
     ).to(device)
     model.eval()
     return model
@@ -2576,7 +2579,7 @@ def retrieve_and_save_top_examples(
             if not retrieve_indices:
                 break
 
-            video_filenames, rgb_batch, sal_batch, n_frames, valid_mask = batch
+            video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask = batch
             rgb_device = rgb_batch.to(device, non_blocking=True)
             sal_device = (
                 sal_batch.to(device, non_blocking=True) if torch.is_tensor(sal_batch) else None
