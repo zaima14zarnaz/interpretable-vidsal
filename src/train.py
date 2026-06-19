@@ -53,6 +53,11 @@ OVERFIT_STEPS = 300
 MAX_SAMPLES = 500
 USE_AMP = True
 
+# Concept-branch switches. Set either branch to False for ablations.
+VISUAL_CONCEPT_ON = True
+TRAJECTORY_CONCEPTS_ON = True
+VISUAL_CONCEPT_LOGIT_SCALE = 1.0
+
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
 
@@ -71,6 +76,9 @@ LOSS_LAMBDA = {
     "lambda_sparse": 0.5,
     "lambda_div": 0.5,
     "lambda_gate": 0.5,
+    # Used only if compute_total_loss supports these ConceptCreation losses.
+    "lambda_visual": 0.5,
+    "lambda_visual_div": 0.5,
     "patch_from_logits": True,
 }
 
@@ -85,11 +93,31 @@ def _amp_enabled(device: torch.device) -> bool:
     return USE_AMP and device.type == "cuda"
 
 
+def _effective_loss_lambda() -> dict:
+    """Disable branch-specific auxiliary losses when a branch is ablated."""
+    loss_lambda = dict(LOSS_LAMBDA)
+    if not TRAJECTORY_CONCEPTS_ON:
+        for key in ("lambda_align", "lambda_sparse", "lambda_div", "lambda_gate"):
+            loss_lambda[key] = 0.0
+    if not VISUAL_CONCEPT_ON:
+        for key in ("lambda_visual", "lambda_visual_div"):
+            loss_lambda[key] = 0.0
+    return loss_lambda
+
+
 def _return_concept_losses() -> bool:
-    """True only when concept regularizers need ConceptCreation auxiliary losses."""
+    """True only when enabled concept regularizers need auxiliary losses."""
+    loss_lambda = _effective_loss_lambda()
     return any(
-        LOSS_LAMBDA.get(k, 0) > 0
-        for k in ("lambda_align", "lambda_sparse", "lambda_div", "lambda_gate")
+        loss_lambda.get(k, 0) > 0
+        for k in (
+            "lambda_align",
+            "lambda_sparse",
+            "lambda_div",
+            "lambda_gate",
+            "lambda_visual",
+            "lambda_visual_div",
+        )
     )
 
 
@@ -238,6 +266,8 @@ def save_batch_maps(
             "patch_transition_region.png": pred_out.get("patch_transition_region"),
             "patch_persistence_region.png": pred_out.get("patch_persistence_region"),
             "concept_context_patch_logits.png": pred_out.get("concept_context_patch_logits"),
+            "trajectory_saliency_map.png": pred_out.get("trajectory_saliency_map"),
+            "visual_saliency_map.png": pred_out.get("visual_saliency_map"),
         }
 
         for filename, tensor in optional_patch_maps.items():
@@ -275,7 +305,7 @@ def update_loss_curve(
 
 
 def _compute_batch_loss(model_out: dict, sal_batch: torch.Tensor) -> dict:
-    return compute_total_loss(model_out, sal_batch, **LOSS_LAMBDA)
+    return compute_total_loss(model_out, sal_batch, **_effective_loss_lambda())
 
 
 def tensor_stats(name: str, x: torch.Tensor) -> None:
@@ -610,9 +640,16 @@ def main() -> None:
     last_ckpt_path = os.path.join(run_ckpt_dir, "last_checkpoint.pth")
     set_seed(SEED)
 
+
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     print(f"Run checkpoints will be saved to: {run_ckpt_dir}")
+    print(
+        "Concept branches | "
+        f"visual_concept_on={VISUAL_CONCEPT_ON} | "
+        f"trajectory_concepts_on={TRAJECTORY_CONCEPTS_ON} | "
+        f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
+    )
 
     train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=16)
     val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=16)
@@ -681,6 +718,9 @@ def main() -> None:
         use_temporal_transition_aggregation=True,
         temporal_aggregation_hidden_channels=128,
         temporal_aggregation_temperature=1.0,
+        visual_concept_on=VISUAL_CONCEPT_ON,
+        trajectory_concepts_on=TRAJECTORY_CONCEPTS_ON,
+        visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
     ).to(device)
 
     trainable_params = list(model.get_trainable_parameters())

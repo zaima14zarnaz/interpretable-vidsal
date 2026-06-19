@@ -20,8 +20,12 @@ class ConceptCreation(nn.Module):
 
     Expected feature input: [B, C, T, H, W] (e.g. from VideoSwinTransformer).
     Target-centric trajectories (default): each target patch b@t+1 gets top_k
-    incoming sources a@t. Trajectory vector:
-      [z_a, z_b, z_b-z_a, z_a*z_b, p_b-p_a, alpha] -> q -> concept mixture + residual.
+    incoming sources a@t. Trajectory vector encodes patch-pair change and interaction
+    (not raw patch identity):
+      [z_b-z_a, z_a*z_b, p_b-p_a, alpha] -> q -> concept mixture + residual.
+
+    A separate visual concept branch assigns patch-level appearance concepts from
+    individual normalized patch features z_i^t (independent of trajectories).
 
     By default only the last adjacent transition (T-2 -> T-1) is built
     (``last_transition_only=True``), matching SaliencyPrediction's filter.
@@ -38,6 +42,8 @@ class ConceptCreation(nn.Module):
         "sparse": 0.01,
         "div": 0.1,
         "gate": 0.1,
+        "visual": 0.1,
+        "visual_div": 0.05,
     }
 
     DROPOUT_P = 0.2
@@ -65,6 +71,8 @@ class ConceptCreation(nn.Module):
         max_source_patches: Optional[int] = None,
         loss_weights: Optional[Dict[str, float]] = None,
         concept_residual_weight: float = 0.1,
+        num_visual_concepts: Optional[int] = None,
+        visual_concept_residual_weight: float = 0.1,
         use_target_centric: bool = True,
         last_transition_only: bool = True,
     ):
@@ -91,6 +99,10 @@ class ConceptCreation(nn.Module):
         self._last_gate_debug = {}
         self.max_source_patches = max_source_patches
         self.concept_residual_weight = concept_residual_weight
+        self.num_visual_concepts = (
+            num_visual_concepts if num_visual_concepts is not None else num_concepts
+        )
+        self.visual_concept_residual_weight = visual_concept_residual_weight
         self.use_target_centric = use_target_centric
         self.last_transition_only = last_transition_only
 
@@ -99,8 +111,8 @@ class ConceptCreation(nn.Module):
             weights.update(loss_weights)
         self.loss_weights = weights
 
-        # 4 * C (z_a, z_b, delta, product) + 2 (dx, dy) + 1 (alpha)
-        self.trajectory_input_dim = 4 * in_channels + 2 + 1
+        # 2 * C (delta, product) + 2 (dx, dy) + 1 (alpha); raw z_a/z_b omitted
+        self.trajectory_input_dim = 2 * in_channels + 2 + 1
 
         self.trajectory_encoder = nn.Sequential(
             nn.Linear(self.trajectory_input_dim, hidden_dim),
@@ -124,6 +136,19 @@ class ConceptCreation(nn.Module):
             nn.Linear(hidden_dim, concept_dim),
         )
 
+        # Patch-level appearance concepts (visual-only branch).
+        self.visual_encoder = nn.Sequential(
+            nn.Linear(in_channels, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(self.DROPOUT_P),
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, concept_dim),
+            nn.LayerNorm(concept_dim),
+        )
+        self.visual_concepts = nn.Parameter(
+            torch.randn(self.num_visual_concepts, concept_dim)
+        )
+
         self._init_concept_parameters()
         self._grid_cache: Dict[Tuple[int, int, torch.device, torch.dtype], torch.Tensor] = {}
         self._source_idx_cache: Dict[Tuple[int, torch.device, Optional[int]], torch.Tensor] = {}
@@ -142,6 +167,9 @@ class ConceptCreation(nn.Module):
             )
             self.persistence_concepts.copy_(
                 F.normalize(self.persistence_concepts, dim=-1)
+            )
+            self.visual_concepts.copy_(
+                F.normalize(self.visual_concepts, dim=-1)
             )
 
     @staticmethod
@@ -323,8 +351,6 @@ class ConceptCreation(nn.Module):
 
             traj = torch.cat(
                 [
-                    z_a,
-                    z_b,
                     z_b - z_a,
                     z_a * z_b,
                     disp,
@@ -407,7 +433,7 @@ class ConceptCreation(nn.Module):
             disp = grid[target_idx] - p_a_base.view(1, S, 1, 2)
 
             traj = torch.cat(
-                [z_a, z_b, z_b - z_a, z_a * z_b, disp, alpha_top.unsqueeze(-1)],
+                [z_b - z_a, z_a * z_b, disp, alpha_top.unsqueeze(-1)],
                 dim=-1,
             )
             traj_chunks.append(traj.reshape(-1, self.trajectory_input_dim))
@@ -486,6 +512,97 @@ class ConceptCreation(nn.Module):
         return bank_penalty(self.transition_concepts) + bank_penalty(
             self.persistence_concepts
         )
+
+    def _visual_diversity_loss(self) -> torch.Tensor:
+        """Encourage visual concept bank prototypes to stay diverse."""
+        bank_n = F.normalize(self.visual_concepts, dim=-1)
+        cos = bank_n @ bank_n.T
+        mask = ~torch.eye(cos.size(0), dtype=torch.bool, device=cos.device)
+        off_diag = cos[mask]
+        return F.relu(off_diag - self.diversity_margin).pow(2).mean()
+
+    def _visual_concept_loss(
+        self,
+        visual_patch_embeddings: torch.Tensor,
+        visual_concept_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Pull selected visual concept prototypes toward assigned patch embeddings.
+
+        Patch embeddings are detached so gradients update concept bank entries via
+        autograd (no manual in-place concept updates).
+        """
+        c_vis = F.normalize(self.visual_concepts, dim=-1)
+        selected_concepts = c_vis[visual_concept_indices]
+        return F.mse_loss(selected_concepts, visual_patch_embeddings.detach())
+
+    def _build_visual_concepts_from_patches(
+        self, features: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Build visual-only concept assignments from individual patch features.
+
+        Visual concepts capture patch-level appearance (z_i^t), separate from
+        trajectory concepts that encode temporal change/interaction/displacement.
+
+        Args:
+            features: [B, C, T, H, W]
+
+        Returns:
+            visual_patch_embeddings: [B*T*N, concept_dim]
+            visual_concept_logits: [B*T*N, num_visual_concepts]
+            visual_concept_indices: [B*T*N]
+            visual_activations: [B*T*N, num_visual_concepts]
+            visual_concept_representation: [B*T*N, concept_dim]
+            visual_metadata: dict with batch_idx, time_idx, patch_idx, patch_coords, feature_shape
+        """
+        B, C, T, H, W = features.shape
+        device = features.device
+        dtype = features.dtype
+        N = H * W
+
+        z = self._flatten_features(features)  # [B, T, N, C]
+        patch_vectors = z.reshape(B * T * N, C)
+
+        q_vis = self.visual_encoder(patch_vectors)
+        q_vis = F.normalize(q_vis, dim=-1)
+
+        c_vis = F.normalize(self.visual_concepts, dim=-1)
+        visual_logits = (q_vis @ c_vis.T) * self.inv_tau_concept
+        visual_indices = visual_logits.argmax(dim=-1)
+        visual_activations = F.one_hot(
+            visual_indices,
+            num_classes=self.num_visual_concepts,
+        ).to(dtype=q_vis.dtype)
+
+        visual_repr = visual_activations @ c_vis
+        if self.visual_concept_residual_weight > 0:
+            visual_repr = visual_repr + self.visual_concept_residual_weight * q_vis
+        visual_repr = F.normalize(visual_repr, dim=-1)
+
+        grid = self._make_grid(H, W, device, dtype)
+        patch_idx_base = torch.arange(N, device=device, dtype=torch.long)
+
+        visual_metadata: Dict[str, Any] = {
+            "batch_idx": torch.arange(B, device=device, dtype=torch.long).repeat_interleave(
+                T * N
+            ),
+            "time_idx": torch.arange(T, device=device, dtype=torch.long)
+            .repeat_interleave(N)
+            .repeat(B),
+            "patch_idx": patch_idx_base.repeat(B * T),
+            "patch_coords": grid[patch_idx_base.repeat(B * T)],
+            "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
+        }
+
+        return {
+            "visual_patch_embeddings": q_vis,
+            "visual_concept_logits": visual_logits,
+            "visual_concept_indices": visual_indices,
+            "visual_activations": visual_activations,
+            "visual_concept_representation": visual_repr,
+            "visual_metadata": visual_metadata,
+        }
 
     def _reconstruction_loss(self, q: torch.Tensor, recon_q: torch.Tensor) -> torch.Tensor:
         return F.mse_loss(recon_q, q)
@@ -842,6 +959,9 @@ class ConceptCreation(nn.Module):
             concept_repr = concept_repr + self.concept_residual_weight * q
         concept_repr = F.normalize(concept_repr, dim=-1)
 
+        # Patch-level visual concepts (appearance); independent of trajectory concepts.
+        visual_out = self._build_visual_concepts_from_patches(features)
+
         losses: Dict[str, torch.Tensor] = {}
         if return_losses:
             recon_q = self.reconstruction_head(concept_repr)
@@ -859,6 +979,20 @@ class ConceptCreation(nn.Module):
                 collect_gate_debug=collect_gate_debug,
             )
 
+            loss_visual = self._visual_concept_loss(
+                visual_out["visual_patch_embeddings"],
+                visual_out["visual_concept_indices"],
+            )
+            loss_visual_div = self._visual_diversity_loss()
+            w = self.loss_weights
+            losses["loss_visual"] = loss_visual
+            losses["loss_visual_div"] = loss_visual_div
+            losses["loss_total_concept"] = (
+                losses["loss_total_concept"]
+                + w["visual"] * loss_visual
+                + w["visual_div"] * loss_visual_div
+            )
+
         return {
             "trajectory_vectors": trajectory_vectors,
             "trajectory_embeddings": q,
@@ -868,6 +1002,12 @@ class ConceptCreation(nn.Module):
             "gate_probs": gate_probs,
             "metadata": metadata,
             "losses": losses,
+            "visual_patch_embeddings": visual_out["visual_patch_embeddings"],
+            "visual_concept_representation": visual_out["visual_concept_representation"],
+            "visual_activations": visual_out["visual_activations"],
+            "visual_concept_logits": visual_out["visual_concept_logits"],
+            "visual_concept_indices": visual_out["visual_concept_indices"],
+            "visual_metadata": visual_out["visual_metadata"],
         }
 
     @torch.no_grad()
@@ -892,9 +1032,12 @@ class ConceptCreation(nn.Module):
 
         out = {
             "num_concepts": self.num_concepts,
+            "num_visual_concepts": self.num_visual_concepts,
             "concept_dim": self.concept_dim,
             "top_n": top_n,
         }
         out.update(bank_stats(c_tr, "transition"))
         out.update(bank_stats(c_per, "persistence"))
+        c_vis = F.normalize(self.visual_concepts, dim=-1)
+        out.update(bank_stats(c_vis, "visual"))
         return out
