@@ -32,10 +32,10 @@ torch.backends.cudnn.allow_tf32 = True
 SHOW_PROGRESS_BAR = sys.stdout.isatty()
 
 TRAIN_DATASET_DIR = (
-    "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/training"
+    "/data/quantization/zaima/dh1k/training"
 )
 VAL_DATASET_DIR = ( 
-    "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/testing"
+    "/data/quantization/zaima/dh1k/testing"
 )
 WINDOW_LEN = 16
 
@@ -47,7 +47,7 @@ NUM_WORKERS = 4
 SEED = 42
 OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
-MAP_SAVE_INTERVAL = 100000
+MAP_SAVE_INTERVAL = 1000000
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
 MAX_SAMPLES = 500
@@ -76,10 +76,10 @@ LOSS_LAMBDA = {
     "lambda_sparse": 0.5,
     "lambda_div": 0.5,
     "lambda_gate": 0.5,
-    # Used only if compute_total_loss supports these ConceptCreation losses.
-    "lambda_visual": 0.5,
-    "lambda_visual_div": 0.5,
-    "patch_from_logits": True,
+#     # Used only if compute_total_loss supports these ConceptCreation losses.
+#     "lambda_visual": 0.5,
+#     "lambda_visual_div": 0.5,
+#     "patch_from_logits": True,
 }
 
 
@@ -694,18 +694,18 @@ def main() -> None:
     model = ExplainableVidSalModel(
         backbone_stages=("stage1", "stage2", "stage3", "stage4"),
         pretrained_backbone=True,
-        freeze_backbone=False,
+        freeze_backbone=True,
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=256,
-        num_concepts=1024,
+        num_concepts=512,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=1,
+        top_k=3,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
-        tau_concept=0.2,
+        tau_concept=0.07,
         concept_residual_weight=0.0,
         last_transition_only=True,
         use_rgb_refinement=False,
@@ -721,6 +721,7 @@ def main() -> None:
         visual_concept_on=VISUAL_CONCEPT_ON,
         trajectory_concepts_on=TRAJECTORY_CONCEPTS_ON,
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
+        visual_concept_residual_weight=0.0,
     ).to(device)
 
     trainable_params = list(model.get_trainable_parameters())
@@ -750,8 +751,6 @@ def main() -> None:
 
     for epoch in range(1, EPOCHS + 1):
         print(f"\nEpoch {epoch}/{EPOCHS}")
-        if epoch == 2:
-            break
 
         train_loss, train_metrics = train_one_epoch(
             model,

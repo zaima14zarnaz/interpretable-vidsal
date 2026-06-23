@@ -3,7 +3,9 @@
 This script:
   1. Loads the trained ExplainableVidSalModel from a checkpoint.
   2. Runs the model over a dataset and retrieves top-K patch-sequence examples for
-     every concept prototype using activations from model_out["concept_out"].
+     every visual concept prototype using visual_concept_logits from
+     model_out["concept_out"] with strict assignment masking via visual_concept_indices
+     (patch-level appearance concepts only).
   3. Optionally runs a two-stage LLM pipeline and writes per-sample and per-concept
      explanations.
   4. Regenerates global summary files by scanning all existing concept directories.
@@ -19,7 +21,7 @@ Under --concepts-root (default: dh1k/concepts):
       top_examples/
         examples_metadata.json
         example_000_context_panel.png
-        example_000_crop_pair.png   # frame t / t+4 crops, sent to Stage 1 LLM
+        example_000_crop_pair.png   # top-activated patch crop, sent to Stage 1 LLM
         ...
         contact_sheet.png           # inspection only, not sent to LLM
       sample_descriptions/
@@ -30,7 +32,7 @@ Under --concepts-root (default: dh1k/concepts):
 
 During LLM explanation, the script uses a two-stage no-clustering pipeline:
   1. Each top activated example is sent individually to the multimodal LLM using its
-     cropped patch pair (frame t and frame t+4 side by side).
+     single top-activated patch crop at the peak concept-activation frame.
   2. The per-sample descriptions are aggregated by the LLM in a text-only second pass to
      produce the concept-level explanation.
 
@@ -41,14 +43,15 @@ Notes:
   - The concept-level explanation is based on the aggregation of individual per-sample
     descriptions.
 
-Top examples are retrieved using saliency-aware scoring by default: concept activations
-restricted to the top --saliency-top-percent salient patches per sample (predicted saliency
+Top examples are retrieved using saliency-aware scoring by default: strictly assigned
+visual concept logits (only patches whose hard assignment equals concept k) restricted
+to the top --saliency-top-percent salient patches per sample (predicted saliency
 by default; use --saliency-source gt for ground-truth maps). Use --saliency-filter-mode
 none to recover activation-only behavior. Metadata includes patch_pred_saliency (patch
 saliency score used for filtering), activation_score, retrieval_score, and
 is_salient_region.
 
-    c_per_000/
+    c_vis_000/
       ...
 
 Per-concept explanation.json contains the aggregated concept description plus
@@ -80,8 +83,9 @@ to retrieve top examples only.
 
 Discover activation key
 -----------------------
-The per-concept activation tensor lives inside model_out["concept_out"]. If the key is
-unknown, discover it first with --dry-run-discover:
+The per-concept activation tensor lives inside model_out["concept_out"] under each stage's
+visual_concept_logits, visual_concept_indices, and visual_metadata. If the key is unknown,
+discover it first with --dry-run-discover:
 
   python explanation_generation_multi_stage.py \\
     --checkpoint training_outputs/best_checkpoint.pth \\
@@ -94,7 +98,7 @@ Full run (retrieval + two-stage LLM explanations)
     --checkpoint training_outputs/best_checkpoint.pth \\
     --dataset-dir /data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/testing \\
     --concepts-root /data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/concepts \\
-    --activation-key stage4.concept_activations \\
+    --activation-key stage4.visual_concept_logits \\
     --top-k 8 \\
     --llm-name qwen3 \\
     --sample-max-new-tokens 256 \\
@@ -106,7 +110,7 @@ Retrieval only (no LLM)
     --checkpoint training_outputs/best_checkpoint.pth \\
     --dataset-dir /data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/testing \\
     --concepts-root /data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/concepts \\
-    --activation-key stage4.concept_activations \\
+    --activation-key stage4.visual_concept_logits \\
     --top-k 8 \\
     --skip-llm
 """
@@ -154,7 +158,7 @@ except Exception:  # pragma: no cover - optional dependency
 # Reproducibility / model setup
 # -----------------------------
 
-DEFAULT_CHECKPOINT = "/home/zaimaz/Desktop/research1/ExplainableVidSal/src/training_outputs/ckpts/20260613_162402/epoch_002.pth"
+DEFAULT_CHECKPOINT = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260620_145412/epoch_003.pth"
 DEFAULT_CONCEPTS_ROOT = (
     "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/concepts"
 )
@@ -200,15 +204,36 @@ def get_concept_type_and_local_index(
     global_concept_idx: int,
     num_transition_concepts: int,
     num_persistence_concepts: int,
+    *,
+    concept_source: str = "visual",
+    num_concepts: Optional[int] = None,
 ) -> Tuple[str, int]:
     """
     Map a global concept index to (concept_type, local_index).
 
-    Indices 0..num_transition_concepts-1 map to transition concepts.
-    Indices num_transition_concepts..num_transition+num_persistence-1 map to persistence.
+    When concept_source is "visual" (default), indices map to visual concepts
+    c_vis_{idx}. When "trajectory", indices map to transition/persistence concepts.
     """
     if global_concept_idx < 0:
         raise ValueError(f"global_concept_idx must be >= 0, got {global_concept_idx}")
+
+    if concept_source == "visual":
+        total = (
+            num_concepts
+            if num_concepts is not None
+            else num_transition_concepts + num_persistence_concepts
+        )
+        if global_concept_idx >= total:
+            raise ValueError(
+                f"global_concept_idx {global_concept_idx} out of range for "
+                f"{total} visual concepts"
+            )
+        return "vis", global_concept_idx
+
+    if concept_source != "trajectory":
+        raise ValueError(
+            f"concept_source must be 'visual' or 'trajectory', got {concept_source!r}"
+        )
 
     if global_concept_idx < num_transition_concepts:
         return "tr", global_concept_idx
@@ -230,9 +255,11 @@ def get_concept_dir(
     concept_type: str,
     concept_number: int,
 ) -> Path:
-    """Return concepts_root/c_{tr|per}_{number:03d}."""
-    if concept_type not in {"tr", "per"}:
-        raise ValueError(f"concept_type must be 'tr' or 'per', got {concept_type!r}")
+    """Return concepts_root/c_{tr|per|vis}_{number:03d}."""
+    if concept_type not in {"tr", "per", "vis"}:
+        raise ValueError(
+            f"concept_type must be 'tr', 'per', or 'vis', got {concept_type!r}"
+        )
     return concepts_root / f"c_{concept_type}_{concept_number:03d}"
 
 
@@ -240,11 +267,16 @@ def format_concept_id(
     global_concept_idx: int,
     num_transition_concepts: int,
     num_persistence_concepts: int,
+    *,
+    concept_source: str = "visual",
+    num_concepts: Optional[int] = None,
 ) -> str:
     concept_type, local_idx = get_concept_type_and_local_index(
         global_concept_idx,
         num_transition_concepts,
         num_persistence_concepts,
+        concept_source=concept_source,
+        num_concepts=num_concepts,
     )
     return f"c_{concept_type}_{local_idx:03d}"
 
@@ -269,19 +301,26 @@ def build_model(device: torch.device) -> ExplainableVidSalModel:
         num_concepts=1024,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=3,
+        top_k=1,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
         tau_concept=0.2,
         concept_residual_weight=0.0,
+        last_transition_only=True,
         use_rgb_refinement=False,
-        use_feature_refinement=True,
+        use_feature_refinement=False,
         output_activation="sigmoid",
         return_details=True,
-        use_subpatch_head=True,
-        subpatch_factor=16,
-        subpatch_residual_scale=1.0,
+        use_subpatch_head=False,
+        subpatch_factor=4,
+        subpatch_residual_scale=0.5,
+        use_temporal_transition_aggregation=True,
+        temporal_aggregation_hidden_channels=128,
+        temporal_aggregation_temperature=1.0,
+        visual_concept_on=True,
+        trajectory_concepts_on=True,
+        visual_concept_logit_scale=1.0,
     ).to(device)
     model.eval()
     return model
@@ -341,6 +380,31 @@ def get_by_key_path(obj: Any, key_path: str) -> Any:
         else:
             raise KeyError(f"Cannot descend into {type(cur)} with part={part!r}")
     return cur
+
+
+def _find_stage_with_visual_concepts(concept_out: dict) -> str:
+    """Return the deepest stage that exposes visual concept logits and metadata."""
+
+    for stage in reversed(("stage4", "stage3", "stage2", "stage1")):
+        stage_out = concept_out.get(stage)
+        if not isinstance(stage_out, dict):
+            continue
+        if {
+            "visual_metadata",
+            "visual_concept_logits",
+            "visual_concept_indices",
+        }.issubset(stage_out.keys()):
+            return stage
+
+    available = {
+        stage: sorted(stage_out.keys())
+        for stage, stage_out in concept_out.items()
+        if isinstance(stage_out, dict)
+    }
+    raise KeyError(
+        "No stage with visual_concept_logits, visual_concept_indices, and visual_metadata. "
+        f"Available stage keys: {available}"
+    )
 
 
 def _find_stage_with_activations(concept_out: dict) -> str:
@@ -444,12 +508,169 @@ def build_patch_concept_activations_from_stage(
     return activations, (grid_h, grid_w)
 
 
+def build_patch_visual_concept_activations_from_stage(
+    stage_out: Dict[str, Any],
+    num_visual_concepts: int,
+    *,
+    use_logits: bool = True,
+) -> Tuple[torch.Tensor, Tuple[int, int]]:
+    """Scatter strictly assigned visual concept scores onto patch grid as [B, N, C]."""
+
+    metadata_key = "visual_metadata"
+    if metadata_key not in stage_out:
+        raise KeyError(f"stage_out missing {metadata_key!r}.")
+
+    metadata = stage_out[metadata_key]
+    feature_shape = metadata["feature_shape"]
+    batch_size = int(feature_shape["B"])
+    grid_h = int(feature_shape["H"])
+    grid_w = int(feature_shape["W"])
+    num_patches = grid_h * grid_w
+
+    if use_logits:
+        if "visual_concept_logits" not in stage_out:
+            raise KeyError("stage_out missing 'visual_concept_logits'.")
+        if "visual_concept_indices" not in stage_out:
+            raise KeyError("stage_out missing 'visual_concept_indices'.")
+
+        visual_logits = stage_out["visual_concept_logits"].float()
+        visual_indices = stage_out["visual_concept_indices"].long()
+        num_concepts = min(num_visual_concepts, int(visual_logits.shape[-1]))
+        if num_concepts <= 0:
+            raise ValueError("No visual concept columns available for patch aggregation.")
+
+        device = visual_logits.device
+        logits = visual_logits[:, :num_concepts]
+        strict_values = torch.full_like(logits, float("-inf"))
+        row_idx = torch.arange(logits.shape[0], device=device, dtype=torch.long)
+        valid = (visual_indices >= 0) & (visual_indices < num_concepts)
+        strict_values[row_idx[valid], visual_indices[valid]] = logits[row_idx[valid], visual_indices[valid]]
+        values = strict_values
+
+        activations_flat = torch.full(
+            (batch_size * num_patches, num_visual_concepts),
+            float("-inf"),
+            device=device,
+            dtype=values.dtype,
+        )
+    else:
+        value_key = "visual_activations"
+        if value_key not in stage_out:
+            raise KeyError(f"stage_out missing {value_key!r}.")
+
+        visual_values = stage_out[value_key]
+        num_concepts = min(num_visual_concepts, int(visual_values.shape[-1]))
+        if num_concepts <= 0:
+            raise ValueError("No visual concept columns available for patch aggregation.")
+
+        device = visual_values.device
+        values = visual_values[:, :num_concepts].float()
+        activations_flat = torch.zeros(
+            batch_size * num_patches,
+            num_visual_concepts,
+            device=device,
+            dtype=values.dtype,
+        )
+
+    batch_idx = metadata["batch_idx"].to(device=device, dtype=torch.long)
+    patch_idx = metadata["patch_idx"].to(device=device, dtype=torch.long)
+    flat_patch = batch_idx * num_patches + patch_idx
+    scatter_index = flat_patch.unsqueeze(-1).expand(-1, num_concepts)
+
+    activations_flat[:, :num_concepts].scatter_reduce_(
+        0,
+        scatter_index,
+        values,
+        reduce="amax",
+        include_self=True,
+    )
+
+    activations = activations_flat.view(batch_size, num_patches, num_visual_concepts)
+    return activations, (grid_h, grid_w)
+
+
+def compute_visual_peak_time_indices(
+    stage_out: Dict[str, Any],
+    num_visual_concepts: int,
+) -> torch.Tensor:
+    """Return [B, N, C] frame index with max strictly assigned visual concept logit."""
+
+    metadata = stage_out["visual_metadata"]
+    logits = stage_out["visual_concept_logits"][:, :num_visual_concepts].float()
+    visual_indices = stage_out["visual_concept_indices"].long()
+    feature_shape = metadata["feature_shape"]
+    batch_size = int(feature_shape["B"])
+    grid_h = int(feature_shape["H"])
+    grid_w = int(feature_shape["W"])
+    num_patches = grid_h * grid_w
+    num_concepts = logits.shape[-1]
+
+    batch_idx = metadata["batch_idx"].to(device=logits.device, dtype=torch.long)
+    patch_idx = metadata["patch_idx"].to(device=logits.device, dtype=torch.long)
+    time_idx = metadata["time_idx"].to(device=logits.device, dtype=torch.long)
+    flat_bp = batch_idx * num_patches + patch_idx
+
+    peak_times = torch.full(
+        (batch_size * num_patches, num_concepts),
+        -1,
+        dtype=torch.long,
+        device=logits.device,
+    )
+    peak_scores = torch.full(
+        (batch_size * num_patches, num_concepts),
+        float("-inf"),
+        device=logits.device,
+        dtype=logits.dtype,
+    )
+
+    for row in range(logits.shape[0]):
+        bp = int(flat_bp[row].item())
+        assigned_c = int(visual_indices[row].item())
+        if assigned_c < 0 or assigned_c >= num_concepts:
+            continue
+        score = logits[row, assigned_c]
+        if score > peak_scores[bp, assigned_c]:
+            peak_scores[bp, assigned_c] = score
+            peak_times[bp, assigned_c] = time_idx[row]
+
+    return peak_times.view(batch_size, num_patches, num_concepts)
+
+
+def resolve_visual_peak_time_indices(
+    model_out: dict,
+    activation_key: Optional[str],
+    num_concepts: int,
+    concept_source: str,
+) -> Optional[torch.Tensor]:
+    """Resolve per-patch peak activation frames for visual concept retrieval."""
+
+    if concept_source != "visual":
+        return None
+
+    concept_out = model_out.get("concept_out", {})
+    if not isinstance(concept_out, dict) or not concept_out:
+        return None
+
+    if activation_key is not None and "." in activation_key:
+        stage = activation_key.split(".", 1)[0]
+    else:
+        stage = _find_stage_with_visual_concepts(concept_out)
+
+    stage_out = concept_out.get(stage)
+    if not isinstance(stage_out, dict):
+        return None
+
+    return compute_visual_peak_time_indices(stage_out, num_concepts).cpu()
+
+
 def resolve_activation_tensor(
     model_out: dict,
     activation_key: Optional[str],
     num_transition_concepts: int,
     num_persistence_concepts: int,
     num_concepts: int,
+    *,
+    concept_source: str = "visual",
 ) -> Tuple[str, torch.Tensor, Optional[Tuple[int, int]]]:
     """Resolve an activation key to a patch-grid tensor [B, N, C]."""
 
@@ -462,6 +683,62 @@ def resolve_activation_tensor(
         "combined_patch_activations",
         "patch_concept_activations",
     }
+    visual_keys = {
+        "visual_concept_logits",
+        "visual_activations",
+        "visual_concepts",
+        "patch_visual_concept_activations",
+    }
+
+    if concept_source == "visual":
+        if activation_key is None:
+            stage = _find_stage_with_visual_concepts(concept_out)
+            activations, grid_hw = build_patch_visual_concept_activations_from_stage(
+                concept_out[stage],
+                num_concepts,
+                use_logits=True,
+            )
+            selected_name = f"{stage}.visual_concept_logits"
+            print(f"Auto-built patch visual concept activations from {selected_name}")
+            return selected_name, activations, grid_hw
+
+        if "." not in activation_key:
+            raise ValueError(
+                "activation_key must look like 'stage4.visual_concept_logits', "
+                f"got {activation_key!r}"
+            )
+
+        stage, field = activation_key.split(".", 1)
+        if field == "visual_concept_representation":
+            raise ValueError(
+                "visual_concept_representation is a concept_dim feature vector, not a "
+                "per-concept activation tensor. Use stage4.visual_concept_logits with "
+                "strict assignment masking via visual_concept_indices."
+            )
+
+        if stage not in concept_out:
+            raise KeyError(
+                f"Stage {stage!r} not found in concept_out. "
+                f"Available stages: {sorted(concept_out.keys())}"
+            )
+
+        stage_out = concept_out[stage]
+        if not isinstance(stage_out, dict):
+            raise KeyError(f"concept_out[{stage!r}] is not a dict.")
+
+        if field in visual_keys:
+            use_logits = field != "visual_activations"
+            activations, grid_hw = build_patch_visual_concept_activations_from_stage(
+                stage_out,
+                num_concepts,
+                use_logits=use_logits,
+            )
+            return activation_key, activations, grid_hw
+
+        raise ValueError(
+            "concept_source='visual' requires a visual activation key such as "
+            f"{sorted(visual_keys)}, got {activation_key!r}"
+        )
 
     if activation_key is None:
         stage = _find_stage_with_activations(concept_out)
@@ -523,7 +800,10 @@ def resolve_activation_tensor(
         raise TypeError(
             f"Activation path {activation_key!r} resolved to {type(raw)}, expected a tensor."
         )
-    activations, grid_hw = normalize_activation_tensor(raw, num_concepts)
+    activations, grid_hw = normalize_activation_tensor(
+        raw,
+        num_transition_concepts + num_persistence_concepts,
+    )
     return activation_key, activations, grid_hw
 
 
@@ -815,44 +1095,91 @@ def _compose_frame_t_and_t4_strip(
     return strip_img
 
 
-def _heap_item_crop_pair_image(item: HeapItem) -> Optional[Image.Image]:
-    """Build the frame t / frame t+4 cropped patch pair for one example."""
-    if item.frame_t_image is not None and item.frame_t1_image is not None:
-        return _compose_frame_t_and_t4_strip(item.frame_t_image, item.frame_t1_image)
-    if len(item.frame_sequence_images) >= 2:
-        return _compose_frame_t_and_t4_strip(
-            item.frame_sequence_images[0],
-            item.frame_sequence_images[-1],
-        )
+def crop_activated_patch_image(
+    rgb_batch: torch.Tensor,
+    b_idx: int,
+    patch_idx: int,
+    grid_hw: Optional[Tuple[int, int]],
+    frame_idx: int,
+    pad_ratio: float = 0.10,
+    display_size: Tuple[int, int] = (128, 128),
+) -> Image.Image:
+    """Crop one patch at the peak activation frame for LLM/contact-sheet display."""
+
+    video = rgb_video_to_btchw(rgb_batch)
+    _, t, _, h, w = video.shape
+    frame_idx = max(0, min(int(frame_idx), t - 1))
+
+    if grid_hw is None:
+        grid_hw = infer_grid_from_n(max(patch_idx + 1, 1)) or (1, 1)
+
+    crop_x0, crop_y0, crop_x1, crop_y1 = patch_bounds_from_index(
+        patch_idx,
+        grid_hw,
+        (h, w),
+        pad_ratio=pad_ratio,
+    )
+    full_pil = tensor_chw_to_pil(video[b_idx, frame_idx])
+    crop = full_pil.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+    return resize_with_aspect(crop, display_size)
+
+
+def _heap_item_activated_sample_image(item: HeapItem) -> Optional[Image.Image]:
+    """Return the single top-activated patch crop for one example."""
+    if item.activated_sample_image is not None:
+        return item.activated_sample_image
+    if item.rgb_window is not None and item.peak_time_idx is not None:
+        try:
+            return crop_activated_patch_image(
+                item.rgb_window.unsqueeze(0),
+                0,
+                item.patch_index,
+                item.grid_hw,
+                item.peak_time_idx,
+            )
+        except Exception:
+            return None
+    if item.frame_sequence_images:
+        return resize_with_aspect(item.frame_sequence_images[0], (128, 128))
     return None
 
 
+def _heap_item_crop_pair_image(item: HeapItem) -> Optional[Image.Image]:
+    """Backward-compatible alias for the single activated patch crop."""
+    return _heap_item_activated_sample_image(item)
+
+
 def _heap_item_contact_sheet_image(item: HeapItem) -> Optional[np.ndarray]:
-    """Build the contact-sheet cell image using only frame t and frame t+4 patches."""
-    crop_pair_img = _heap_item_crop_pair_image(item)
-    if crop_pair_img is None:
+    """Build the contact-sheet cell from the top-activated patch crop only."""
+    activated_sample_img = _heap_item_activated_sample_image(item)
+    if activated_sample_img is None:
         return None
-    return np.asarray(crop_pair_img)
+    return np.asarray(activated_sample_img)
+
+
+def _extract_activated_sample_from_context_panel(
+    context_panel: Image.Image,
+    num_frames: int = NUM_EXAMPLE_FRAMES,
+) -> Optional[Image.Image]:
+    """Rebuild a single activated patch crop from a saved context panel."""
+    spacing = 6
+    label_h = 16
+    patch_cell = (72, 72)
+    top_y = label_h
+    try:
+        first_crop = context_panel.crop((0, top_y, patch_cell[0], top_y + patch_cell[1]))
+    except (ValueError, OSError):
+        return None
+    _ = num_frames
+    return resize_with_aspect(first_crop, (128, 128))
 
 
 def _extract_crop_pair_from_context_panel(
     context_panel: Image.Image,
     num_frames: int = NUM_EXAMPLE_FRAMES,
 ) -> Optional[Image.Image]:
-    """Rebuild a crop pair from the first/last patches in a context panel's top row."""
-    spacing = 6
-    label_h = 16
-    patch_cell = (72, 72)
-    top_y = label_h
-    last_x0 = (num_frames - 1) * (patch_cell[0] + spacing)
-    try:
-        first_crop = context_panel.crop((0, top_y, patch_cell[0], top_y + patch_cell[1]))
-        last_crop = context_panel.crop(
-            (last_x0, top_y, last_x0 + patch_cell[0], top_y + patch_cell[1])
-        )
-    except (ValueError, OSError):
-        return None
-    return _compose_frame_t_and_t4_strip(first_crop, last_crop)
+    """Backward-compatible alias for a single activated patch crop."""
+    return _extract_activated_sample_from_context_panel(context_panel, num_frames=num_frames)
 
 
 def _compose_patch_sequence_strip(crop_frames: Sequence[Image.Image]) -> Image.Image:
@@ -1170,6 +1497,8 @@ class HeapItem:
     full_t_boxed_image: Any = field(compare=False, default=None)
     full_t1_boxed_image: Any = field(compare=False, default=None)
     context_panel_image: Any = field(compare=False, default=None)
+    activated_sample_image: Any = field(compare=False, default=None)
+    peak_time_idx: Optional[int] = field(compare=False, default=None)
     rgb_window: Any = field(compare=False, default=None)
     activation_score: float = field(compare=False, default=0.0)
     patch_pred_saliency: float = field(compare=False, default=0.0)
@@ -1196,6 +1525,7 @@ class SavedExample:
     full_t_boxed_path: str = ""
     full_t1_boxed_path: str = ""
     context_panel_path: str = ""
+    peak_time_idx: Optional[int] = None
     activation_score: float = 0.0
     patch_pred_saliency: float = 0.0
     retrieval_score: float = 0.0
@@ -1217,7 +1547,7 @@ def resolve_concept_indices(
 
 def populate_heap_item_images(item: HeapItem) -> None:
     """Crop display images once from the cached RGB window (deferred cropping)."""
-    if item.image is not None:
+    if item.activated_sample_image is not None:
         return
     if item.rgb_window is None:
         return
@@ -1241,6 +1571,20 @@ def populate_heap_item_images(item: HeapItem) -> None:
     except Exception as exc:
         print(f"WARNING: failed to crop patch sequence for {item.video_name}: {exc}")
         return
+
+    if item.peak_time_idx is not None and item.peak_time_idx >= 0:
+        try:
+            item.activated_sample_image = crop_activated_patch_image(
+                window_batch,
+                0,
+                item.patch_index,
+                item.grid_hw,
+                item.peak_time_idx,
+            )
+        except Exception:
+            item.activated_sample_image = None
+    if item.activated_sample_image is None and crop_frames:
+        item.activated_sample_image = resize_with_aspect(crop_frames[0], (128, 128))
 
     item.frame_t_image = frame_t_img
     item.frame_t1_image = frame_t1_img
@@ -1266,6 +1610,7 @@ def update_heaps_from_activations(
     saliency_top_percent: float = 0.20,
     saliency_maps: Optional[torch.Tensor] = None,
     patch_saliency: Optional[torch.Tensor] = None,
+    peak_time_indices: Optional[torch.Tensor] = None,
 ) -> int:
     """Update per-concept heaps using saliency-aware retrieval scores [B,N,C]."""
 
@@ -1313,6 +1658,11 @@ def update_heaps_from_activations(
             b_idx = flat_idx // n_patches
             p_idx = flat_idx % n_patches
             video_name = str(video_filenames[b_idx])
+            peak_time_idx: Optional[int] = None
+            if peak_time_indices is not None:
+                peak_time_idx = int(peak_time_indices[b_idx, p_idx, c_idx].item())
+                if peak_time_idx < 0:
+                    peak_time_idx = None
 
             item = HeapItem(
                 score=float(value),
@@ -1323,6 +1673,7 @@ def update_heaps_from_activations(
                 video_name=video_name,
                 grid_hw=grid_hw,
                 rgb_window=rgb_batch[b_idx].detach().cpu().clone(),
+                peak_time_idx=peak_time_idx,
                 activation_score=float(activation_flat[flat_idx, c_idx]),
                 patch_pred_saliency=float(sal_flat[flat_idx]),
                 retrieval_score=float(value),
@@ -1408,7 +1759,7 @@ def _render_contact_sheet_grid(
         if image_arr is not None:
             ax.imshow(image_arr)
         else:
-            ax.imshow(np.full((128, 512, 3), 0.94, dtype=np.float32))
+            ax.imshow(np.full((128, 128, 3), 0.94, dtype=np.float32))
 
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -1422,7 +1773,7 @@ def save_contact_sheet(
     path: Path,
     overwrite: bool,
 ) -> bool:
-    """Save a text-free 3-column contact sheet of frame t / frame t+4 strips."""
+    """Save a text-free 3-column contact sheet of top-activated patch crops."""
 
     if not ranked or not _should_write(path, overwrite):
         return False
@@ -1475,6 +1826,12 @@ def load_saved_examples_from_metadata(
         is_salient_region = bool(
             entry.get("is_salient_region", patch_pred_saliency > 0.0)
         )
+        peak_time_raw = entry.get("peak_time_idx")
+        peak_time_idx = (
+            int(peak_time_raw)
+            if peak_time_raw is not None and int(peak_time_raw) >= 0
+            else None
+        )
         examples.append(
             SavedExample(
                 concept_idx=concept_idx,
@@ -1484,7 +1841,7 @@ def load_saved_examples_from_metadata(
                 batch_index=int(entry.get("batch_index", -1)),
                 patch_index=int(entry.get("sample_index", entry.get("patch_index", -1))),
                 grid_hw=None,
-                image_path=context_panel_path,
+                image_path=crop_pair_path or context_panel_path,
                 frame_t_path="",
                 frame_t1_path="",
                 pair_path=crop_pair_path,
@@ -1494,6 +1851,7 @@ def load_saved_examples_from_metadata(
                 full_t_boxed_path="",
                 full_t1_boxed_path="",
                 context_panel_path=context_panel_path,
+                peak_time_idx=peak_time_idx,
                 activation_score=activation_score,
                 patch_pred_saliency=patch_pred_saliency,
                 retrieval_score=retrieval_score,
@@ -1510,6 +1868,9 @@ def save_single_concept_heap(
     num_transition_concepts: int,
     num_persistence_concepts: int,
     overwrite: bool = True,
+    *,
+    concept_source: str = "visual",
+    num_concepts: Optional[int] = None,
 ) -> List[SavedExample]:
     """Write one concept's current top examples to disk."""
 
@@ -1517,6 +1878,8 @@ def save_single_concept_heap(
         c_idx,
         num_transition_concepts,
         num_persistence_concepts,
+        concept_source=concept_source,
+        num_concepts=num_concepts,
     )
     concept_dir = ensure_dir(get_concept_dir(concepts_root, concept_type, local_idx))
     top_examples_dir = ensure_dir(concept_dir / "top_examples")
@@ -1539,9 +1902,9 @@ def save_single_concept_heap(
             item.context_panel_image, context_panel_abs, size=(540, 340), overwrite=overwrite
         )
         _save_example_image(
-            _heap_item_crop_pair_image(item),
+            _heap_item_activated_sample_image(item),
             crop_pair_abs,
-            size=(268, 128),
+            size=(128, 128),
             overwrite=overwrite,
         )
 
@@ -1567,6 +1930,7 @@ def save_single_concept_heap(
                 full_t_boxed_path="",
                 full_t1_boxed_path="",
                 context_panel_path=context_panel_rel,
+                peak_time_idx=item.peak_time_idx,
                 activation_score=item.activation_score,
                 patch_pred_saliency=item.patch_pred_saliency,
                 retrieval_score=item.retrieval_score,
@@ -1588,6 +1952,7 @@ def save_single_concept_heap(
                 "concept_number": int(local_idx),
                 "video_filename": item.video_name,
                 "num_frames": NUM_EXAMPLE_FRAMES,
+                "peak_time_idx": item.peak_time_idx,
                 "context_panel_path": context_panel_rel,
                 "crop_pair_path": crop_pair_rel,
             }
@@ -1614,6 +1979,9 @@ def partition_concepts_for_retrieval(
     num_persistence_concepts: int,
     skip_existing: bool,
     overwrite: bool,
+    *,
+    concept_source: str = "visual",
+    num_concepts: Optional[int] = None,
 ) -> Tuple[List[int], Dict[int, List[SavedExample]]]:
     """Split concepts into those needing retrieval vs. reused on-disk examples."""
 
@@ -1626,6 +1994,8 @@ def partition_concepts_for_retrieval(
             c_idx,
             num_transition_concepts,
             num_persistence_concepts,
+            concept_source=concept_source,
+            num_concepts=num_concepts,
         )
         concept_dir = get_concept_dir(concepts_root, concept_type, local_idx)
         metadata_path = concept_dir / "top_examples" / "examples_metadata.json"
@@ -1659,6 +2029,9 @@ def save_retrieved_examples(
     output_dir: Optional[Path] = None,
     overwrite: bool = False,
     skip_existing: bool = True,
+    *,
+    concept_source: str = "visual",
+    num_concepts: Optional[int] = None,
 ) -> Dict[int, List[SavedExample]]:
     ensure_dir(concepts_root)
     saved: Dict[int, List[SavedExample]] = {}
@@ -1675,6 +2048,8 @@ def save_retrieved_examples(
             c_idx,
             num_transition_concepts,
             num_persistence_concepts,
+            concept_source=concept_source,
+            num_concepts=num_concepts,
         )
         concept_dir = get_concept_dir(concepts_root, concept_type, local_idx)
         metadata_path = concept_dir / "top_examples" / "examples_metadata.json"
@@ -1694,6 +2069,8 @@ def save_retrieved_examples(
             num_transition_concepts=num_transition_concepts,
             num_persistence_concepts=num_persistence_concepts,
             overwrite=overwrite or not skip_artifacts,
+            concept_source=concept_source,
+            num_concepts=num_concepts,
         )
 
     if output_dir is not None:
@@ -1713,14 +2090,11 @@ def build_single_example_description_prompt(concept_id: str, example: SavedExamp
     _ = (concept_id, example)
     return """You are viewing one top-activated example for a learned concept in a video saliency model.
 
-The image shows two cropped patches from the same activated region: the left crop is from an
-earlier frame (t) and the right crop is from a later frame (t+4). There is no full-frame
-context.
-
-Your task is to describe the patches in detail in less than 50 tokens.
+The image shows a cropped patch from the same activated region.
+Your task is to describe the patch in detail in less than 50 tokens.
 
 Rules:
-- Focus only on what is visible in these two cropped patches.
+- Focus only on what is visible in the cropped patch.
 - Keep every field to one short phrase or sentence. Be compact.
 - Report low_level_features (color, edges, texture, shape, blur, etc.) and semantic_features
   (object/part/category cues such as face, hand, text, vehicle) separately. Use "none" for
@@ -2185,7 +2559,7 @@ def collect_example_crop_pair_path(
     concept_dir: Path,
     example: SavedExample,
 ) -> Optional[str]:
-    """Return the crop-pair image path for Stage 1 LLM input."""
+    """Return the top-activated patch image path for Stage 1 LLM input."""
     pair_path = _example_source_path(
         concept_dir,
         example,
@@ -2210,7 +2584,7 @@ def collect_example_crop_pair_path(
 
     try:
         context_panel = Image.open(panel_path).convert("RGB")
-        crop_pair_img = _extract_crop_pair_from_context_panel(
+        crop_pair_img = _extract_activated_sample_from_context_panel(
             context_panel,
             num_frames=example.num_frames or NUM_EXAMPLE_FRAMES,
         )
@@ -2347,14 +2721,22 @@ def describe_concepts_with_llm(
     sample_max_new_tokens: int = 256,
     aggregate_max_new_tokens: int = 512,
     reuse_sample_descriptions: bool = True,
+    *,
+    concept_source: str = "visual",
+    num_concepts: Optional[int] = None,
 ) -> List[dict]:
     llm: Optional[LLMHandle] = None
     descriptions: List[dict] = []
     ensure_dir(concepts_root)
+    default_count = (
+        num_concepts
+        if concept_source == "visual"
+        else num_transition_concepts + num_persistence_concepts
+    )
     indices = (
         list(concept_indices)
         if concept_indices is not None
-        else list(range(num_transition_concepts + num_persistence_concepts))
+        else list(range(default_count))
     )
 
     for c_idx in tqdm(indices, desc="Two-stage LLM concept descriptions"):
@@ -2362,11 +2744,15 @@ def describe_concepts_with_llm(
             c_idx,
             num_transition_concepts,
             num_persistence_concepts,
+            concept_source=concept_source,
+            num_concepts=num_concepts,
         )
         concept_id = format_concept_id(
             c_idx,
             num_transition_concepts,
             num_persistence_concepts,
+            concept_source=concept_source,
+            num_concepts=num_concepts,
         )
         concept_dir = ensure_dir(get_concept_dir(concepts_root, concept_type, local_idx))
         explanation_path = concept_dir / "explanation.json"
@@ -2535,6 +2921,8 @@ def retrieve_and_save_top_examples(
     saliency_source: str = "predicted",
     use_amp: bool = False,
     save_every_n_batches: int = 0,
+    *,
+    concept_source: str = "visual",
 ) -> Dict[int, List[SavedExample]]:
     """Retrieve top examples; defer disk writes until the dataset pass completes."""
 
@@ -2548,6 +2936,8 @@ def retrieve_and_save_top_examples(
         num_persistence_concepts=num_persistence_concepts,
         skip_existing=skip_existing,
         overwrite=overwrite,
+        concept_source=concept_source,
+        num_concepts=num_concepts,
     )
     heaps: Dict[int, List[HeapItem]] = {c_idx: [] for c_idx in retrieve_indices}
     serial = 0
@@ -2605,6 +2995,7 @@ def retrieve_and_save_top_examples(
                 num_transition_concepts=num_transition_concepts,
                 num_persistence_concepts=num_persistence_concepts,
                 num_concepts=num_concepts,
+                concept_source=concept_source,
             )
             if batch_idx == 0:
                 print(
@@ -2654,6 +3045,15 @@ def retrieve_and_save_top_examples(
             else:
                 heap_kwargs["saliency_maps"] = extract_gt_saliency_batch(sal_batch)
 
+            peak_time_indices = resolve_visual_peak_time_indices(
+                model_out,
+                activation_key=activation_key,
+                num_concepts=num_concepts,
+                concept_source=concept_source,
+            )
+            if peak_time_indices is not None:
+                heap_kwargs["peak_time_indices"] = peak_time_indices
+
             serial = update_heaps_from_activations(**heap_kwargs)
 
             if (
@@ -2669,6 +3069,8 @@ def retrieve_and_save_top_examples(
                     concept_indices=retrieve_indices,
                     overwrite=True,
                     skip_existing=False,
+                    concept_source=concept_source,
+                    num_concepts=num_concepts,
                 )
                 saved_examples.update(interim_saved)
 
@@ -2683,6 +3085,8 @@ def retrieve_and_save_top_examples(
             concept_indices=retrieve_indices,
             overwrite=overwrite,
             skip_existing=skip_existing,
+            concept_source=concept_source,
+            num_concepts=num_concepts,
         )
         saved_examples.update(newly_saved)
 
@@ -2722,6 +3126,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--num-concepts", type=int, default=512)
     parser.add_argument(
+        "--concept-source",
+        choices=("visual", "trajectory"),
+        default="visual",
+        help=(
+            "Which concept bank to retrieve from in concept_out. "
+            "'visual' uses patch-level visual_concept_logits with strict assignment "
+            "masking via visual_concept_indices (default). "
+            "'trajectory' uses transition/persistence activations."
+        ),
+    )
+    parser.add_argument(
         "--max-concepts",
         type=int,
         default=None,
@@ -2740,7 +3155,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Dot path inside model_out['concept_out'] for per-concept activation tensor, "
-            "e.g. stage4.concept_activations. If omitted, script attempts auto-discovery."
+            "e.g. stage4.visual_concept_logits for visual concepts or "
+            "stage4.concept_activations for trajectory concepts. "
+            "If omitted, auto-discovers based on --concept-source."
         ),
     )
     parser.add_argument("--dry-run-discover", action="store_true", help="Print concept_out tensors and exit")
@@ -2860,7 +3277,7 @@ def resolve_llm_max_new_tokens(args: argparse.Namespace) -> Tuple[int, int]:
     return sample_max_new_tokens, aggregate_max_new_tokens
 
 
-CONCEPT_DIR_PATTERN = re.compile(r"^c_(tr|per)_(\d+)$")
+CONCEPT_DIR_PATTERN = re.compile(r"^c_(tr|per|vis)_(\d+)$")
 
 CONCEPT_SUMMARY_CSV_COLUMNS = [
     "concept_id",
@@ -2899,7 +3316,7 @@ def build_concept_summary_entry(
         explanation.get(
             "global_concept_index",
             concept_number
-            if concept_type == "tr"
+            if concept_type in {"tr", "vis"}
             else num_transition_concepts + concept_number,
         )
     )
@@ -3057,6 +3474,7 @@ def main() -> None:
         saliency_source=args.saliency_source,
         use_amp=use_amp,
         save_every_n_batches=args.save_every_n_batches,
+        concept_source=args.concept_source,
     )
     print(f"Saved concept top examples under: {concepts_root}")
     print(f"Saved metadata to: {output_dir / 'retrieved_examples.json'}")
@@ -3082,6 +3500,8 @@ def main() -> None:
             sample_max_new_tokens=sample_max_new_tokens,
             aggregate_max_new_tokens=aggregate_max_new_tokens,
             reuse_sample_descriptions=args.reuse_sample_descriptions,
+            concept_source=args.concept_source,
+            num_concepts=args.num_concepts,
         )
         print(f"Saved {len(descriptions)} concept explanations under: {concepts_root}")
         print(f"Saved aggregate descriptions to: {output_dir / 'concept_descriptions.json'}")

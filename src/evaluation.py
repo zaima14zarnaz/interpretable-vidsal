@@ -30,18 +30,23 @@ torch.backends.cudnn.allow_tf32 = True
 
 # Defaults aligned with train.py
 DEFAULT_TRAIN_DIR = (
-    "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/training"
+    "/data/quantization/zaima/dh1k/training"
 )
 DEFAULT_TEST_DIR = (
-    "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/testing"
+    "/data/quantization/zaima/dh1k/testing"
 )
-DEFAULT_CHECKPOINT = "/home/zaimaz/Desktop/research1/ExplainableVidSal/src/training_outputs/ckpts/20260616_014755/epoch_001.pth"
+DEFAULT_CHECKPOINT = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260620_145412/epoch_001.pth"
 DEFAULT_OUTPUT_DIR = "evaluation_outputs"
 MAX_SAMPLES = 10000000
 
 WINDOW_LEN = 16
 BATCH_SIZE = 4
 NUM_WORKERS = 4
+
+# Concept-branch switches. Set either branch to False for ablations.
+VISUAL_CONCEPT_ON = True
+TRAJECTORY_CONCEPTS_ON = True
+VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -85,7 +90,7 @@ def build_model(
     model = ExplainableVidSalModel(
         backbone_stages=("stage1", "stage2", "stage3", "stage4"),
         pretrained_backbone=True,
-        freeze_backbone=False,
+        freeze_backbone=True,
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=256,
@@ -109,6 +114,9 @@ def build_model(
         use_temporal_transition_aggregation=True,
         temporal_aggregation_hidden_channels=128,
         temporal_aggregation_temperature=1.0,
+        visual_concept_on=VISUAL_CONCEPT_ON,
+        trajectory_concepts_on=TRAJECTORY_CONCEPTS_ON,
+        visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
     ).to(device)
     return model
 

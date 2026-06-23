@@ -1,17 +1,17 @@
 {
-  "checkpoint": "/home/zaimaz/Desktop/research1/ExplainableVidSal/src/training_outputs/ckpts/20260616_014755/epoch_001.pth",
-  "test_dir": "/data/research/zaima/dataset/Dataset/VideoSaliencyDatasets/dh1k/testing",
+  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260620_145412/epoch_001.pth",
+  "test_dir": "/data/quantization/zaima/dh1k/testing",
   "num_samples": 3722,
   "num_windows": 3722,
   "window_len": 16,
   "batch_size": 4,
   "mean_loss": 0.0,
   "metrics": {
-    "CC": 0.5096983435518203,
-    "SIM": 0.3977402637230732,
-    "AUC": 0.9130086668520317,
-    "sAUC": 0.5700525717988955,
-    "NSS": 2.916366459648658
+    "CC": 0.5107244325342324,
+    "SIM": 0.40145318903937766,
+    "AUC": 0.9145152844260419,
+    "sAUC": 0.5646266759498858,
+    "NSS": 2.916169441447727
   },
   "checkpoint_epoch": 1
 }
