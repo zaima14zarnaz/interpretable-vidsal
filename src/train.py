@@ -5,6 +5,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import random
 import sys
+import math
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
@@ -39,15 +40,21 @@ VAL_DATASET_DIR = (
 )
 WINDOW_LEN = 16
 
-EPOCHS = 20
-BATCH_SIZE = 4  # multiscale + 32 frames is VRAM-heavy; try 2 if OOM persists
+EPOCHS = 100
+BATCH_SIZE = 4  # effective optimizer batch size
+FREEZE_BACKBONE = True
+# When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
+# gradients so the optimizer still sees BATCH_SIZE samples per step.
+MICRO_BATCH_SIZE = 1
+BACKBONE_GRADIENT_CHECKPOINTING = True
+SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
 LR = 1e-4
 WEIGHT_DECAY = 1e-4
-NUM_WORKERS = 4
+NUM_WORKERS = 2
 SEED = 42
 OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
-MAP_SAVE_INTERVAL = 1000000
+MAP_SAVE_INTERVAL = 500
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
 MAX_SAMPLES = 500
@@ -55,7 +62,7 @@ USE_AMP = True
 
 # Concept-branch switches. Set either branch to False for ablations.
 VISUAL_CONCEPT_ON = True
-TRAJECTORY_CONCEPTS_ON = True
+TEMPORAL_CONCEPTS_ON = True
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
 FIXATION_THRESHOLD = 0.5
@@ -65,23 +72,26 @@ LOSS_LAMBDA = {
     "lambda_delta": 0.0,
     "lambda_dense": 0.25,
     "lambda_bce": 0.0,
-    "lambda_kl": 4.0,
-    "lambda_fid": 5.0,
-    "lambda_topk": 5.0,
+    "lambda_kl": 2.0,
+    "lambda_fid": 1.0,
+    "lambda_cc": 1.0,
+    "lambda_nss": 1.0,
     "topk_percent": 0.005,
     "topk_bg_weight": 0.15,
     "lambda_concept_dense": 0.25,
-    "lambda_concept_kl": 1.0,
-    "lambda_align": 0.5,
+    "lambda_concept_kl": 0.25,
+    "lambda_align": 0.25,
     "lambda_sparse": 0.5,
     "lambda_div": 0.5,
-    "lambda_gate": 0.5,
+    "lambda_gate": 0.0,
+    "lambda_visual_entropy": 0.02,
+    "lambda_visual_usage": 0.05,
+    "lambda_visual_equiv": 0.02,
 #     # Used only if compute_total_loss supports these ConceptCreation losses.
 #     "lambda_visual": 0.5,
 #     "lambda_visual_div": 0.5,
 #     "patch_from_logits": True,
 }
-
 
 def _amp_dtype(device: torch.device) -> torch.dtype:
     if device.type == "cuda" and torch.cuda.is_bf16_supported():
@@ -93,14 +103,66 @@ def _amp_enabled(device: torch.device) -> bool:
     return USE_AMP and device.type == "cuda"
 
 
-def _effective_loss_lambda() -> dict:
+def _dataloader_batch_size() -> int:
+    if FREEZE_BACKBONE:
+        return BATCH_SIZE
+    return MICRO_BATCH_SIZE
+
+
+def _grad_accum_steps() -> int:
+    if FREEZE_BACKBONE:
+        return 1
+    if BATCH_SIZE % MICRO_BATCH_SIZE != 0:
+        raise ValueError(
+            f"BATCH_SIZE ({BATCH_SIZE}) must be divisible by "
+            f"MICRO_BATCH_SIZE ({MICRO_BATCH_SIZE})"
+        )
+    return BATCH_SIZE // MICRO_BATCH_SIZE
+
+
+def _backbone_is_trainable(model: ExplainableVidSalModel) -> bool:
+    return not model._backbone_frozen
+
+
+def _should_run_visual_equiv(model: ExplainableVidSalModel, epoch: Optional[int] = None) -> bool:
+    loss_lambda = _effective_loss_lambda(epoch)
+    if loss_lambda.get("lambda_visual_equiv", 0.0) <= 0.0 or not VISUAL_CONCEPT_ON:
+        return False
+    if SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE and _backbone_is_trainable(model):
+        return False
+    return True
+
+
+def _optimizer_step(
+    optimizer: torch.optim.Optimizer,
+    trainable_params: list,
+    scaler: Optional[GradScaler],
+    device: torch.device,
+) -> None:
+    if scaler is not None and _amp_enabled(device):
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+        optimizer.step()
+
+
+def _effective_loss_lambda(epoch: Optional[int] = None) -> dict:
     """Disable branch-specific auxiliary losses when a branch is ablated."""
     loss_lambda = dict(LOSS_LAMBDA)
-    if not TRAJECTORY_CONCEPTS_ON:
+    if not TEMPORAL_CONCEPTS_ON:
         for key in ("lambda_align", "lambda_sparse", "lambda_div", "lambda_gate"):
             loss_lambda[key] = 0.0
     if not VISUAL_CONCEPT_ON:
-        for key in ("lambda_visual", "lambda_visual_div"):
+        for key in (
+            "lambda_visual",
+            "lambda_visual_div",
+            "lambda_visual_entropy",
+            "lambda_visual_usage",
+            "lambda_visual_equiv",
+        ):
             loss_lambda[key] = 0.0
     return loss_lambda
 
@@ -117,6 +179,9 @@ def _return_concept_losses() -> bool:
             "lambda_gate",
             "lambda_visual",
             "lambda_visual_div",
+            "lambda_visual_entropy",
+            "lambda_visual_usage",
+            "lambda_visual_equiv",
         )
     )
 
@@ -266,7 +331,7 @@ def save_batch_maps(
             "patch_transition_region.png": pred_out.get("patch_transition_region"),
             "patch_persistence_region.png": pred_out.get("patch_persistence_region"),
             "concept_context_patch_logits.png": pred_out.get("concept_context_patch_logits"),
-            "trajectory_saliency_map.png": pred_out.get("trajectory_saliency_map"),
+            "temporal_saliency_map.png": pred_out.get("temporal_saliency_map"),
             "visual_saliency_map.png": pred_out.get("visual_saliency_map"),
         }
 
@@ -304,8 +369,20 @@ def update_loss_curve(
     plt.close(fig)
 
 
-def _compute_batch_loss(model_out: dict, sal_batch: torch.Tensor) -> dict:
-    return compute_total_loss(model_out, sal_batch, **_effective_loss_lambda())
+def _compute_batch_loss(
+    model_out: dict,
+    sal_batch: torch.Tensor,
+    fix_batch: Optional[torch.Tensor] = None,
+    equiv_model_out: Optional[dict] = None,
+    epoch: Optional[int] = None,
+) -> dict:
+    return compute_total_loss(
+        model_out,
+        sal_batch,
+        equiv_model_out=equiv_model_out,
+        fixation_maps=fix_batch,
+        **_effective_loss_lambda(epoch),
+    )
 
 
 def tensor_stats(name: str, x: torch.Tensor) -> None:
@@ -425,6 +502,49 @@ def _print_gate_debug(model_out: dict) -> None:
         )
 
 
+def _print_visual_concept_usage_debug(model_out: dict, top_n: int = 10) -> None:
+    concept_out = model_out.get("concept_out")
+    if not isinstance(concept_out, dict):
+        return
+
+    for stage, stage_out in concept_out.items():
+        if not isinstance(stage_out, dict):
+            continue
+
+        indices = stage_out.get("visual_concept_indices")
+        logits = stage_out.get("visual_concept_logits")
+
+        if not torch.is_tensor(indices):
+            continue
+
+        idx = indices.detach().reshape(-1).cpu()
+        unique, counts = idx.unique(return_counts=True)
+
+        total = max(int(idx.numel()), 1)
+        pairs = sorted(
+            zip(unique.tolist(), counts.tolist()),
+            key=lambda x: x[1],
+            reverse=True,
+        )[:top_n]
+
+        print(f"DEBUG visual concept usage [{stage}] top {top_n}:")
+        for concept_id, count in pairs:
+            print(
+                f"  concept {int(concept_id)}: "
+                f"{int(count)} patches ({100.0 * count / total:.2f}%)"
+            )
+
+        if torch.is_tensor(logits):
+            probs = F.softmax(logits.detach().float(), dim=-1)
+            mean_probs = probs.mean(dim=0)
+            usage_entropy = -(
+                mean_probs * (mean_probs + 1e-8).log()
+            ).sum() / max(math.log(mean_probs.numel()), 1e-8)
+            print(
+                f"  normalized usage entropy: {float(usage_entropy.cpu()):.4f}"
+            )
+
+
 def _compute_batch_metrics(
     model_out: dict,
     sal_batch: torch.Tensor,
@@ -455,6 +575,8 @@ def train_one_epoch(
     running_loss = 0.0
     num_batches = 0
     metric_averager = MetricAverager()
+    accum_steps = _grad_accum_steps()
+    optimizer.zero_grad(set_to_none=True)
 
     pbar = tqdm(
         loader,
@@ -477,8 +599,7 @@ def train_one_epoch(
         fix_batch = fix_batch.to(device, non_blocking=True)
         fix_batch = (fix_batch > 0).float()
 
-        optimizer.zero_grad(set_to_none=True)
-
+        equiv_model_out = None
         with autocast(
             device.type,
             dtype=_amp_dtype(device),
@@ -492,17 +613,34 @@ def train_one_epoch(
                 collect_gate_debug=(batch_idx == 0),
             )
 
+            if _should_run_visual_equiv(model, epoch):
+                rgb_batch_flip = torch.flip(rgb_batch, dims=[-1])
+                equiv_model_out = model(
+                    rgb_batch_flip,
+                    saliency_maps=sal_batch,
+                    return_details=True,
+                    return_concept_losses=_return_concept_losses(),
+                    collect_gate_debug=False,
+                )
+
             if batch_idx == 0:
                 _print_first_batch_debug(model_out, sal_batch)
                 _print_gate_debug(model_out)
+                _print_visual_concept_usage_debug(model_out)
 
             if batch_idx % MAP_SAVE_INTERVAL == 0:
                 save_batch_maps(
                     model_out, sal_batch, fix_batch, rgb_batch, output_dir, epoch, batch_idx
                 )
 
-            loss_dict = _compute_batch_loss(model_out, sal_batch)
-            loss = loss_dict["loss_total"]
+            loss_dict = _compute_batch_loss(
+                model_out,
+                sal_batch,
+                fix_batch=fix_batch,
+                equiv_model_out=equiv_model_out,
+                epoch=epoch,
+            )
+            loss = loss_dict["loss_total"] / accum_steps
 
         if batch_idx == 0:
             with torch.no_grad():
@@ -548,27 +686,29 @@ def train_one_epoch(
 
         if scaler is not None and _amp_enabled(device):
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-            optimizer.step()
+
+        should_step = (batch_idx + 1) % accum_steps == 0
+        is_last_batch = batch_idx + 1 == len(loader)
+        if should_step or is_last_batch:
+            _optimizer_step(optimizer, trainable_params, scaler, device)
+            optimizer.zero_grad(set_to_none=True)
 
         if calculate_metrics:
             with torch.no_grad():
                 metric_dict = _compute_batch_metrics(model_out, sal_batch, fix_batch)
                 metric_averager.update(metric_dict, batch_size=rgb_batch.shape[0])
 
-        running_loss += loss.item()
+        running_loss += loss.item() * accum_steps
         num_batches += 1
 
         pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         # Drop graph references so activations can be freed before the next batch.
         del model_out, loss_dict, loss, rgb_batch, sal_batch, fix_batch
+        if equiv_model_out is not None:
+            del equiv_model_out
 
     mean_loss = running_loss / max(num_batches, 1)
     if calculate_metrics:
@@ -614,14 +754,19 @@ def validate_one_epoch(
                 return_details=True,
                 return_concept_losses=_return_concept_losses(),
             )
-            loss_dict = _compute_batch_loss(model_out, sal_batch)
+            loss_dict = _compute_batch_loss(
+                model_out, sal_batch, fix_batch=fix_batch, epoch=epoch
+            )
             batch_loss = loss_dict["loss_total"].item()
         running_loss += batch_loss
         num_batches += 1
 
         metric_dict = _compute_batch_metrics(model_out, sal_batch, fix_batch)
         metric_averager.update(metric_dict, batch_size=rgb_batch.shape[0])
-        pbar.set_postfix(loss=f"{batch_loss:.4f}")
+        pbar.set_postfix(
+            loss=f"{batch_loss:.4f}",
+            NSS=f"{metric_averager.mean()['NSS']:.4f}",
+        )
 
         del model_out, loss_dict, rgb_batch, sal_batch, fix_batch
 
@@ -647,7 +792,7 @@ def main() -> None:
     print(
         "Concept branches | "
         f"visual_concept_on={VISUAL_CONCEPT_ON} | "
-        f"trajectory_concepts_on={TRAJECTORY_CONCEPTS_ON} | "
+        f"temporal_concepts_on={TEMPORAL_CONCEPTS_ON} | "
         f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
     )
 
@@ -673,13 +818,13 @@ def main() -> None:
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=_dataloader_batch_size(),
         shuffle=True,
         **loader_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=_dataloader_batch_size(),
         shuffle=False,
         **loader_kwargs,
     )
@@ -694,14 +839,17 @@ def main() -> None:
     model = ExplainableVidSalModel(
         backbone_stages=("stage1", "stage2", "stage3", "stage4"),
         pretrained_backbone=True,
-        freeze_backbone=True,
+        freeze_backbone=FREEZE_BACKBONE,
+        backbone_gradient_checkpointing=(
+            BACKBONE_GRADIENT_CHECKPOINTING and not FREEZE_BACKBONE
+        ),
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=256,
-        num_concepts=1024,
+        num_concepts=512,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=1,
+        top_k=3,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -712,17 +860,27 @@ def main() -> None:
         use_feature_refinement=False,
         output_activation="sigmoid",
         return_details=True,
-        use_subpatch_head=False,
+        use_subpatch_head=True,
         subpatch_factor=4,
         subpatch_residual_scale=0.5,
         use_temporal_transition_aggregation=True,
         temporal_aggregation_hidden_channels=128,
         temporal_aggregation_temperature=1.0,
         visual_concept_on=VISUAL_CONCEPT_ON,
-        trajectory_concepts_on=TRAJECTORY_CONCEPTS_ON,
+        temporal_concepts_on=TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
-        visual_concept_residual_weight=0.0,
+        visual_concept_residual_weight=1.0,
     ).to(device)
+
+    if not FREEZE_BACKBONE:
+        print(
+            "Backbone fine-tuning enabled | "
+            f"effective_batch_size={BATCH_SIZE} | "
+            f"micro_batch_size={_dataloader_batch_size()} | "
+            f"grad_accum_steps={_grad_accum_steps()} | "
+            f"gradient_checkpointing={BACKBONE_GRADIENT_CHECKPOINTING} | "
+            f"visual_equiv={'off' if SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE else 'on'}"
+        )
 
     trainable_params = list(model.get_trainable_parameters())
     optimizer = torch.optim.AdamW(
@@ -763,6 +921,7 @@ def main() -> None:
             calculate_metrics=False,
             scaler=scaler,
         )
+        val_loss, val_metrics = validate_one_epoch(model, val_loader, device, epoch)
         # if epoch == 3:
             # val_loss, val_metrics = validate_one_epoch(model, val_loader, device, epoch)
         # else:
@@ -770,14 +929,14 @@ def main() -> None:
         scheduler.step()
 
         train_losses.append(train_loss)
-        # val_losses.append(val_loss)
+        val_losses.append(val_loss)
         train_metrics_history.append(train_metrics)
-        # val_metrics_history.append(val_metrics)
+        val_metrics_history.append(val_metrics)
 
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch}/{EPOCHS}")
         print(f"  Mean train loss: {train_loss:.6f}")
-        # print(f"  Mean val loss:   {val_loss:.6f}")
+        print(f"  Mean val loss:   {val_loss:.6f}")
         print(f"  Current LR:      {current_lr:.2e}")
         if train_metrics is not None:
             print(
@@ -785,12 +944,12 @@ def main() -> None:
                 f"SIM: {train_metrics['SIM']:.4f} | AUC: {train_metrics['AUC']:.4f} | "
                 f"sAUC: {train_metrics['sAUC']:.4f} | NSS: {train_metrics['NSS']:.4f}"
             )
-        # if val_metrics is not None:
-        #     print(
-        #         f"Val metrics   | CC: {val_metrics['CC']:.4f} | "
-        #         f"SIM: {val_metrics['SIM']:.4f} | AUC: {val_metrics['AUC']:.4f} | "
-        #         f"sAUC: {val_metrics['sAUC']:.4f} | NSS: {val_metrics['NSS']:.4f}"
-        #     )
+        if val_metrics is not None:
+            print(
+                f"Val metrics   | CC: {val_metrics['CC']:.4f} | "
+                f"SIM: {val_metrics['SIM']:.4f} | AUC: {val_metrics['AUC']:.4f} | "
+                f"sAUC: {val_metrics['sAUC']:.4f} | NSS: {val_metrics['NSS']:.4f}"
+            )
 
         update_loss_curve(train_losses, val_losses, OUTPUT_DIR)
 
@@ -809,10 +968,10 @@ def main() -> None:
         torch.save(checkpoint, last_ckpt_path)
         print(f"  Saved checkpoint: {epoch_ckpt_path}")
 
-        # if val_loss < best_val_loss:
-        #     best_val_loss = val_loss
-        #     torch.save(checkpoint, best_ckpt_path)
-        #     print(f"  New best val loss: {best_val_loss:.6f} (saved {best_ckpt_path})")
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(checkpoint, best_ckpt_path)
+            print(f"  New best val loss: {best_val_loss:.6f} (saved {best_ckpt_path})")
 
     print(f"\nTraining complete. Outputs saved to {OUTPUT_DIR}/")
     print(f"Run checkpoints: {run_ckpt_dir}")
@@ -852,7 +1011,7 @@ def _run_overfit_one_batch(
             _print_first_batch_debug(model_out, sal_batch)
             _print_gate_debug(model_out)
 
-        loss_dict = _compute_batch_loss(model_out, sal_batch)
+        loss_dict = _compute_batch_loss(model_out, sal_batch, fix_batch=fix_batch)
         loss = loss_dict["loss_total"]
         loss.backward()
         torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)

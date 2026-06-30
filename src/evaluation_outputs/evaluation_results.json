@@ -1,5 +1,5 @@
 {
-  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260620_145412/epoch_001.pth",
+  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260628_000423/epoch_001.pth",
   "test_dir": "/data/quantization/zaima/dh1k/testing",
   "num_samples": 3722,
   "num_windows": 3722,
@@ -7,11 +7,11 @@
   "batch_size": 4,
   "mean_loss": 0.0,
   "metrics": {
-    "CC": 0.5107244325342324,
-    "SIM": 0.40145318903937766,
-    "AUC": 0.9145152844260419,
-    "sAUC": 0.5646266759498858,
-    "NSS": 2.916169441447727
+    "CC": 0.5007438848534782,
+    "SIM": 0.39916798764662614,
+    "AUC": 0.9140021465978976,
+    "sAUC": 0.5691175366011696,
+    "NSS": 2.915238350325538
   },
   "checkpoint_epoch": 1
 }

@@ -35,7 +35,7 @@ DEFAULT_TRAIN_DIR = (
 DEFAULT_TEST_DIR = (
     "/data/quantization/zaima/dh1k/testing"
 )
-DEFAULT_CHECKPOINT = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260620_145412/epoch_001.pth"
+DEFAULT_CHECKPOINT = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260628_000423/epoch_001.pth"
 DEFAULT_OUTPUT_DIR = "evaluation_outputs"
 MAX_SAMPLES = 10000000
 
@@ -45,7 +45,7 @@ NUM_WORKERS = 4
 
 # Concept-branch switches. Set either branch to False for ablations.
 VISUAL_CONCEPT_ON = True
-TRAJECTORY_CONCEPTS_ON = True
+TEMPORAL_CONCEPTS_ON = True
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
 FIXATION_THRESHOLD = 0.5
@@ -94,30 +94,32 @@ def build_model(
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=256,
-        num_concepts=1024,
+        num_concepts=512,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=1,
+        top_k=3,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
-        tau_concept=0.2,
+        tau_concept=0.07,
         concept_residual_weight=0.0,
         last_transition_only=True,
         use_rgb_refinement=False,
         use_feature_refinement=False,
         output_activation="sigmoid",
         return_details=True,
-        use_subpatch_head=False,
+        use_subpatch_head=True,
         subpatch_factor=4,
         subpatch_residual_scale=0.5,
         use_temporal_transition_aggregation=True,
         temporal_aggregation_hidden_channels=128,
         temporal_aggregation_temperature=1.0,
         visual_concept_on=VISUAL_CONCEPT_ON,
-        trajectory_concepts_on=TRAJECTORY_CONCEPTS_ON,
+        temporal_concepts_on=TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
+        visual_concept_residual_weight=0.1,
     ).to(device)
+
     return model
 
 

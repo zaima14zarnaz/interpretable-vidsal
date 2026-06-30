@@ -1,5 +1,5 @@
 """
-Trajectory-based concept creation for explainable video saliency.
+Temporal concept creation for explainable video saliency.
 
 Builds transition trajectories between adjacent temporal patch tokens,
 encodes them into concept space, and mixes transition / persistence concepts
@@ -72,7 +72,7 @@ class ConceptCreation(nn.Module):
         loss_weights: Optional[Dict[str, float]] = None,
         concept_residual_weight: float = 0.1,
         num_visual_concepts: Optional[int] = None,
-        visual_concept_residual_weight: float = 0.1,
+        visual_concept_residual_weight: float = 0.0,
         use_target_centric: bool = True,
         last_transition_only: bool = True,
     ):
@@ -543,7 +543,7 @@ class ConceptCreation(nn.Module):
         Build visual-only concept assignments from individual patch features.
 
         Visual concepts capture patch-level appearance (z_i^t), separate from
-        trajectory concepts that encode temporal change/interaction/displacement.
+        temporal concepts that encode temporal change/interaction/displacement.
 
         Args:
             features: [B, C, T, H, W]
@@ -959,7 +959,7 @@ class ConceptCreation(nn.Module):
             concept_repr = concept_repr + self.concept_residual_weight * q
         concept_repr = F.normalize(concept_repr, dim=-1)
 
-        # Patch-level visual concepts (appearance); independent of trajectory concepts.
+        # Patch-level visual concepts (appearance); independent of temporal concepts.
         visual_out = self._build_visual_concepts_from_patches(features)
 
         losses: Dict[str, torch.Tensor] = {}

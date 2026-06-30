@@ -7,7 +7,9 @@ All supervision is computed outside the model from:
   - optional concept regularizers from ConceptCreation
 """
 
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, Optional, Tuple, Union
+
+import math
 
 import torch
 import torch.nn.functional as F
@@ -325,6 +327,154 @@ def spatial_kl_loss(
     return F.kl_div(log_pred, target_flat, reduction="batchmean")
 
 
+def spatial_cc_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    CC loss for dense saliency maps.
+
+    Uses 1 - Pearson correlation so the loss is non-negative and minimized
+    when prediction and target are highly correlated.
+    """
+    if pred.shape != target.shape:
+        raise ValueError(
+            f"pred and target must have the same shape, got "
+            f"{tuple(pred.shape)} and {tuple(target.shape)}"
+        )
+
+    B = pred.shape[0]
+    pred_f = pred.float().reshape(B, -1)
+    target_f = target.float().reshape(B, -1)
+
+    pred_f = pred_f - pred_f.mean(dim=1, keepdim=True)
+    target_f = target_f - target_f.mean(dim=1, keepdim=True)
+
+    pred_std = pred_f.std(dim=1, keepdim=True).clamp(min=eps)
+    target_std = target_f.std(dim=1, keepdim=True).clamp(min=eps)
+
+    pred_z = pred_f / pred_std
+    target_z = target_f / target_std
+
+    cc = (pred_z * target_z).mean(dim=1)
+    return 1.0 - cc.mean()
+
+
+def spatial_nss_loss(
+    pred: torch.Tensor,
+    fixation_map: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    NSS loss for dense saliency maps.
+
+    pred: [B,1,H,W] final predicted saliency map or logits.
+    fixation_map: [B,1,H,W] binary fixation map.
+    Returns -NSS, so minimizing this maximizes NSS.
+    """
+    if pred.shape != fixation_map.shape:
+        raise ValueError(
+            f"pred and fixation_map must have the same shape, got "
+            f"{tuple(pred.shape)} and {tuple(fixation_map.shape)}"
+        )
+
+    B = pred.shape[0]
+    pred_f = pred.float().reshape(B, -1)
+    fix_f = (fixation_map.float().reshape(B, -1) > 0.0).float()
+
+    pred_f = pred_f - pred_f.mean(dim=1, keepdim=True)
+    pred_f = pred_f / pred_f.std(dim=1, keepdim=True).clamp(min=eps)
+
+    fix_count = fix_f.sum(dim=1)
+    valid = fix_count > 0
+
+    if not valid.any():
+        return pred.sum() * 0.0
+
+    nss_per_sample = (pred_f * fix_f).sum(dim=1) / fix_count.clamp(min=1.0)
+    nss = nss_per_sample[valid].mean()
+
+    return -nss
+
+
+def compute_dense_metric_losses(
+    prediction_out: Dict[str, Any],
+    saliency_maps: torch.Tensor,
+    fixation_maps: Optional[torch.Tensor] = None,
+    lambda_cc: float = 0.0,
+    lambda_nss: float = 0.0,
+) -> Dict[str, torch.Tensor]:
+    """
+    Optional dense saliency metric losses.
+
+    CC uses smoothed saliency_maps.
+    NSS uses binary fixation_maps.
+    """
+    if "saliency_map" not in prediction_out:
+        raise ValueError("prediction_out must contain 'saliency_map' for CC/NSS losses")
+
+    pred_dense = prediction_out["saliency_map"]
+    ref = pred_dense
+    zero = _get_zero_like_loss(ref)
+
+    loss_cc = zero
+    if lambda_cc > 0:
+        target_dense_last = prepare_last_saliency_map(
+            saliency_maps,
+            pred_dense.shape[-2],
+            pred_dense.shape[-1],
+        )
+        target_dense_last = minmax_per_sample(target_dense_last)
+        if target_dense_last.shape[-2:] != pred_dense.shape[-2:]:
+            target_dense_last = F.interpolate(
+                target_dense_last,
+                size=pred_dense.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+        loss_cc = spatial_cc_loss(pred_dense, target_dense_last)
+
+    loss_nss = zero
+    if lambda_nss > 0:
+        if fixation_maps is None:
+            raise ValueError(
+                "lambda_nss > 0 requires binary fixation_maps. "
+                "Do not compute NSS loss from smoothed saliency_maps."
+            )
+
+        target_fix_last = prepare_last_saliency_map(
+            fixation_maps,
+            pred_dense.shape[-2],
+            pred_dense.shape[-1],
+        )
+
+        if target_fix_last.shape[-2:] != pred_dense.shape[-2:]:
+            target_fix_last = F.interpolate(
+                target_fix_last,
+                size=pred_dense.shape[-2:],
+                mode="nearest",
+            )
+
+        target_fix_last = (target_fix_last > 0.0).float()
+        loss_nss = spatial_nss_loss(pred_dense, target_fix_last)
+
+    return {
+        "loss_cc": loss_cc,
+        "loss_nss": loss_nss,
+    }
+
+
+def _resolve_final_saliency_logits(prediction_out: Dict[str, Any]) -> torch.Tensor:
+    for key in ("saliency_logits", "coarse_saliency_logits"):
+        value = prediction_out.get(key)
+        if torch.is_tensor(value):
+            return value
+    raise ValueError(
+        "prediction_out must contain 'saliency_logits' or fallback 'coarse_saliency_logits'"
+    )
+
+
 def compute_fidelity_loss(
     prediction_out: Dict[str, Any],
     saliency_maps: torch.Tensor,
@@ -396,14 +546,16 @@ def compute_fidelity_loss(
     loss_dense_bce = _get_zero_like_loss(patch_saliency_pred)
     if lambda_bce > 0:
         loss_dense_bce = F.binary_cross_entropy_with_logits(
-            prediction_out["saliency_logits"],
+            _resolve_final_saliency_logits(prediction_out),
             target_dense_last.clamp(0.0, 1.0),
         )
 
     loss_dense_kl = _get_zero_like_loss(patch_saliency_pred)
     if lambda_kl > 0:
+        # Use final fused dense saliency logits for distribution matching.
+        # Fall back to coarse logits only for legacy outputs.
         loss_dense_kl = spatial_kl_loss(
-            prediction_out["saliency_logits"],
+            _resolve_final_saliency_logits(prediction_out),
             target_dense_last,
         )
 
@@ -536,6 +688,203 @@ def _aggregate_concept_losses(
     return totals
 
 
+def _visual_loss_reference(model_out: Dict[str, Any]) -> torch.Tensor:
+    prediction_out = _resolve_prediction_out(model_out)
+    ref = prediction_out.get("patch_saliency_logits")
+    if ref is None:
+        ref = prediction_out.get("coarse_saliency_logits")
+    if ref is None:
+        ref = prediction_out.get("saliency_logits")
+    if ref is None:
+        raise ValueError("model_out missing reference tensor for visual concept losses")
+    return ref
+
+
+def _iter_stage_concept_outputs(
+    concept_out: Any,
+) -> Iterator[Tuple[str, Dict[str, Any]]]:
+    if not isinstance(concept_out, dict) or not concept_out:
+        return
+
+    first_val = next(iter(concept_out.values()))
+    if isinstance(first_val, dict) and (
+        "losses" in first_val
+        or "concept_representation" in first_val
+        or "visual_concept_logits" in first_val
+    ):
+        for stage, stage_out in concept_out.items():
+            if isinstance(stage_out, dict):
+                yield stage, stage_out
+    else:
+        yield "default", concept_out
+
+
+def _visual_logits_to_maps(stage_out: Dict[str, Any]) -> torch.Tensor:
+    visual_logits = stage_out["visual_concept_logits"]
+    visual_metadata = stage_out["visual_metadata"]
+    feature_shape = visual_metadata["feature_shape"]
+
+    B = int(feature_shape["B"])
+    T = int(feature_shape["T"])
+    H = int(feature_shape["H"])
+    W = int(feature_shape["W"])
+    K = visual_logits.shape[-1]
+
+    logits_5d = visual_logits.reshape(B, T, H, W, K)
+    maps = logits_5d.permute(0, 1, 4, 2, 3).contiguous()  # [B,T,K,H,W]
+    return maps
+
+
+def compute_visual_entropy_loss(
+    model_out: Dict[str, Any],
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    concept_out = model_out.get("concept_out")
+    ref = _visual_loss_reference(model_out)
+    zero = _get_zero_like_loss(ref)
+
+    if concept_out is None:
+        return zero
+
+    stage_losses: list[torch.Tensor] = []
+    for _, stage_out in _iter_stage_concept_outputs(concept_out):
+        if (
+            "visual_concept_logits" not in stage_out
+            or "visual_metadata" not in stage_out
+        ):
+            continue
+
+        maps = _visual_logits_to_maps(stage_out)
+        probs = F.softmax(maps, dim=2)
+        entropy = -(probs * (probs + eps).log()).sum(dim=2)
+        loss_stage = entropy.mean() / max(math.log(probs.shape[2]), eps)
+        stage_losses.append(loss_stage)
+
+    if not stage_losses:
+        return zero
+
+    return torch.stack(stage_losses).mean()
+
+
+def _zero_from_model_out(model_out: Dict[str, Any]) -> torch.Tensor:
+    prediction_out = _resolve_prediction_out(model_out)
+    for key in ("coarse_saliency_logits", "saliency_logits", "saliency_map", "patch_saliency_logits"):
+        value = prediction_out.get(key)
+        if torch.is_tensor(value):
+            return value.sum() * 0.0
+
+    concept_out = model_out.get("concept_out")
+    for _, stage_out in _iter_stage_concept_outputs(concept_out):
+        value = stage_out.get("visual_concept_logits")
+        if torch.is_tensor(value):
+            return value.sum() * 0.0
+
+    raise ValueError("Could not find a reference tensor for zero loss.")
+
+
+def compute_visual_usage_balance_loss(
+    model_out: Dict[str, Any],
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    Encourage the visual concept branch to use multiple concepts across a batch.
+
+    This prevents collapsed solutions such as all patches being assigned to one concept.
+    The loss is 0 when the marginal concept distribution is uniform and approaches 1
+    when usage collapses to a single concept.
+
+    Uses softmax probabilities from visual_concept_logits, not hard argmax indices.
+    Averages the loss across all stages that expose visual_concept_logits.
+    """
+    concept_out = model_out.get("concept_out")
+    if concept_out is None:
+        return _zero_from_model_out(model_out)
+
+    stage_losses: list[torch.Tensor] = []
+
+    for _, stage_out in _iter_stage_concept_outputs(concept_out):
+        visual_logits = stage_out.get("visual_concept_logits")
+        if not torch.is_tensor(visual_logits):
+            continue
+
+        if visual_logits.dim() != 2:
+            raise ValueError(
+                "visual_concept_logits must have shape [num_patches_total, K], "
+                f"got {tuple(visual_logits.shape)}"
+            )
+
+        K = int(visual_logits.shape[-1])
+        if K <= 1:
+            continue
+
+        probs = F.softmax(visual_logits.float(), dim=-1)  # [P, K]
+        mean_probs = probs.mean(dim=0)  # [K]
+
+        marginal_entropy = -(
+            mean_probs * (mean_probs + eps).log()
+        ).sum()
+        marginal_entropy = marginal_entropy / max(math.log(K), eps)
+
+        # 0 = balanced usage, 1 = collapsed usage
+        loss_stage = 1.0 - marginal_entropy
+        stage_losses.append(loss_stage)
+
+    if not stage_losses:
+        return _zero_from_model_out(model_out)
+
+    return torch.stack(stage_losses).mean()
+
+
+def compute_visual_flip_equivariance_loss(
+    model_out: Dict[str, Any],
+    equiv_model_out: Optional[Dict[str, Any]],
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    _ = eps
+    ref = _visual_loss_reference(model_out)
+    zero = _get_zero_like_loss(ref)
+
+    if equiv_model_out is None:
+        return zero
+
+    concept_out_orig = model_out.get("concept_out")
+    concept_out_flip = equiv_model_out.get("concept_out")
+    if concept_out_orig is None or concept_out_flip is None:
+        return zero
+
+    flip_stages = {
+        stage: stage_out
+        for stage, stage_out in _iter_stage_concept_outputs(concept_out_flip)
+    }
+
+    stage_losses: list[torch.Tensor] = []
+    for stage, stage_out_orig in _iter_stage_concept_outputs(concept_out_orig):
+        stage_out_flip = flip_stages.get(stage)
+        if stage_out_flip is None:
+            continue
+        if (
+            "visual_concept_logits" not in stage_out_orig
+            or "visual_metadata" not in stage_out_orig
+            or "visual_concept_logits" not in stage_out_flip
+            or "visual_metadata" not in stage_out_flip
+        ):
+            continue
+
+        maps_orig = _visual_logits_to_maps(stage_out_orig)
+        maps_flip = _visual_logits_to_maps(stage_out_flip)
+
+        probs_orig = F.softmax(maps_orig, dim=2)
+        probs_flip = F.softmax(maps_flip, dim=2)
+        probs_flip_back = torch.flip(probs_flip, dims=[-1])
+        loss_stage = F.mse_loss(probs_orig, probs_flip_back)
+        stage_losses.append(loss_stage)
+
+    if not stage_losses:
+        return zero
+
+    return torch.stack(stage_losses).mean()
+
+
 def compute_concept_branch_loss(
     prediction_out: Dict[str, Any],
     saliency_maps: torch.Tensor,
@@ -544,6 +893,8 @@ def compute_concept_branch_loss(
 ) -> Dict[str, torch.Tensor]:
     """Fidelity on fused concept-only saliency (explainability branch)."""
     ref = prediction_out.get("patch_saliency_logits")
+    if ref is None:
+        ref = prediction_out.get("coarse_saliency_logits")
     if ref is None:
         ref = prediction_out.get("saliency_logits")
     if ref is None:
@@ -593,6 +944,8 @@ def compute_total_loss(
     lambda_kl: float = 0.0,
     lambda_fid: float = 1.0,
     lambda_topk: float = 0.0,
+    lambda_cc: float = 0.0,
+    lambda_nss: float = 0.0,
     topk_percent: float = 0.05,
     topk_bg_weight: float = 0.15,
     lambda_concept_dense: float = 0.0,
@@ -601,16 +954,25 @@ def compute_total_loss(
     lambda_sparse: float = 0.01,
     lambda_div: float = 0.1,
     lambda_gate: float = 0.1,
+    lambda_visual_entropy: float = 0.0,
+    lambda_visual_equiv: float = 0.0,
+    lambda_visual_usage: float = 0.0,
+    equiv_model_out: Optional[Dict[str, Any]] = None,
+    fixation_maps: Optional[torch.Tensor] = None,
     patch_from_logits: bool = True,
 ) -> Dict[str, Union[torch.Tensor, None]]:
     """
     Total training loss for ExplainableVidSalModel (return_details=True).
 
     L = L_fid
+      + lambda_cc * L_CC
+      + lambda_nss * L_NSS
       + lambda_align * L_align
       + lambda_sparse * L_sparse
       + lambda_div * L_div
       + lambda_gate * L_gate
+      + concept regularizers
+      + visual concept regularizers
     """
     prediction_out = _resolve_prediction_out(model_out)
     concept_out = model_out.get("concept_out")
@@ -629,6 +991,17 @@ def compute_total_loss(
         topk_bg_weight=topk_bg_weight,
         patch_from_logits=patch_from_logits,
     )
+
+    metric_out = compute_dense_metric_losses(
+        prediction_out,
+        saliency_maps,
+        fixation_maps=fixation_maps,
+        lambda_cc=lambda_cc,
+        lambda_nss=lambda_nss,
+    )
+
+    loss_cc = metric_out["loss_cc"]
+    loss_nss = metric_out["loss_nss"]
 
     loss_fid = fid_out["loss_fid"]
     ref = loss_fid
@@ -663,14 +1036,36 @@ def compute_total_loss(
         zero = ref.sum() * 0.0
         loss_concept_dense = loss_concept_kl = zero
 
+    loss_visual_entropy = (
+        compute_visual_entropy_loss(model_out)
+        if lambda_visual_entropy > 0
+        else ref.sum() * 0.0
+    )
+    loss_visual_equiv = (
+        compute_visual_flip_equivariance_loss(model_out, equiv_model_out)
+        if lambda_visual_equiv > 0 and equiv_model_out is not None
+        else ref.sum() * 0.0
+    )
+
+    zero = ref.sum() * 0.0
+    if lambda_visual_usage > 0.0:
+        loss_visual_usage = compute_visual_usage_balance_loss(model_out)
+    else:
+        loss_visual_usage = zero
+
     loss_total = (
         lambda_fid * loss_fid
+        + lambda_cc * loss_cc
+        + lambda_nss * loss_nss
         + lambda_align * loss_align
         + lambda_sparse * loss_sparse
         + lambda_div * loss_div
         + lambda_gate * loss_gate
         + lambda_concept_dense * loss_concept_dense
         + lambda_concept_kl * loss_concept_kl
+        + lambda_visual_entropy * loss_visual_entropy
+        + lambda_visual_equiv * loss_visual_equiv
+        + lambda_visual_usage * loss_visual_usage
     )
 
     return {
@@ -682,12 +1077,17 @@ def compute_total_loss(
         "loss_dense_kl": fid_out["loss_dense_kl"],
         "loss_topk": fid_out["loss_topk"],
         "loss_delta": fid_out["loss_delta"],
+        "loss_cc": loss_cc,
+        "loss_nss": loss_nss,
         "loss_concept_dense": loss_concept_dense,
         "loss_concept_kl": loss_concept_kl,
         "loss_align": loss_align,
         "loss_sparse": loss_sparse,
         "loss_div": loss_div,
         "loss_gate": loss_gate,
+        "loss_visual_entropy": loss_visual_entropy,
+        "loss_visual_equiv": loss_visual_equiv,
+        "loss_visual_usage": loss_visual_usage,
         "delta_target": fid_out["delta_target"],
         "target_patch_grid": fid_out["target_patch_grid"],
         "source_mixture_grid": fid_out["source_mixture_grid"],

@@ -10,6 +10,7 @@ from typing import Dict, Optional, Sequence, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from torchvision.models.video import Swin3D_T_Weights, swin3d_t
 
 
@@ -47,6 +48,7 @@ class VideoSwinTransformer(nn.Module):
         output_format: str = "BCTHW",
         resize_to: Optional[Union[int, Tuple[int, int]]] = None,
         normalize: bool = True,
+        gradient_checkpointing: bool = False,
     ):
         super().__init__()
 
@@ -68,6 +70,7 @@ class VideoSwinTransformer(nn.Module):
         self.output_format = output_format
         self.resize_to = resize_to
         self.normalize = normalize
+        self.gradient_checkpointing = bool(gradient_checkpointing)
 
         weights = Swin3D_T_Weights.DEFAULT if pretrained else None
         self.backbone = swin3d_t(weights=weights)
@@ -159,8 +162,16 @@ class VideoSwinTransformer(nn.Module):
         x = self.backbone.pos_drop(x)
 
         outputs: Dict[str, torch.Tensor] = {}
+        use_checkpoint = (
+            self.gradient_checkpointing
+            and self.training
+            and not self.freeze_backbone
+        )
         for i, layer in enumerate(self.backbone.features):
-            x = layer(x)
+            if use_checkpoint:
+                x = checkpoint(layer, x, use_reentrant=False)
+            else:
+                x = layer(x)
             if i in self._requested_stage_indices:
                 stage_name = self._index_to_stage[i]
                 outputs[stage_name] = self._to_output_format(x)
