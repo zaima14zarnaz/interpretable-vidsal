@@ -1,10 +1,10 @@
-"""Sanity check: visual-only patch_concept_context in SaliencyPrediction."""
+"""Sanity check: ConceptGatedMultiScaleSaliencyDecoder concept-map construction."""
 
 from __future__ import annotations
 
 import torch
 
-from model.saliency_prediction import SaliencyPrediction
+from model.saliency_prediction import ConceptGatedMultiScaleSaliencyDecoder
 
 
 def _make_concept_out(
@@ -16,6 +16,7 @@ def _make_concept_out(
     concept_dim: int,
     num_concepts: int,
     M: int,
+    feature_channels: int,
 ) -> dict:
     N = H * W
     last_t = T - 2
@@ -35,7 +36,7 @@ def _make_concept_out(
         "target_coords": torch.randn(M, 2, device=device),
         "alpha": torch.rand(M, device=device),
         "affinity_logit": torch.randn(M, device=device),
-        "feature_shape": {"B": B, "C": 128, "T": T, "H": H, "W": W},
+        "feature_shape": {"B": B, "C": feature_channels, "T": T, "H": H, "W": W},
         "last_transition_only": True,
     }
 
@@ -52,31 +53,32 @@ def _make_concept_out(
             B * T * H * W, concept_dim, device=device
         ),
         "visual_metadata": {
-            "feature_shape": {"B": B, "C": 128, "T": T, "H": H, "W": W},
+            "feature_shape": {"B": B, "C": feature_channels, "T": T, "H": H, "W": W},
         },
         "metadata": metadata,
     }
 
 
 def main() -> None:
-    B, T, H, W = 2, 4, 7, 7
+    B, T = 2, 4
     concept_dim = 256
     num_concepts = 32
     M = 64
-    last_rgb = torch.rand(B, 3, 224, 384)
+    output_size = (224, 384)
 
-    model = SaliencyPrediction(
-        concept_dim=concept_dim,
-        hidden_dim=64,
-        feature_channels=128,
-        use_gated_trajectory_head=False,
-        use_feature_refinement=False,
-        use_subpatch_head=True,
-        subpatch_factor=4,
-    )
+    stage_shapes = {
+        "stage4": (7, 7, 768),
+        "stage3": (14, 14, 384),
+        "stage2": (28, 28, 192),
+        "stage1": (28, 28, 96),
+    }
 
-    out = model(
-        _make_concept_out(
+    stage_channels = {stage: channels for stage, (_, _, channels) in stage_shapes.items()}
+    concept_outs = {}
+    features_dict = {}
+
+    for stage, (H, W, C) in stage_shapes.items():
+        concept_outs[stage] = _make_concept_out(
             B=B,
             T=T,
             H=H,
@@ -84,25 +86,39 @@ def main() -> None:
             concept_dim=concept_dim,
             num_concepts=num_concepts,
             M=M,
-        ),
-        last_rgb,
+            feature_channels=C,
+        )
+        features_dict[stage] = torch.randn(B, C, T, H, W)
+
+    model = ConceptGatedMultiScaleSaliencyDecoder(
+        stage_channels=stage_channels,
+        concept_dim=concept_dim,
+        decoder_channels=64,
+        output_activation="sigmoid",
+    )
+
+    out = model(
+        concept_outs=concept_outs,
+        features_dict=features_dict,
+        output_size=output_size,
         return_details=True,
     )
 
-    assert tuple(out["patch_concept_context"].shape) == (B, concept_dim, H, W)
+    assert tuple(out["saliency_logits"].shape) == (B, 1, *output_size)
+    assert tuple(out["saliency_map"].shape) == (B, 1, *output_size)
+    assert tuple(out["patch_saliency_logits"].shape)[0] == B
     for key in (
-        "temporal_saliency_map",
-        "patch_saliency_logits",
-        "coarse_patch_logits",
-        "final_patch_logits",
-        "subpatch_logits",
-        "patch_concept_context",
+        "stage_concept_maps",
+        "stage_feature_maps",
+        "stage_gates",
+        "decoded_stage_features",
     ):
         assert key in out, f"missing output key: {key}"
+        assert len(out[key]) == len(stage_shapes)
 
-    print("patch_concept_context:", tuple(out["patch_concept_context"].shape))
-    print("coarse_patch_logits:", tuple(out["coarse_patch_logits"].shape))
-    print("subpatch_logits:", tuple(out["subpatch_logits"].shape))
+    print("saliency_logits:", tuple(out["saliency_logits"].shape))
+    print("patch_saliency_logits:", tuple(out["patch_saliency_logits"].shape))
+    print("stages decoded:", list(out["decoded_stage_features"].keys()))
     print("OK")
 
 

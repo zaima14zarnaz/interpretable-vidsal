@@ -670,6 +670,137 @@ class ConceptCreation(nn.Module):
             ).squeeze(1)
         return sal
 
+    @torch.no_grad()
+    def summarize_gate_debug(
+        self,
+        saliency_maps: torch.Tensor,
+        metadata: Dict[str, torch.Tensor],
+        gate_probs: torch.Tensor,
+        feature_shape: Tuple[int, ...],
+    ) -> Dict[str, float]:
+        """Post-hoc gate statistics for logging; does not affect the training forward."""
+        if not self._has_temporal_saliency_sequence(saliency_maps):
+            return {
+                "gate_valid_frac_total": 0.0,
+                "gate_transition_frac_total": 0.0,
+                "gate_persistence_frac_total": 0.0,
+                "gate_ambiguous_frac_total": 1.0,
+            }
+
+        B, _, T, H, W = feature_shape
+        device = gate_probs.device
+        dtype = gate_probs.dtype
+        N = H * W
+        eps = 1e-8
+
+        sal = self._prepare_saliency_maps(saliency_maps, B, T, H, W)
+        sal_flat = sal.reshape(B, T, N)
+
+        b_idx = metadata["batch_idx"].to(device=device, dtype=torch.long)
+        t_idx = metadata["time_idx"].to(device=device, dtype=torch.long)
+        src_idx = metadata["source_idx"].to(device=device, dtype=torch.long)
+        tgt_idx = metadata["target_idx"].to(device=device, dtype=torch.long)
+
+        s_a = sal_flat[b_idx, t_idx, src_idx].to(device=device, dtype=dtype)
+        s_b = sal_flat[b_idx, t_idx + 1, tgt_idx].to(device=device, dtype=dtype)
+
+        delta_abs = (s_b - s_a).abs()
+        sal_active_value = torch.maximum(s_a, s_b).clamp(0.0, 1.0)
+
+        disp = (
+            metadata["target_coords"].to(device=device, dtype=dtype)
+            - metadata["source_coords"].to(device=device, dtype=dtype)
+        )
+        dist = disp.norm(dim=-1)
+
+        if "affinity_logit" in metadata:
+            visual_sim = metadata["affinity_logit"].to(device=device, dtype=dtype)
+            visual_threshold = self.eps_v
+        else:
+            visual_sim = metadata["alpha"].to(device=device, dtype=dtype)
+            visual_threshold = self.eps_alpha
+
+        sal_active_score = torch.sigmoid(
+            (sal_active_value - self.eps_sal) / max(self.gate_temp_sal, eps)
+        )
+        sal_stable_score = torch.sigmoid(
+            (self.eps_s - delta_abs) / max(self.gate_temp_s, eps)
+        )
+        sal_change_score = torch.sigmoid(
+            (delta_abs - self.eps_s) / max(self.gate_temp_s, eps)
+        )
+        same_visual_score = torch.sigmoid(
+            (visual_sim - visual_threshold) / max(self.gate_temp_v, eps)
+        )
+        different_visual_score = torch.sigmoid(
+            (visual_threshold - visual_sim) / max(self.gate_temp_v, eps)
+        )
+        large_shift_score = torch.sigmoid(
+            (dist - self.eps_p) / max(self.gate_temp_p, eps)
+        )
+
+        r_per = sal_active_score * sal_stable_score * same_visual_score
+        shift_to_different_visual = large_shift_score * different_visual_score
+        r_tr = sal_active_score * (
+            1.0 - (1.0 - sal_change_score) * (1.0 - shift_to_different_visual)
+        )
+
+        evidence_sum = (r_tr + r_per).clamp(min=eps)
+        y_tr = (r_tr / evidence_sum).detach()
+        y_per = (r_per / evidence_sum).detach()
+        confidence = torch.maximum(r_tr, r_per).detach()
+        valid = confidence >= self.gate_min_conf
+
+        hard_tr = valid & (y_tr > y_per)
+        hard_per = valid & (y_per > y_tr)
+        hard_ambiguous = ~valid | (y_tr == y_per)
+        n_valid = max(float(valid.sum().item()), 1.0)
+
+        def _masked_mean_std(
+            x: torch.Tensor, mask: torch.Tensor
+        ) -> tuple[float, float]:
+            if mask.any():
+                vals = x[mask]
+                mean = float(vals.mean().item())
+                std = float(vals.std().item()) if vals.numel() > 1 else 0.0
+                return mean, std
+            return 0.0, 0.0
+
+        visual_sim_tr_mean, visual_sim_tr_std = _masked_mean_std(visual_sim, hard_tr)
+        visual_sim_per_mean, visual_sim_per_std = _masked_mean_std(visual_sim, hard_per)
+        visual_sim_valid_mean, visual_sim_valid_std = _masked_mean_std(visual_sim, valid)
+
+        return {
+            "gate_valid_frac_total": float(valid.float().mean().item()),
+            "gate_transition_frac_total": float(hard_tr.float().mean().item()),
+            "gate_persistence_frac_total": float(hard_per.float().mean().item()),
+            "gate_ambiguous_frac_total": float(hard_ambiguous.float().mean().item()),
+            "gate_transition_frac_valid": float(hard_tr.sum().item() / n_valid),
+            "gate_persistence_frac_valid": float(hard_per.sum().item() / n_valid),
+            "gate_confidence_mean": float(confidence.mean().item()),
+            "gate_confidence_valid_mean": float(
+                confidence[valid].mean().item() if valid.any() else 0.0
+            ),
+            "gate_y_tr_mean": float(y_tr.mean().item()),
+            "gate_y_per_mean": float(y_per.mean().item()),
+            "gate_visual_sim_mean": float(visual_sim.mean().item()),
+            "gate_visual_sim_std": float(
+                visual_sim.std().item() if visual_sim.numel() > 1 else 0.0
+            ),
+            "gate_visual_sim_transition_mean": visual_sim_tr_mean,
+            "gate_visual_sim_transition_std": visual_sim_tr_std,
+            "gate_visual_sim_persistence_mean": visual_sim_per_mean,
+            "gate_visual_sim_persistence_std": visual_sim_per_std,
+            "gate_visual_sim_valid_mean": visual_sim_valid_mean,
+            "gate_visual_sim_valid_std": visual_sim_valid_std,
+            "gate_transition_count": int(hard_tr.sum().item()),
+            "gate_persistence_count": int(hard_per.sum().item()),
+            "gate_valid_count": int(valid.sum().item()),
+            "gate_total_count": int(gate_probs.shape[0]),
+            "gate_delta_abs_mean": float(delta_abs.mean().item()),
+            "gate_dist_mean": float(dist.mean().item()),
+        }
+
     def _gate_regularization_loss(
         self,
         saliency_maps: torch.Tensor,
@@ -774,14 +905,12 @@ class ConceptCreation(nn.Module):
         confidence = torch.maximum(r_tr, r_per).detach()
         valid = confidence >= self.gate_min_conf
 
-        # Hard assignment only for debugging statistics.
-        hard_tr = valid & (y_tr > y_per)
-        hard_per = valid & (y_per > y_tr)
-        hard_ambiguous = ~valid | (y_tr == y_per)
-
         if collect_gate_debug:
             with torch.no_grad():
-                total = max(float(gate_probs.shape[0]), 1.0)
+                hard_tr = valid & (y_tr > y_per)
+                hard_per = valid & (y_per > y_tr)
+                hard_ambiguous = ~valid | (y_tr == y_per)
+
                 n_valid = max(float(valid.sum().item()), 1.0)
 
                 def _masked_mean_std(

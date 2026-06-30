@@ -64,27 +64,8 @@ LOSS_LAMBDA = {
 }
 
 
-def _infer_subpatch_factor_from_state(state: dict) -> int:
-    """Infer subpatch_factor from the last Conv2d in subpatch_saliency_head."""
-    key = (
-        "saliency_prediction.stage_predictors.stage1"
-        ".subpatch_saliency_head.4.weight"
-    )
-    weight = state.get(key)
-    if weight is None:
-        return 16
-    out_ch = int(weight.shape[0])
-    factor = int(round(out_ch**0.5))
-    if factor * factor != out_ch:
-        raise ValueError(
-            f"Cannot infer subpatch_factor from subpatch head out_channels={out_ch}"
-        )
-    return factor
-
-
 def build_model(
     device: torch.device,
-    subpatch_factor: int = 16,
 ) -> ExplainableVidSalModel:
     """Same architecture / hyperparameters as train.py."""
     model = ExplainableVidSalModel(
@@ -104,19 +85,11 @@ def build_model(
         tau_concept=0.07,
         concept_residual_weight=0.0,
         last_transition_only=True,
-        use_rgb_refinement=False,
-        use_feature_refinement=False,
         output_activation="sigmoid",
         return_details=True,
-        use_subpatch_head=True,
-        subpatch_factor=4,
-        subpatch_residual_scale=0.5,
         use_temporal_transition_aggregation=True,
-        temporal_aggregation_hidden_channels=128,
-        temporal_aggregation_temperature=1.0,
         visual_concept_on=VISUAL_CONCEPT_ON,
         temporal_concepts_on=TEMPORAL_CONCEPTS_ON,
-        visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=0.1,
     ).to(device)
 
@@ -141,14 +114,13 @@ def build_model_from_checkpoint(
     checkpoint_path: str,
     device: torch.device,
 ) -> Tuple[ExplainableVidSalModel, Dict]:
-    """Build model with subpatch_factor matching the checkpoint."""
+    """Build model and load weights from a checkpoint."""
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     state = checkpoint.get("model_state_dict", checkpoint)
-    subpatch_factor = _infer_subpatch_factor_from_state(state)
-    model = build_model(device, subpatch_factor=subpatch_factor)
+    model = build_model(device)
     model.load_state_dict(state)
     return model, checkpoint
 
@@ -477,7 +449,7 @@ def main() -> None:
     model, checkpoint_meta = build_model_from_checkpoint(args.checkpoint, device)
     model.optimize_for_inference()
     print(f"Loaded checkpoint: {args.checkpoint}")
-    print(f"subpatch_factor: {int(model.saliency_prediction.stage_predictors['stage1'].subpatch_factor)}")
+    print(f"backbone stages: {model.backbone_stages}")
 
     maps_dir = None
     if args.save_maps:

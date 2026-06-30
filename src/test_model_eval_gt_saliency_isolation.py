@@ -38,7 +38,7 @@ def assert_eval_prediction_invariant_to_gt_saliency(
     finally:
         model.train(was_training)
 
-    for key in ("saliency_map", "coarse_saliency_logits"):
+    for key in ("saliency_map", "saliency_logits"):
         torch.testing.assert_close(
             out_without_gt[key],
             out_with_gt[key],

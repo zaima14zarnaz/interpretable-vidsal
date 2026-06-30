@@ -46,11 +46,12 @@ FREEZE_BACKBONE = True
 # When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
 # gradients so the optimizer still sees BATCH_SIZE samples per step.
 MICRO_BATCH_SIZE = 1
-BACKBONE_GRADIENT_CHECKPOINTING = True
+# Gradient checkpointing disabled (saves memory when True, but adds recompute overhead).
+BACKBONE_GRADIENT_CHECKPOINTING = False
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
 LR = 1e-4
 WEIGHT_DECAY = 1e-4
-NUM_WORKERS = 2
+NUM_WORKERS = 4
 SEED = 42
 OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
@@ -431,7 +432,11 @@ def _print_first_batch_debug(model_out: dict, sal_batch: torch.Tensor) -> None:
     _print_temporal_aggregation_debug(model_out)
 
 
-def _print_gate_debug(model_out: dict) -> None:
+def _print_gate_debug(
+    model_out: dict,
+    model: Optional[ExplainableVidSalModel] = None,
+    sal_batch: Optional[torch.Tensor] = None,
+) -> None:
     concept_out = model_out.get("concept_out")
     if not isinstance(concept_out, dict):
         print("DEBUG gate: no concept_out found")
@@ -444,10 +449,29 @@ def _print_gate_debug(model_out: dict) -> None:
             continue
 
         losses = out_s.get("losses", {})
-        if not isinstance(losses, dict):
-            continue
+        dbg: Optional[dict] = None
+        if isinstance(losses, dict):
+            maybe_dbg = losses.get("gate_debug")
+            if isinstance(maybe_dbg, dict) and maybe_dbg:
+                dbg = maybe_dbg
 
-        dbg = losses.get("gate_debug")
+        if dbg is None and model is not None and sal_batch is not None:
+            features_shape = model_out.get("features_shape", {}).get(stage)
+            gate_probs = out_s.get("gate_probs")
+            metadata = out_s.get("metadata")
+            if (
+                features_shape is not None
+                and torch.is_tensor(gate_probs)
+                and isinstance(metadata, dict)
+                and stage in model.concept_creations
+            ):
+                dbg = model.concept_creations[stage].summarize_gate_debug(
+                    sal_batch,
+                    metadata,
+                    gate_probs,
+                    tuple(features_shape),
+                )
+
         if not isinstance(dbg, dict) or not dbg:
             continue
 
@@ -497,7 +521,7 @@ def _print_gate_debug(model_out: dict) -> None:
 
     if not found:
         print(
-            "DEBUG gate: no gate_debug found. "
+            "DEBUG gate: no gate_debug available. "
             "This usually means return_concept_losses=False or lambda_gate=0."
         )
 
@@ -610,7 +634,6 @@ def train_one_epoch(
                 saliency_maps=sal_batch,
                 return_details=True,
                 return_concept_losses=_return_concept_losses(),
-                collect_gate_debug=(batch_idx == 0),
             )
 
             if _should_run_visual_equiv(model, epoch):
@@ -620,12 +643,11 @@ def train_one_epoch(
                     saliency_maps=sal_batch,
                     return_details=True,
                     return_concept_losses=_return_concept_losses(),
-                    collect_gate_debug=False,
                 )
 
             if batch_idx == 0:
                 _print_first_batch_debug(model_out, sal_batch)
-                _print_gate_debug(model_out)
+                _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
                 _print_visual_concept_usage_debug(model_out)
 
             if batch_idx % MAP_SAVE_INTERVAL == 0:
@@ -840,9 +862,7 @@ def main() -> None:
         backbone_stages=("stage1", "stage2", "stage3", "stage4"),
         pretrained_backbone=True,
         freeze_backbone=FREEZE_BACKBONE,
-        backbone_gradient_checkpointing=(
-            BACKBONE_GRADIENT_CHECKPOINTING and not FREEZE_BACKBONE
-        ),
+        backbone_gradient_checkpointing=False,
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=256,
@@ -1009,7 +1029,7 @@ def _run_overfit_one_batch(
         if step == 1:
             save_first_batch_maps(model_out, sal_batch, fix_batch, rgb_batch, output_dir)
             _print_first_batch_debug(model_out, sal_batch)
-            _print_gate_debug(model_out)
+            _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
 
         loss_dict = _compute_batch_loss(model_out, sal_batch, fix_batch=fix_batch)
         loss = loss_dict["loss_total"]

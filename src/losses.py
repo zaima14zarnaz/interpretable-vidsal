@@ -207,17 +207,23 @@ def compute_delta_target(
 
     Returns:
         delta_target, target_patch_grid, source_mixture_grid — each [B, 1, H, W],
-        or (None, None, None) when saliency_maps has no real temporal sequence.
+        or (None, None, None) when saliency_maps has no real temporal sequence
+        or when legacy trajectory-aggregation outputs are unavailable.
     """
     if not has_temporal_saliency_sequence(saliency_maps):
         return None, None, None
 
+    # Legacy trajectory-aggregation head only. New ConceptGatedMultiScaleSaliencyDecoder
+    # does not emit incoming_weights/selected_metadata.
     required_pred = ("incoming_weights", "selected_metadata")
     for key in required_pred:
         if key not in prediction_out:
-            raise ValueError(f"prediction_out must contain '{key}'")
+            return None, None, None
 
     metadata = prediction_out["selected_metadata"]
+    if not isinstance(metadata, dict):
+        return None, None, None
+
     required_meta = (
         "batch_idx",
         "time_idx",
@@ -227,7 +233,7 @@ def compute_delta_target(
     )
     for key in required_meta:
         if key not in metadata:
-            raise ValueError(f"selected_metadata must contain '{key}'")
+            return None, None, None
 
     B, _, T, H, W = _read_feature_shape_from_metadata(metadata)
     N = H * W
@@ -411,12 +417,8 @@ def compute_dense_metric_losses(
     CC uses smoothed saliency_maps.
     NSS uses binary fixation_maps.
     """
-    if "saliency_map" not in prediction_out:
-        raise ValueError("prediction_out must contain 'saliency_map' for CC/NSS losses")
-
-    pred_dense = prediction_out["saliency_map"]
-    ref = pred_dense
-    zero = _get_zero_like_loss(ref)
+    pred_dense = _resolve_final_saliency_map(prediction_out)
+    zero = _get_zero_like_loss(pred_dense)
 
     loss_cc = zero
     if lambda_cc > 0:
@@ -475,6 +477,51 @@ def _resolve_final_saliency_logits(prediction_out: Dict[str, Any]) -> torch.Tens
     )
 
 
+def _resolve_final_saliency_map(prediction_out: Dict[str, Any]) -> torch.Tensor:
+    """
+    Resolve the final dense saliency map used for main supervision losses.
+
+    Priority: saliency_map, then legacy 'prediction' alias.
+    """
+    pred_map = prediction_out.get("saliency_map")
+    if pred_map is None and "prediction" in prediction_out:
+        pred_map = prediction_out["prediction"]
+    if pred_map is None or not torch.is_tensor(pred_map):
+        raise ValueError(
+            "No final saliency prediction found. Expected prediction_out['saliency_map']."
+        )
+    return pred_map
+
+
+def _is_new_decoder(prediction_out: Dict[str, Any]) -> bool:
+    """
+    True for ConceptGatedMultiScaleSaliencyDecoder outputs.
+
+    selected_metadata belonged to the old trajectory-aggregation saliency head.
+    The new concept-gated multiscale decoder does not need it because final
+    prediction is made by dense concept-feature fusion and upsampling.
+    """
+    return (
+        isinstance(prediction_out, dict)
+        and "saliency_map" in prediction_out
+        and "selected_metadata" not in prediction_out
+    )
+
+
+def _loss_zero_reference(prediction_out: Dict[str, Any]) -> torch.Tensor:
+    """Reference tensor for zero auxiliary losses on the correct device."""
+    for key in (
+        "patch_saliency_logits",
+        "saliency_logits",
+        "coarse_saliency_logits",
+        "saliency_map",
+    ):
+        value = prediction_out.get(key)
+        if torch.is_tensor(value):
+            return _get_zero_like_loss(value)
+    return _get_zero_like_loss(_resolve_final_saliency_map(prediction_out))
+
+
 def compute_fidelity_loss(
     prediction_out: Dict[str, Any],
     saliency_maps: torch.Tensor,
@@ -491,39 +538,43 @@ def compute_fidelity_loss(
     Fidelity loss on patch saliency, optional patch delta, and dense last-frame saliency.
 
     Patch target always uses the last-frame GT (no fake temporal interpolation).
-    Delta loss only when saliency_maps has T >= 2.
+    Delta loss only when saliency_maps has T >= 2 and legacy trajectory outputs exist.
     """
-    required = ("saliency_map", "patch_saliency_logits")
-    for key in required:
-        if key not in prediction_out:
-            raise ValueError(f"prediction_out must contain '{key}'")
+    pred_dense = _resolve_final_saliency_map(prediction_out)
+    zero_ref = _loss_zero_reference(prediction_out)
 
-    patch_logits = prediction_out["patch_saliency_logits"]
-    if patch_logits.dim() != 4 or patch_logits.shape[1] != 1:
+    patch_logits = prediction_out.get("patch_saliency_logits")
+    if patch_logits is not None and (
+        patch_logits.dim() != 4 or patch_logits.shape[1] != 1
+    ):
         raise ValueError(
             f"patch_saliency_logits must be [B,1,H,W], got {tuple(patch_logits.shape)}"
         )
 
-    if patch_from_logits:
-        patch_saliency_pred = torch.sigmoid(patch_logits)
-    else:
-        patch_saliency_pred = patch_logits
+    if patch_logits is not None:
+        if patch_from_logits:
+            patch_saliency_pred = torch.sigmoid(patch_logits)
+        else:
+            patch_saliency_pred = patch_logits
 
-    target_patch_grid = prepare_patch_target_from_last_frame(
-        saliency_maps,
-        patch_logits.shape[-2],
-        patch_logits.shape[-1],
-    )
-    target_patch_grid = minmax_per_sample(target_patch_grid)
-    loss_patch_fid = F.l1_loss(patch_saliency_pred, target_patch_grid)
+        target_patch_grid = prepare_patch_target_from_last_frame(
+            saliency_maps,
+            patch_logits.shape[-2],
+            patch_logits.shape[-1],
+        )
+        target_patch_grid = minmax_per_sample(target_patch_grid)
+        loss_patch_fid = F.l1_loss(patch_saliency_pred, target_patch_grid)
+    else:
+        patch_saliency_pred = None
+        target_patch_grid = None
+        loss_patch_fid = zero_ref
 
     target_dense_last = prepare_last_saliency_map(
         saliency_maps,
-        prediction_out["saliency_map"].shape[-2],
-        prediction_out["saliency_map"].shape[-1],
+        pred_dense.shape[-2],
+        pred_dense.shape[-1],
     )
     target_dense_last = minmax_per_sample(target_dense_last)
-    pred_dense = prediction_out["saliency_map"]
     if target_dense_last.shape[-2:] != pred_dense.shape[-2:]:
         target_dense_last = F.interpolate(
             target_dense_last,
@@ -534,7 +585,7 @@ def compute_fidelity_loss(
 
     loss_dense_fid = F.l1_loss(pred_dense, target_dense_last)
 
-    loss_topk = _get_zero_like_loss(patch_saliency_pred)
+    loss_topk = zero_ref
     if lambda_topk > 0:
         loss_topk = topk_weighted_l1_loss(
             pred_dense,
@@ -543,37 +594,46 @@ def compute_fidelity_loss(
             bg_weight=topk_bg_weight,
         )
 
-    loss_dense_bce = _get_zero_like_loss(patch_saliency_pred)
+    loss_dense_bce = zero_ref
     if lambda_bce > 0:
         loss_dense_bce = F.binary_cross_entropy_with_logits(
             _resolve_final_saliency_logits(prediction_out),
             target_dense_last.clamp(0.0, 1.0),
         )
 
-    loss_dense_kl = _get_zero_like_loss(patch_saliency_pred)
+    loss_dense_kl = zero_ref
     if lambda_kl > 0:
-        # Use final fused dense saliency logits for distribution matching.
-        # Fall back to coarse logits only for legacy outputs.
         loss_dense_kl = spatial_kl_loss(
             _resolve_final_saliency_logits(prediction_out),
             target_dense_last,
         )
 
+    # Legacy trajectory delta head (patch_delta_logits / temporal_delta_logits).
     patch_delta_logits = prediction_out.get("patch_delta_logits")
+    if patch_delta_logits is None:
+        patch_delta_logits = prediction_out.get("temporal_delta_logits")
+
     use_delta = (
-        has_temporal_saliency_sequence(saliency_maps)
+        lambda_delta > 0.0
+        and has_temporal_saliency_sequence(saliency_maps)
         and patch_delta_logits is not None
+        and not _is_new_decoder(prediction_out)
     )
 
     if use_delta:
         delta_target, _, source_mixture_grid = compute_delta_target(
             prediction_out, saliency_maps
         )
-        loss_delta = F.l1_loss(patch_delta_logits, delta_target)
+        if delta_target is not None:
+            loss_delta = F.l1_loss(patch_delta_logits, delta_target)
+        else:
+            delta_target = None
+            source_mixture_grid = None
+            loss_delta = zero_ref
     else:
         delta_target = None
         source_mixture_grid = None
-        loss_delta = _get_zero_like_loss(patch_saliency_pred)
+        loss_delta = zero_ref
 
     loss_fid = (
         loss_patch_fid
@@ -627,10 +687,22 @@ def _inject_feature_shape(
     prediction_out: Dict[str, Any],
     concept_out: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Ensure selected_metadata carries feature_shape for delta targets."""
+    """
+    Ensure selected_metadata carries feature_shape for legacy delta targets.
+
+    selected_metadata belongs to the old trajectory-aggregation saliency head.
+    ConceptGatedMultiScaleSaliencyDecoder does not produce it; missing
+    selected_metadata is valid and this function returns prediction_out unchanged.
+    """
+    if prediction_out is None or not isinstance(prediction_out, dict):
+        return prediction_out
+
+    if "selected_metadata" not in prediction_out:
+        return prediction_out
+
     metadata = prediction_out.get("selected_metadata")
-    if metadata is None:
-        raise ValueError("prediction_out must contain 'selected_metadata'")
+    if not isinstance(metadata, dict):
+        return prediction_out
 
     if "feature_shape" in metadata:
         return prediction_out
@@ -645,9 +717,7 @@ def _inject_feature_shape(
             prediction_out["selected_metadata"] = metadata
             return prediction_out
 
-    raise ValueError(
-        "feature_shape missing from selected_metadata and concept_out.metadata"
-    )
+    return prediction_out
 
 
 def _aggregate_concept_losses(
@@ -690,14 +760,16 @@ def _aggregate_concept_losses(
 
 def _visual_loss_reference(model_out: Dict[str, Any]) -> torch.Tensor:
     prediction_out = _resolve_prediction_out(model_out)
-    ref = prediction_out.get("patch_saliency_logits")
-    if ref is None:
-        ref = prediction_out.get("coarse_saliency_logits")
-    if ref is None:
-        ref = prediction_out.get("saliency_logits")
-    if ref is None:
-        raise ValueError("model_out missing reference tensor for visual concept losses")
-    return ref
+    for key in (
+        "patch_saliency_logits",
+        "coarse_saliency_logits",
+        "saliency_logits",
+        "saliency_map",
+    ):
+        ref = prediction_out.get(key)
+        if torch.is_tensor(ref):
+            return ref
+    raise ValueError("model_out missing reference tensor for visual concept losses")
 
 
 def _iter_stage_concept_outputs(
@@ -977,7 +1049,12 @@ def compute_total_loss(
     prediction_out = _resolve_prediction_out(model_out)
     concept_out = model_out.get("concept_out")
 
+    # Safe for new decoder: no-op when selected_metadata is absent.
     prediction_out = _inject_feature_shape(prediction_out, concept_out)
+
+    # Legacy trajectory-head auxiliary losses (delta, incoming weights, subpatch, etc.)
+    # are skipped automatically when prediction_out lacks those keys.
+    _ = _is_new_decoder(prediction_out)
 
     fid_out = compute_fidelity_loss(
         prediction_out,
