@@ -53,7 +53,7 @@ def _build_test_model() -> ExplainableVidSalModel:
         backbone_stages=("stage2",),
         pretrained_backbone=False,
         freeze_backbone=True,
-        resize_to=(224, 224),
+        resize_to=(224, 384),
         concept_dim=64,
         num_concepts=8,
         concept_hidden_dim=64,

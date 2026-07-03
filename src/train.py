@@ -42,14 +42,14 @@ WINDOW_LEN = 16
 
 EPOCHS = 100
 BATCH_SIZE = 4  # effective optimizer batch size
-FREEZE_BACKBONE = True
+FREEZE_BACKBONE = False
 # When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
 # gradients so the optimizer still sees BATCH_SIZE samples per step.
-MICRO_BATCH_SIZE = 1
+MICRO_BATCH_SIZE = 4
 # Gradient checkpointing disabled (saves memory when True, but adds recompute overhead).
 BACKBONE_GRADIENT_CHECKPOINTING = False
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
-LR = 1e-4
+LR = 5e-5
 WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 4
 SEED = 42
@@ -63,35 +63,77 @@ USE_AMP = True
 
 # Concept-branch switches. Set either branch to False for ablations.
 VISUAL_CONCEPT_ON = True
-TEMPORAL_CONCEPTS_ON = True
+TEMPORAL_CONCEPTS_ON = False
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
 
+# LOSS_LAMBDA = {
+#     "lambda_delta": 0.0,
+#     "lambda_dense": 0.25,
+#     "lambda_bce": 0.0,
+#     "lambda_kl": 2.0,
+#     "lambda_fid": 1.0,
+#     "lambda_cc": 0.5,
+#     "lambda_nss": 0.5,
+#     "topk_percent": 0.005,
+#     "topk_bg_weight": 0.0,
+#     "lambda_concept_dense": 0.25,
+#     "lambda_concept_kl": 0.25,
+#     "lambda_align": 0.25,
+#     "lambda_sparse": 0.5,
+#     "lambda_div": 0.5,
+#     "lambda_gate": 0.0,
+#     "lambda_visual_entropy": 0.02,
+#     "lambda_visual_usage": 0.05,
+#     "lambda_visual_equiv": 0.02,
+# #     # Used only if compute_total_loss supports these ConceptCreation losses.
+# #     "lambda_visual": 0.5,
+# #     "lambda_visual_div": 0.5,
+# #     "patch_from_logits": True,
+# }
 LOSS_LAMBDA = {
+    # Old / auxiliary saliency-head losses: off for new decoder
     "lambda_delta": 0.0,
-    "lambda_dense": 0.25,
+    "lambda_fid": 0.0,
+
+    # Main dense saliency losses
+    "lambda_dense": 0.05,
     "lambda_bce": 0.0,
     "lambda_kl": 2.0,
-    "lambda_fid": 1.0,
-    "lambda_cc": 1.0,
-    "lambda_nss": 1.0,
+    "lambda_cc": 0.5,
+    "lambda_nss": 0.5,
+
+    # Disable explicit background suppression for now
     "topk_percent": 0.005,
-    "topk_bg_weight": 0.15,
-    "lambda_concept_dense": 0.25,
-    "lambda_concept_kl": 0.25,
-    "lambda_align": 0.25,
-    "lambda_sparse": 0.5,
-    "lambda_div": 0.5,
+    "topk_bg_weight": 0.0,
+
+    # Disable old concept-map saliency supervision for now
+    "lambda_concept_dense": 0.0,
+    "lambda_concept_kl": 0.0,
+
+    # Temporarily weaken concept regularizers until maps stop collapsing
+    "lambda_align": 0.05,
+    "lambda_sparse": 0.05,
+    "lambda_div": 0.05,
     "lambda_gate": 0.0,
+
+    # Temporarily reduce visual regularizers
     "lambda_visual_entropy": 0.02,
     "lambda_visual_usage": 0.05,
     "lambda_visual_equiv": 0.02,
-#     # Used only if compute_total_loss supports these ConceptCreation losses.
-#     "lambda_visual": 0.5,
-#     "lambda_visual_div": 0.5,
-#     "patch_from_logits": True,
+    "lambda_temporal_attention_entropy": 0.0,
+
+    "patch_from_logits": False,
+
+    # Deep supervision on per-stage decoder side outputs (training only).
+    "side_stage_weights": {
+        "stage1": 0.20,
+        "stage2": 0.15,
+        "stage3": 0.10,
+        "stage4": 0.05,
+    },
 }
 
 def _amp_dtype(device: torch.device) -> torch.dtype:
@@ -193,6 +235,8 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = True
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high")
 
 
 def prepare_last_saliency_for_visualization(sal_batch: torch.Tensor) -> torch.Tensor:
@@ -308,10 +352,11 @@ def save_batch_maps(
     output_dir: str,
     epoch: int,
     batch_idx: int,
+    maps_subdir: str = "maps",
 ) -> None:
     vis_dir = os.path.join(
         output_dir,
-        "maps",
+        maps_subdir,
         f"epoch_{epoch:03d}",
         f"batch_{batch_idx:05d}",
     )
@@ -376,12 +421,14 @@ def _compute_batch_loss(
     fix_batch: Optional[torch.Tensor] = None,
     equiv_model_out: Optional[dict] = None,
     epoch: Optional[int] = None,
+    enable_side_aux: bool = True,
 ) -> dict:
     return compute_total_loss(
         model_out,
         sal_batch,
         equiv_model_out=equiv_model_out,
         fixation_maps=fix_batch,
+        enable_side_aux=enable_side_aux,
         **_effective_loss_lambda(epoch),
     )
 
@@ -745,6 +792,7 @@ def validate_one_epoch(
     loader: DataLoader,
     device: torch.device,
     epoch: int,
+    output_dir: str,
 ) -> Tuple[float, Optional[Dict[str, float]]]:
     model.eval()
     running_loss = 0.0
@@ -757,7 +805,14 @@ def validate_one_epoch(
         leave=False,
         # disable=not SHOW_PROGRESS_BAR,
     )
-    for video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask in pbar:
+    for batch_idx, (
+        video_filenames,
+        rgb_batch,
+        sal_batch,
+        fix_batch,
+        n_frames,
+        valid_mask,
+    ) in enumerate(pbar):
         rgb_batch = rgb_batch.to(device, non_blocking=True)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
@@ -776,8 +831,20 @@ def validate_one_epoch(
                 return_details=True,
                 return_concept_losses=_return_concept_losses(),
             )
+            if batch_idx % MAP_SAVE_INTERVAL == 0:
+                save_batch_maps(
+                    model_out,
+                    sal_batch,
+                    fix_batch,
+                    rgb_batch,
+                    output_dir,
+                    epoch,
+                    batch_idx,
+                    maps_subdir="val_maps",
+                )
             loss_dict = _compute_batch_loss(
-                model_out, sal_batch, fix_batch=fix_batch, epoch=epoch
+                model_out, sal_batch, fix_batch=fix_batch, epoch=epoch,
+                enable_side_aux=False,
             )
             batch_loss = loss_dict["loss_total"].item()
         running_loss += batch_loss
@@ -793,8 +860,6 @@ def validate_one_epoch(
         del model_out, loss_dict, rgb_batch, sal_batch, fix_batch
 
     mean_loss = running_loss / max(num_batches, 1)
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
     return mean_loss, metric_averager.mean()
 
 
@@ -865,10 +930,10 @@ def main() -> None:
         backbone_gradient_checkpointing=False,
         input_format="BTCHW",
         resize_to=(224, 384),
-        concept_dim=256,
+        concept_dim=128,
         num_concepts=512,
         concept_hidden_dim=256,
-        saliency_hidden_dim=256,
+        saliency_hidden_dim=96,
         top_k=3,
         max_source_patches=64,
         tau_pi=0.5,
@@ -878,7 +943,7 @@ def main() -> None:
         last_transition_only=True,
         use_rgb_refinement=False,
         use_feature_refinement=False,
-        output_activation="sigmoid",
+        output_activation="none",
         return_details=True,
         use_subpatch_head=True,
         subpatch_factor=4,
@@ -891,6 +956,43 @@ def main() -> None:
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
     ).to(device)
+
+    with torch.no_grad():
+        # Initialize final saliency logits to the observed dataset prior.
+        target_prior = 0.0177
+        bias_value = math.log(target_prior / (1.0 - target_prior))
+        initialized = []
+
+        # New spatiotemporal decoder: learned upsample head + optional patch head.
+        final_head = getattr(model.saliency_prediction, "final_upsample_head", None)
+        if final_head is not None and hasattr(final_head, "head"):
+            final_conv = final_head.head
+            if hasattr(final_conv, "bias") and final_conv.bias is not None:
+                final_conv.bias.fill_(bias_value)
+                initialized.append("final_upsample_head.head")
+
+        patch_head = getattr(model.saliency_prediction, "patch_logit_head", None)
+        if patch_head is not None and hasattr(patch_head, "bias") and patch_head.bias is not None:
+            patch_head.bias.fill_(bias_value)
+            initialized.append("patch_logit_head")
+
+        # Backward compatibility: legacy decoder had pred_head[-1].
+        pred_head = getattr(model.saliency_prediction, "pred_head", None)
+        if pred_head is not None and len(pred_head) > 0:
+            final_conv = pred_head[-1]
+            if hasattr(final_conv, "bias") and final_conv.bias is not None:
+                final_conv.bias.fill_(bias_value)
+                initialized.append("pred_head[-1]")
+
+    if initialized:
+        print(
+            f"Initialized saliency bias to logit({target_prior}) = {bias_value:.4f} "
+            f"for: {', '.join(initialized)}"
+        )
+    else:
+        print(
+            "Skipped saliency bias initialization: no known decoder output bias parameter found."
+        )
 
     if not FREEZE_BACKBONE:
         print(
@@ -941,7 +1043,9 @@ def main() -> None:
             calculate_metrics=False,
             scaler=scaler,
         )
-        val_loss, val_metrics = validate_one_epoch(model, val_loader, device, epoch)
+        val_loss, val_metrics = validate_one_epoch(
+            model, val_loader, device, epoch, OUTPUT_DIR
+        )
         # if epoch == 3:
             # val_loss, val_metrics = validate_one_epoch(model, val_loader, device, epoch)
         # else:

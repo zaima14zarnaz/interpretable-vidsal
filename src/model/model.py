@@ -1,7 +1,8 @@
 """
 End-to-end explainable video saliency model.
 
-Pipeline: RGB window -> VideoSwinTransformer -> ConceptCreation (per stage) -> SaliencyDecoder.
+Pipeline: RGB window -> VideoSwinTransformer -> ConceptCreation (raw features)
+         -> SpatioTemporal3DFeatureInfusion (decoder features) -> SaliencyDecoder.
 """
 
 from contextlib import nullcontext
@@ -14,6 +15,7 @@ import torch.nn.functional as F
 from model.backbones.video_swin import VideoSwinTransformer
 from model.concept_creation import ConceptCreation
 from model.saliency_prediction import ConceptGatedMultiScaleSaliencyDecoder
+from model.temporal_feature_infusion import SpatioTemporal3DFeatureInfusion
 
 
 class ExplainableVidSalModel(nn.Module):
@@ -29,6 +31,16 @@ class ExplainableVidSalModel(nn.Module):
         Output saliency:   [B, 1, H, W] (last RGB frame resolution)
     """
 
+    # stage1 is preserved at full backbone resolution because it is the finest
+    # decoder stage; downsampling stage1 concepts can hurt spatial localization
+    # and NSS.
+    _CONCEPT_MAX_HW_BY_STAGE = {
+        "stage1": None,
+        "stage2": None,
+        "stage3": None,
+        "stage4": None,
+    }
+
     def __init__(
         self,
         backbone_stage: str = "stage2",
@@ -42,11 +54,11 @@ class ExplainableVidSalModel(nn.Module):
         freeze_backbone: bool = True,
         backbone_gradient_checkpointing: bool = False,
         input_format: str = "BTCHW",
-        resize_to: Union[int, Tuple[int, int]] = (224, 224),
+        resize_to: Union[int, Tuple[int, int]] = (224, 384),
         concept_dim: int = 256,
         num_concepts: int = 32,
         concept_hidden_dim: int = 512,
-        saliency_hidden_dim: int = 256,
+        saliency_hidden_dim: int = 96,
         top_k: int = 9,
         max_source_patches: int = 128,
         tau_pi: float = 0.1,
@@ -69,8 +81,23 @@ class ExplainableVidSalModel(nn.Module):
         use_temporal_transition_aggregation: bool = False,
         visual_concept_on: bool = True,
         temporal_concepts_on: bool = True,
-        visual_concept_residual_weight: float = 0.0,
+        visual_concept_residual_weight: float = 0.1,
+        visual_assignment_mode: str = "straight_through",
+        visual_assignment_temperature: float = 0.07,
+        visual_entropy_weight: float = 0.01,
+        visual_usage_weight: float = 0.02,
+        use_visual_saliency_alignment: bool = True,
+        visual_saliency_align_weight: float = 0.05,
         allow_eval_concept_losses: bool = False,
+        temporal_dim: Optional[int] = None,
+        temporal_dropout: float = 0.0,
+        temporal_use_difference: bool = True,
+        temporal_num_blocks: int = 2,
+        temporal_mlp_ratio: float = 2.0,
+        temporal_residual_gate_init: float = -2.0,
+        temporal_enhance_last_only: bool = False,
+        decoder_temporal_aggregation: str = "learned_all_frames",
+        decoder_use_side_logit_fusion: bool = True,
         **_deprecated_saliency_kwargs: Any,
     ):
         super().__init__()
@@ -95,7 +122,18 @@ class ExplainableVidSalModel(nn.Module):
         self._backbone_frozen = freeze_backbone
         self.backbone_gradient_checkpointing = bool(backbone_gradient_checkpointing)
         self.visual_concept_residual_weight = float(visual_concept_residual_weight)
+        self.visual_assignment_mode = visual_assignment_mode
+        self.visual_assignment_temperature = float(visual_assignment_temperature)
+        self.visual_entropy_weight = float(visual_entropy_weight)
+        self.visual_usage_weight = float(visual_usage_weight)
+        self.use_visual_saliency_alignment = bool(use_visual_saliency_alignment)
+        self.visual_saliency_align_weight = float(visual_saliency_align_weight)
         self.allow_eval_concept_losses = bool(allow_eval_concept_losses)
+        if temporal_dim is None:
+            temporal_dim = concept_dim
+        self.temporal_dim = int(temporal_dim)
+        self.decoder_temporal_aggregation = decoder_temporal_aggregation
+        self.decoder_use_side_logit_fusion = bool(decoder_use_side_logit_fusion)
         if not self.visual_concept_on and not self.temporal_concepts_on:
             raise ValueError(
                 "At least one concept branch must be enabled: "
@@ -113,6 +151,7 @@ class ExplainableVidSalModel(nn.Module):
             gradient_checkpointing=backbone_gradient_checkpointing,
         )
 
+        # Video Swin-T stage channels: stage1=96, stage2=192, stage3=384, stage4=768.
         feature_channels = self.backbone.get_feature_channels()
         self.stage_channels = {
             stage: feature_channels[stage] for stage in self.backbone_stages
@@ -136,6 +175,26 @@ class ExplainableVidSalModel(nn.Module):
                 use_target_centric=True,
                 last_transition_only=concept_last_transition_only,
                 visual_concept_residual_weight=visual_concept_residual_weight,
+                visual_assignment_mode=visual_assignment_mode,
+                visual_assignment_temperature=visual_assignment_temperature,
+                visual_entropy_weight=visual_entropy_weight,
+                visual_usage_weight=visual_usage_weight,
+                use_visual_saliency_alignment=use_visual_saliency_alignment,
+                visual_saliency_align_weight=visual_saliency_align_weight,
+            )
+
+        self.temporal_feature_infusers = nn.ModuleDict()
+        for stage in self.backbone_stages:
+            self.temporal_feature_infusers[stage] = SpatioTemporal3DFeatureInfusion(
+                in_channels=self.stage_channels[stage],
+                temporal_dim=self.temporal_dim,
+                num_blocks=temporal_num_blocks,
+                mlp_ratio=temporal_mlp_ratio,
+                dropout=temporal_dropout,
+                use_temporal_difference=temporal_use_difference,
+                residual_gate_init=temporal_residual_gate_init,
+                enhance_last_only=temporal_enhance_last_only,
+                layer_scale_init=1e-3,
             )
 
         self.saliency_prediction = ConceptGatedMultiScaleSaliencyDecoder(
@@ -143,9 +202,11 @@ class ExplainableVidSalModel(nn.Module):
             concept_dim=concept_dim,
             decoder_channels=saliency_hidden_dim,
             feature_residual_scale=0.25,
-            dropout=0.1,
+            dropout=0.05,
             tau_pi=tau_pi,
             output_activation=output_activation,
+            temporal_aggregation=decoder_temporal_aggregation,
+            use_side_logit_fusion=decoder_use_side_logit_fusion,
         )
 
         if freeze_backbone:
@@ -156,27 +217,42 @@ class ExplainableVidSalModel(nn.Module):
         features: torch.Tensor,
         stage: str,
     ) -> torch.Tensor:
-        max_hw_by_stage = {
-            "stage1": 28,
-            "stage2": 28,
-            "stage3": 14,
-            "stage4": 7,
-        }
-        max_hw = max_hw_by_stage.get(stage, 28)
-        B, C, T, H, W = features.shape
-        if H <= max_hw and W <= max_hw:
+        cap = self._CONCEPT_MAX_HW_BY_STAGE.get(stage, None)
+        if cap is None:
             return features
-        return F.interpolate(
-            features,
-            size=(T, max_hw, max_hw),
-            mode="trilinear",
-            align_corners=False,
+
+        _, _, T, H, W = features.shape
+
+        if isinstance(cap, int):
+            if H <= cap and W <= cap:
+                return features
+            return F.interpolate(
+                features,
+                size=(T, cap, cap),
+                mode="trilinear",
+                align_corners=False,
+            )
+
+        if isinstance(cap, (tuple, list)) and len(cap) == 2:
+            target_h, target_w = int(cap[0]), int(cap[1])
+            if H == target_h and W == target_w:
+                return features
+            return F.interpolate(
+                features,
+                size=(T, target_h, target_w),
+                mode="trilinear",
+                align_corners=False,
+            )
+
+        raise ValueError(
+            f"Invalid concept resize cap for {stage}: {cap!r}. "
+            "Expected None, int, or (target_h, target_w)."
         )
 
     def _normalize_video_layout(self, x: torch.Tensor) -> torch.Tensor:
         """Accept dataloader layout [B, T, H, W, 3] and convert to configured input_format."""
         if x.dim() == 5 and x.shape[-1] == 3:
-            return x.permute(0, 1, 4, 2, 3).contiguous()
+            return x.permute(0, 1, 4, 2, 3)
         return x
 
     def _extract_last_rgb_frame(self, x: torch.Tensor) -> torch.Tensor:
@@ -208,6 +284,14 @@ class ExplainableVidSalModel(nn.Module):
             last_rgb = last_rgb / 255.0
         return last_rgb
 
+    def _decoder_output_size(self, last_rgb_frame: torch.Tensor) -> Tuple[int, int]:
+        resize_to = getattr(self.backbone, "resize_to", None)
+        if resize_to is None:
+            return last_rgb_frame.shape[-2:]
+        if isinstance(resize_to, int):
+            return (int(resize_to), int(resize_to))
+        return (int(resize_to[0]), int(resize_to[1]))
+
     def freeze_backbone(self) -> None:
         for param in self.backbone.parameters():
             param.requires_grad = False
@@ -224,6 +308,7 @@ class ExplainableVidSalModel(nn.Module):
         """Parameters for the optimizer (concept + saliency, optionally backbone)."""
         params: List[nn.Parameter] = []
         params.extend(self.concept_creations.parameters())
+        params.extend(self.temporal_feature_infusers.parameters())
         params.extend(self.saliency_prediction.parameters())
         if not self._backbone_frozen:
             params.extend(self.backbone.parameters())
@@ -237,6 +322,13 @@ class ExplainableVidSalModel(nn.Module):
             if hasattr(torch, "set_float32_matmul_precision"):
                 torch.set_float32_matmul_precision("high")
         return self
+
+    def get_temporal_diagnostics(self) -> Dict[str, Dict[str, float]]:
+        """Return last temporal-infusion diagnostics for each backbone stage."""
+        return {
+            stage: self.temporal_feature_infusers[stage].get_last_diagnostics()
+            for stage in self.backbone_stages
+        }
 
     def forward(
         self,
@@ -282,7 +374,10 @@ class ExplainableVidSalModel(nn.Module):
                 features_dict = self.backbone.forward_features(x)
 
             concept_outs: Dict[str, Dict[str, Any]] = {}
-            concept_features_dict: Dict[str, torch.Tensor] = {}
+            decoder_features_dict: Dict[str, torch.Tensor] = {}
+            concept_features_shape: Optional[Dict[str, Tuple[int, ...]]] = (
+                {} if return_details else None
+            )
 
             if return_concept_losses is None:
                 if self.training:
@@ -296,34 +391,51 @@ class ExplainableVidSalModel(nn.Module):
                 saliency_maps if return_concept_losses else None
             )
 
+            concept_creations = self.concept_creations
+            temporal_feature_infusers = self.temporal_feature_infusers
             for stage in self.backbone_stages:
                 stage_features = features_dict[stage]
-                concept_features = self._resize_feature_for_concepts(stage_features, stage)
-                concept_features_dict[stage] = concept_features
-                concept_outs[stage] = self.concept_creations[stage](
+                concept_features = self._resize_feature_for_concepts(
+                    stage_features, stage
+                )
+                if return_details:
+                    concept_features_shape[stage] = tuple(concept_features.shape)
+                concept_outs[stage] = concept_creations[stage](
                     concept_features,
                     saliency_maps=saliency_maps_for_concepts,
                     return_losses=return_concept_losses,
                     collect_gate_debug=False,
                 )
+                decoder_features_dict[stage] = temporal_feature_infusers[stage](
+                    stage_features
+                )
 
+            # Learned ConvTranspose upsampling uses fixed scale factors tied to the
+            # backbone feature resolution, so decoder output_size should match
+            # backbone.resize_to when resize_to is set. Original-size output requires
+            # either processing original-size frames or a separate external resize.
             pred_out = self.saliency_prediction(
                 concept_outs=concept_outs,
-                features_dict=concept_features_dict,
-                output_size=last_rgb_frame.shape[-2:],
+                features_dict=decoder_features_dict,
+                output_size=self._decoder_output_size(last_rgb_frame),
                 return_details=return_decoder_diagnostics,
             )
 
             if not return_details:
                 return pred_out["saliency_map"]
 
+            decoder_features_shape = {
+                stage: tuple(decoder_features_dict[stage].shape)
+                for stage in self.backbone_stages
+            }
+
             return {
                 "saliency_map": pred_out["saliency_map"],
                 "saliency_logits": pred_out["saliency_logits"],
                 "concept_out": concept_outs,
                 "prediction_out": pred_out,
-                "features_shape": {
-                    stage: tuple(concept_features_dict[stage].shape)
-                    for stage in self.backbone_stages
-                },
+                "concept_features_shape": concept_features_shape,
+                "decoder_features_shape": decoder_features_shape,
+                "features_shape": concept_features_shape,
+                "temporal_diagnostics": self.get_temporal_diagnostics(),
             }

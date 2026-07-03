@@ -758,6 +758,26 @@ def _aggregate_concept_losses(
     return totals
 
 
+def _aggregate_concept_total_loss(
+    concept_out: Any, reference: torch.Tensor
+) -> torch.Tensor:
+    """Average per-stage ConceptCreation loss_total_concept when present."""
+    zero = reference.sum() * 0.0
+    if not isinstance(concept_out, dict) or not concept_out:
+        return zero
+
+    stage_losses: list[torch.Tensor] = []
+    for _, stage_out in _iter_stage_concept_outputs(concept_out):
+        losses = stage_out.get("losses", {}) if isinstance(stage_out, dict) else {}
+        loss_total = losses.get("loss_total_concept")
+        if torch.is_tensor(loss_total):
+            stage_losses.append(loss_total)
+
+    if not stage_losses:
+        return zero
+    return torch.stack(stage_losses).mean()
+
+
 def _visual_loss_reference(model_out: Dict[str, Any]) -> torch.Tensor:
     prediction_out = _resolve_prediction_out(model_out)
     for key in (
@@ -1007,6 +1027,130 @@ def compute_concept_branch_loss(
     }
 
 
+DEFAULT_DECODER_SIDE_STAGE_WEIGHTS = {
+    "stage1": 0.20,
+    "stage2": 0.15,
+    "stage3": 0.10,
+    "stage4": 0.05,
+}
+
+
+def _saliency_map_from_logits(
+    logits: torch.Tensor,
+    output_activation: str,
+) -> torch.Tensor:
+    if output_activation == "sigmoid":
+        return torch.sigmoid(logits)
+    return logits
+
+
+def compute_decoder_side_aux_loss(
+    prediction_out: Dict[str, Any],
+    saliency_maps: torch.Tensor,
+    *,
+    fixation_maps: Optional[torch.Tensor] = None,
+    side_stage_weights: Optional[Dict[str, float]] = None,
+    lambda_fid: float = 1.0,
+    lambda_dense: float = 1.0,
+    lambda_bce: float = 0.0,
+    lambda_kl: float = 0.0,
+    lambda_cc: float = 0.0,
+    lambda_nss: float = 0.0,
+    lambda_topk: float = 0.0,
+    topk_percent: float = 0.05,
+    topk_bg_weight: float = 0.15,
+    patch_from_logits: bool = True,
+) -> Dict[str, torch.Tensor]:
+    """
+    Deep supervision on per-stage decoder side outputs.
+
+    Applies the same dense saliency losses as the main head to each
+    side_saliency_logits entry, weighted by stage.
+    """
+    side_logits_dict = prediction_out.get("side_saliency_logits")
+    zero = _loss_zero_reference(prediction_out)
+    out: Dict[str, torch.Tensor] = {"loss_decoder_side_aux": zero}
+
+    if not isinstance(side_logits_dict, dict) or not side_logits_dict:
+        return out
+
+    weights = side_stage_weights or DEFAULT_DECODER_SIDE_STAGE_WEIGHTS
+    output_activation = str(prediction_out.get("output_activation", "sigmoid"))
+    total = zero
+
+    for stage, side_logits in side_logits_dict.items():
+        if not torch.is_tensor(side_logits):
+            continue
+        stage_weight = float(weights.get(stage, 0.0))
+        if stage_weight <= 0.0:
+            continue
+
+        side_pred = {
+            "saliency_logits": side_logits,
+            "saliency_map": _saliency_map_from_logits(side_logits, output_activation),
+        }
+        fid_out = compute_fidelity_loss(
+            side_pred,
+            saliency_maps,
+            lambda_delta=0.0,
+            lambda_dense=lambda_dense,
+            lambda_bce=lambda_bce,
+            lambda_kl=lambda_kl,
+            lambda_topk=lambda_topk,
+            topk_percent=topk_percent,
+            topk_bg_weight=topk_bg_weight,
+            patch_from_logits=patch_from_logits,
+        )
+        metric_out = compute_dense_metric_losses(
+            side_pred,
+            saliency_maps,
+            fixation_maps=fixation_maps,
+            lambda_cc=lambda_cc,
+            lambda_nss=lambda_nss,
+        )
+
+        stage_loss = (
+            lambda_fid * fid_out["loss_fid"]
+            + lambda_cc * metric_out["loss_cc"]
+            + lambda_nss * metric_out["loss_nss"]
+        )
+        out[f"loss_side_{stage}"] = stage_loss
+        total = total + stage_weight * stage_loss
+
+    out["loss_decoder_side_aux"] = total
+    return out
+
+
+def compute_temporal_attention_entropy_loss(
+    prediction_out: Dict[str, Any],
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    Encourage non-collapsed temporal attention over decoder frames.
+
+    Returns a loss term to be minimized. We use negative normalized entropy so a
+    positive lambda encourages higher entropy (less early collapse to one frame).
+    """
+    zero = _loss_zero_reference(prediction_out)
+    temporal_weights = prediction_out.get("temporal_weights")
+    if not torch.is_tensor(temporal_weights):
+        return zero
+    if temporal_weights.dim() != 5:
+        return zero
+
+    # Expected shape: [B, 1, T, H, W]
+    T = int(temporal_weights.shape[2])
+    if T <= 1:
+        return zero
+
+    weights = temporal_weights.float().clamp(min=0.0)
+    weights = weights / weights.sum(dim=2, keepdim=True).clamp(min=eps)
+    entropy = -(weights * (weights + eps).log()).sum(dim=2)
+    normalized_entropy = entropy / max(math.log(T), eps)
+    # Minimize negative entropy -> maximize entropy.
+    return -normalized_entropy.mean()
+
+
 def compute_total_loss(
     model_out: Dict[str, Any],
     saliency_maps: torch.Tensor,
@@ -1029,9 +1173,12 @@ def compute_total_loss(
     lambda_visual_entropy: float = 0.0,
     lambda_visual_equiv: float = 0.0,
     lambda_visual_usage: float = 0.0,
+    lambda_temporal_attention_entropy: float = 0.0,
     equiv_model_out: Optional[Dict[str, Any]] = None,
     fixation_maps: Optional[torch.Tensor] = None,
     patch_from_logits: bool = True,
+    enable_side_aux: bool = True,
+    side_stage_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Union[torch.Tensor, None]]:
     """
     Total training loss for ExplainableVidSalModel (return_details=True).
@@ -1130,6 +1277,36 @@ def compute_total_loss(
     else:
         loss_visual_usage = zero
 
+    if lambda_temporal_attention_entropy > 0.0:
+        loss_temporal_attention_entropy = compute_temporal_attention_entropy_loss(
+            prediction_out
+        )
+    else:
+        loss_temporal_attention_entropy = zero
+
+    loss_decoder_side_aux = zero
+    side_loss_out: Dict[str, torch.Tensor] = {}
+    if enable_side_aux:
+        side_loss_out = compute_decoder_side_aux_loss(
+            prediction_out,
+            saliency_maps,
+            fixation_maps=fixation_maps,
+            side_stage_weights=side_stage_weights,
+            lambda_fid=lambda_fid,
+            lambda_dense=lambda_dense,
+            lambda_bce=lambda_bce,
+            lambda_kl=lambda_kl,
+            lambda_cc=lambda_cc,
+            lambda_nss=lambda_nss,
+            lambda_topk=lambda_topk,
+            topk_percent=topk_percent,
+            topk_bg_weight=topk_bg_weight,
+            patch_from_logits=patch_from_logits,
+        )
+        loss_decoder_side_aux = side_loss_out["loss_decoder_side_aux"]
+
+    loss_total_concept = _aggregate_concept_total_loss(concept_out, ref)
+
     loss_total = (
         lambda_fid * loss_fid
         + lambda_cc * loss_cc
@@ -1143,9 +1320,12 @@ def compute_total_loss(
         + lambda_visual_entropy * loss_visual_entropy
         + lambda_visual_equiv * loss_visual_equiv
         + lambda_visual_usage * loss_visual_usage
+        + lambda_temporal_attention_entropy * loss_temporal_attention_entropy
+        + loss_decoder_side_aux
+        + loss_total_concept
     )
 
-    return {
+    result = {
         "loss_total": loss_total,
         "loss_fid": fid_out["loss_fid"],
         "loss_patch_fid": fid_out["loss_patch_fid"],
@@ -1165,7 +1345,14 @@ def compute_total_loss(
         "loss_visual_entropy": loss_visual_entropy,
         "loss_visual_equiv": loss_visual_equiv,
         "loss_visual_usage": loss_visual_usage,
+        "loss_temporal_attention_entropy": loss_temporal_attention_entropy,
+        "loss_total_concept": loss_total_concept,
+        "loss_decoder_side_aux": loss_decoder_side_aux,
         "delta_target": fid_out["delta_target"],
         "target_patch_grid": fid_out["target_patch_grid"],
         "source_mixture_grid": fid_out["source_mixture_grid"],
     }
+    for key, value in side_loss_out.items():
+        if key != "loss_decoder_side_aux":
+            result[key] = value
+    return result
