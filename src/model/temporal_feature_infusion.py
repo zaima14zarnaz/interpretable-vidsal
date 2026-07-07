@@ -58,12 +58,12 @@ class Factorized3DResBlock(nn.Module):
         )
         self.pointwise = nn.Conv3d(dim, dim, kernel_size=1, bias=False)
         self.norm = nn.GroupNorm(groups, dim)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
 
         hidden = max(int(dim * mlp_ratio), dim)
         self.ffn = nn.Sequential(
             nn.Conv3d(dim, hidden, kernel_size=1, bias=True),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Dropout3d(dropout) if dropout > 0.0 else nn.Identity(),
             nn.Conv3d(hidden, dim, kernel_size=1, bias=True),
         )

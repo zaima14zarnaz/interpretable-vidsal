@@ -382,7 +382,7 @@ def _crop_or_pad_2d(
 
 
 class Conv3DGNAct(nn.Module):
-    """Conv3d + GroupNorm + GELU."""
+    """Conv3d + GroupNorm + ReLU."""
 
     def __init__(
         self,
@@ -403,14 +403,14 @@ class Conv3DGNAct(nn.Module):
             bias=False,
         )
         self.norm = nn.GroupNorm(groups, out_channels)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.act(self.norm(self.conv(x)))
 
 
 class Conv2DGNAct(nn.Module):
-    """Conv2d + GroupNorm + GELU."""
+    """Conv2d + GroupNorm + ReLU."""
 
     def __init__(
         self,
@@ -431,7 +431,7 @@ class Conv2DGNAct(nn.Module):
             bias=False,
         )
         self.norm = nn.GroupNorm(groups, out_channels)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.act(self.norm(self.conv(x)))
@@ -468,7 +468,7 @@ class Residual3DRefineBlock(nn.Module):
         )
         self.pointwise = nn.Conv3d(channels, channels, kernel_size=1, bias=False)
         self.norm = nn.GroupNorm(groups, channels)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
         self.dropout = nn.Dropout3d(dropout) if dropout > 0.0 else nn.Identity()
         self.layer_scale = nn.Parameter(
             torch.full((1, channels, 1, 1, 1), float(layer_scale_init))
@@ -501,7 +501,7 @@ class Residual2DRefineBlock(nn.Module):
         self.norm1 = nn.GroupNorm(groups, channels)
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.norm2 = nn.GroupNorm(groups, channels)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
         self.dropout = nn.Dropout2d(dropout) if dropout > 0.0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -537,7 +537,7 @@ class LearnedSpatialUpsample3D(nn.Module):
         )
         groups = _pick_3d_groups(channels)
         self.norm = nn.GroupNorm(groups, channels)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
         self.refine = Residual3DRefineBlock(channels, dropout=dropout)
 
     def forward(
@@ -619,7 +619,7 @@ class LearnedFinalUpsample2D(nn.Module):
 
 
 class ConvGNAct(nn.Module):
-    """Conv2d + GroupNorm + GELU."""
+    """Conv2d + GroupNorm + ReLU."""
 
     def __init__(
         self,
@@ -640,7 +640,7 @@ class ConvGNAct(nn.Module):
             bias=False,
         )
         self.norm = nn.GroupNorm(groups, out_channels)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.act(self.norm(self.conv(x)))
@@ -662,7 +662,7 @@ class ResidualRefineBlock(nn.Module):
         self.norm1 = nn.GroupNorm(groups, channels)
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.norm2 = nn.GroupNorm(groups, channels)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
         self.dropout = nn.Dropout2d(dropout) if dropout > 0.0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -908,7 +908,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
 
         self.temporal_weight_head = nn.Sequential(
             nn.Conv3d(decoder_channels, attn_hidden, kernel_size=1),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Conv3d(attn_hidden, 1, kernel_size=1),
         )
         self.temporal_context_gate = nn.Parameter(torch.tensor(-2.0))
