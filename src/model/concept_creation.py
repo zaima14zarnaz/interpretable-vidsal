@@ -1,9 +1,13 @@
 """
-Visual concept creation for explainable video saliency.
+Visual and motion concept creation for explainable video saliency.
 
-Assigns patch-level appearance concepts from normalized backbone features.
-Temporal transition/persistence concepts are disabled; legacy output keys are
-returned as None for compatibility with older training and decoding code.
+``VisualConceptCreation`` assigns patch-level appearance concepts from
+normalized backbone features. ``MotionConceptCreation`` learns motion/change-
+sensitive concepts from same-location feature deltas across a temporal window.
+
+Temporal transition/persistence concepts are disabled in the visual branch;
+legacy output keys are returned as None for compatibility with older training
+and decoding code.
 """
 
 from typing import Any, Dict, Optional, Tuple, Union
@@ -13,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class ConceptCreation(nn.Module):
+class VisualConceptCreation(nn.Module):
     """
     Patch-level visual concept assignment from backbone features.
 
@@ -619,3 +623,441 @@ class ConceptCreation(nn.Module):
             if off_diag.numel() > 0
             else 0.0,
         }
+
+
+class MotionConceptCreation(nn.Module):
+    """
+    Motion/change-sensitive concept assignment from spatiotemporal feature deltas.
+
+    Learns prototypes over same-location temporal differences in backbone
+    features ``[B, C, T, H, W]``. Unlike appearance concepts, motion concepts
+    summarize how features change across time at each spatial cell rather than
+    static patch appearance.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        concept_dim: int = 256,
+        num_motion_concepts: int = 32,
+        hidden_dim: int = 512,
+        assignment_temperature: float = 0.07,
+        assignment_mode: str = "straight_through",
+        diversity_margin: float = 0.2,
+        dropout: float = 0.2,
+        motionness_temperature: float = 2.0,
+        motionness_sparsity_weight: float = 0.01,
+        motion_recon_weight: float = 0.1,
+        motion_div_weight: float = 0.05,
+        motion_entropy_weight: float = 0.01,
+        motion_usage_weight: float = 0.02,
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.concept_dim = concept_dim
+        self.num_motion_concepts = num_motion_concepts
+        self.hidden_dim = hidden_dim
+        self.assignment_temperature = assignment_temperature
+        self.assignment_mode = assignment_mode
+        self.diversity_margin = diversity_margin
+        self.dropout_p = dropout
+        self.motionness_temperature = motionness_temperature
+        self.motionness_sparsity_weight = motionness_sparsity_weight
+        self.motion_recon_weight = motion_recon_weight
+        self.motion_div_weight = motion_div_weight
+        self.motion_entropy_weight = motion_entropy_weight
+        self.motion_usage_weight = motion_usage_weight
+
+        change_channels = 3 * in_channels
+        self.motion_encoder = nn.Sequential(
+            nn.Linear(change_channels, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, concept_dim),
+            nn.LayerNorm(concept_dim),
+        )
+        self.motion_concepts = nn.Parameter(
+            torch.randn(num_motion_concepts, concept_dim)
+        )
+
+        self._init_motion_concept_parameters()
+        self._grid_cache: Dict[Tuple[int, int, torch.device, torch.dtype], torch.Tensor] = {}
+        self._motion_meta_cache: Dict[Tuple[int, int, torch.device], Dict[str, torch.Tensor]] = {}
+
+    def _init_motion_concept_parameters(self) -> None:
+        with torch.no_grad():
+            self.motion_concepts.copy_(
+                F.normalize(self.motion_concepts, dim=-1)
+            )
+
+    @staticmethod
+    def _build_grid(H: int, W: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        """Normalized patch coordinates in [-1, 1], shape [H*W, 2]."""
+        ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=dtype)
+        xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=dtype)
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+        grid = torch.stack([xx, yy], dim=-1)
+        return grid.reshape(H * W, 2)
+
+    def _make_grid(self, H: int, W: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        key = (H, W, device, dtype)
+        cached = self._grid_cache.get(key)
+        if cached is None:
+            cached = self._build_grid(H, W, device, dtype)
+            self._grid_cache[key] = cached
+        return cached
+
+    def _motion_metadata_indices(
+        self,
+        B: int,
+        N: int,
+        device: torch.device,
+    ) -> Dict[str, torch.Tensor]:
+        key = (B, N, device)
+        cached = self._motion_meta_cache.get(key)
+        if cached is None:
+            patch_idx = torch.arange(N, device=device, dtype=torch.long)
+            cached = {
+                "batch_idx": torch.arange(B, device=device, dtype=torch.long).repeat_interleave(
+                    N
+                ),
+                "patch_idx": patch_idx.repeat(B),
+            }
+            self._motion_meta_cache[key] = cached
+        return cached
+
+    def _motion_diversity_loss(self) -> torch.Tensor:
+        """Encourage motion concept bank prototypes to stay diverse."""
+        bank_n = F.normalize(self.motion_concepts, dim=-1)
+        cos = bank_n @ bank_n.T
+        mask = ~torch.eye(cos.size(0), dtype=torch.bool, device=cos.device)
+        off_diag = cos[mask]
+        return F.relu(off_diag - self.diversity_margin).pow(2).mean()
+
+    def _compute_motion_assignments(
+        self, raw_similarity: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        """Differentiable motion concept assignment with optional straight-through hardening."""
+        if self.assignment_mode not in (
+            "straight_through",
+            "soft",
+            "hard_eval",
+        ):
+            raise ValueError(
+                "assignment_mode must be one of "
+                "'straight_through', 'soft', or 'hard_eval', "
+                f"got {self.assignment_mode!r}"
+            )
+
+        temperature = max(float(self.assignment_temperature), 1e-8)
+        motion_logits = raw_similarity / temperature
+        motion_probs = F.softmax(motion_logits, dim=-1)
+        motion_indices = motion_logits.argmax(dim=-1)
+        hard_one_hot = F.one_hot(
+            motion_indices,
+            num_classes=self.num_motion_concepts,
+        ).to(dtype=motion_probs.dtype)
+
+        if self.assignment_mode == "soft":
+            motion_activations = motion_probs
+        elif self.assignment_mode == "hard_eval" or not self.training:
+            motion_activations = hard_one_hot
+        else:
+            motion_activations = hard_one_hot - motion_probs.detach() + motion_probs
+
+        return {
+            "motion_logits": motion_logits,
+            "motion_probs": motion_probs,
+            "motion_activations": motion_activations,
+            "motion_indices": motion_indices,
+        }
+
+    def _motion_assignment_regularizers(
+        self,
+        motion_probs: torch.Tensor,
+        motionness_weights: torch.Tensor,
+        eps: float = 1e-8,
+    ) -> Dict[str, torch.Tensor]:
+        entropy = -(motion_probs * (motion_probs + eps).log()).sum(dim=-1).mean()
+        weights = motionness_weights.detach()
+        weight_sum = weights.sum() + eps
+        mean_usage = (motion_probs * weights.unsqueeze(-1)).sum(dim=0) / weight_sum
+        uniform = torch.full_like(mean_usage, 1.0 / mean_usage.numel())
+        loss_usage = F.kl_div(
+            (mean_usage + eps).log(),
+            uniform,
+            reduction="batchmean",
+        )
+        return {
+            "motion_assignment_entropy": entropy,
+            "motion_assignment_usage": mean_usage,
+            "loss_motion_assignment_usage": loss_usage,
+        }
+
+    def _compute_motionness_map(self, abs_delta: torch.Tensor) -> torch.Tensor:
+        """
+        Build a per-cell soft motionness map from absolute temporal deltas.
+
+        Args:
+            abs_delta: [B, C, T-1, H, W]
+
+        Returns:
+            motionness: [B, 1, H, W]
+        """
+        motion_energy = abs_delta.norm(dim=1).mean(dim=1, keepdim=True)
+        mean = motion_energy.mean(dim=(-2, -1), keepdim=True)
+        std = motion_energy.std(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
+        normalized_energy = (motion_energy - mean) / std
+        return torch.sigmoid(self.motionness_temperature * normalized_energy)
+
+    def _build_motion_concepts(
+        self, features: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Build motion concepts from same-location temporal feature differences.
+
+        Args:
+            features: [B, C, T, H, W] with T >= 2
+        """
+        B, C, T, H, W = features.shape
+        device = features.device
+        dtype = features.dtype
+        N = H * W
+
+        delta = features[:, :, 1:] - features[:, :, :-1]
+        abs_delta = delta.abs()
+
+        delta_mean = delta.mean(dim=2)
+        abs_delta_mean = abs_delta.mean(dim=2)
+        abs_delta_max = abs_delta.amax(dim=2)
+        change_summary = torch.cat(
+            [delta_mean, abs_delta_mean, abs_delta_max],
+            dim=1,
+        )
+
+        patch_vectors = change_summary.permute(0, 2, 3, 1).reshape(B * N, 3 * C)
+        q_motion = self.motion_encoder(patch_vectors)
+        q_motion = F.normalize(q_motion, dim=-1)
+
+        c_motion = F.normalize(self.motion_concepts, dim=-1)
+        raw_similarity = q_motion @ c_motion.T
+        assignment_out = self._compute_motion_assignments(raw_similarity)
+        motion_logits = assignment_out["motion_logits"]
+        motion_probs = assignment_out["motion_probs"]
+        motion_indices = assignment_out["motion_indices"]
+        motion_activations = assignment_out["motion_activations"]
+
+        motion_repr = motion_activations @ c_motion
+        motion_repr = F.normalize(motion_repr, dim=-1)
+
+        motionness_map = self._compute_motionness_map(abs_delta)
+        motionness_flat = motionness_map.reshape(B * N, 1)
+        motion_repr = F.normalize(motion_repr * motionness_flat + 1e-6, dim=-1)
+
+        reg_out = self._motion_assignment_regularizers(motion_probs, motionness_flat.squeeze(-1))
+
+        grid = self._make_grid(H, W, device, dtype)
+        meta_idx = self._motion_metadata_indices(B, N, device)
+        patch_idx = meta_idx["patch_idx"]
+        patch_coords = grid[patch_idx]
+
+        motion_metadata: Dict[str, Any] = {
+            "batch_idx": meta_idx["batch_idx"],
+            "patch_idx": patch_idx,
+            "patch_coords": patch_coords,
+            "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
+        }
+
+        return {
+            "motion_patch_embeddings": q_motion,
+            "motion_concept_representation": motion_repr,
+            "motion_activations": motion_activations,
+            "motion_concept_logits": motion_logits,
+            "motion_concept_indices": motion_indices,
+            "motion_assignment_probs": motion_probs,
+            "motion_assignment_entropy": reg_out["motion_assignment_entropy"],
+            "motion_assignment_usage": reg_out["motion_assignment_usage"],
+            "loss_motion_assignment_usage": reg_out["loss_motion_assignment_usage"],
+            "motionness_map": motionness_map,
+            "motion_metadata": motion_metadata,
+        }
+
+    def _motion_reconstruction_loss(
+        self,
+        motion_patch_embeddings: torch.Tensor,
+        motion_activations: torch.Tensor,
+        motionness_weights: torch.Tensor,
+        eps: float = 1e-8,
+    ) -> torch.Tensor:
+        c_motion = F.normalize(self.motion_concepts, dim=-1)
+        recon = motion_activations @ c_motion
+        per_patch_loss = 1.0 - F.cosine_similarity(
+            recon, motion_patch_embeddings, dim=-1
+        )
+        weights = motionness_weights.detach()
+        return (per_patch_loss * weights).sum() / (weights.sum() + eps)
+
+    def _build_empty_motion_output(
+        self, features: torch.Tensor
+    ) -> Dict[str, Any]:
+        """
+        Zero / uniform motion outputs for inference when T < 2.
+
+        Temporal deltas are undefined, so representations are zeros and
+        assignment tensors default to a uniform distribution.
+        """
+        B, C, T, H, W = features.shape
+        device = features.device
+        dtype = features.dtype
+        N = H * W
+        K = self.num_motion_concepts
+        num_patches = B * N
+
+        uniform = torch.full((num_patches, K), 1.0 / K, device=device, dtype=dtype)
+        zeros_patch = torch.zeros(num_patches, self.concept_dim, device=device, dtype=dtype)
+        zeros_logits = torch.zeros(num_patches, K, device=device, dtype=dtype)
+        indices = torch.zeros(num_patches, device=device, dtype=torch.long)
+        motionness_map = torch.zeros(B, 1, H, W, device=device, dtype=dtype)
+        usage = torch.full((K,), 1.0 / K, device=device, dtype=dtype)
+        entropy = torch.zeros((), device=device, dtype=dtype)
+        loss_usage = torch.zeros((), device=device, dtype=dtype)
+
+        grid = self._make_grid(H, W, device, dtype)
+        meta_idx = self._motion_metadata_indices(B, N, device)
+        patch_idx = meta_idx["patch_idx"]
+        patch_coords = grid[patch_idx]
+
+        motion_metadata: Dict[str, Any] = {
+            "batch_idx": meta_idx["batch_idx"],
+            "patch_idx": patch_idx,
+            "patch_coords": patch_coords,
+            "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
+        }
+
+        return {
+            "motion_patch_embeddings": zeros_patch,
+            "motion_concept_representation": zeros_patch,
+            "motion_activations": uniform,
+            "motion_concept_logits": zeros_logits,
+            "motion_concept_indices": indices,
+            "motion_assignment_probs": uniform,
+            "motion_assignment_entropy": entropy,
+            "motion_assignment_usage": usage,
+            "loss_motion_assignment_usage": loss_usage,
+            "motionness_map": motionness_map,
+            "motion_metadata": motion_metadata,
+        }
+
+    def _zero_motion_losses(self, reference: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """Zero-valued motion losses for the T < 2 inference fallback."""
+        zero = reference.sum() * 0.0
+        return {
+            "loss_motion": zero,
+            "loss_motion_div": zero,
+            "loss_motion_assignment_entropy": zero,
+            "loss_motion_assignment_usage": zero,
+            "loss_motionness_sparsity": zero,
+            "loss_total_motion_concept": zero,
+        }
+
+    def _compute_motion_losses(
+        self, motion_out: Dict[str, Any]
+    ) -> Dict[str, torch.Tensor]:
+        B = int(motion_out["motion_metadata"]["feature_shape"]["B"])
+        H = int(motion_out["motion_metadata"]["feature_shape"]["H"])
+        W = int(motion_out["motion_metadata"]["feature_shape"]["W"])
+        motionness_weights = motion_out["motionness_map"].reshape(B * H * W)
+
+        loss_motion = self._motion_reconstruction_loss(
+            motion_out["motion_patch_embeddings"],
+            motion_out["motion_activations"],
+            motionness_weights,
+        )
+        loss_motion_div = self._motion_diversity_loss()
+        loss_motion_assignment_entropy = motion_out["motion_assignment_entropy"]
+        loss_motion_assignment_usage = motion_out["loss_motion_assignment_usage"]
+        loss_motionness_sparsity = motion_out["motionness_map"].mean()
+
+        return {
+            "loss_motion": loss_motion,
+            "loss_motion_div": loss_motion_div,
+            "loss_motion_assignment_entropy": loss_motion_assignment_entropy,
+            "loss_motion_assignment_usage": loss_motion_assignment_usage,
+            "loss_motionness_sparsity": loss_motionness_sparsity,
+            "loss_total_motion_concept": (
+                self.motion_recon_weight * loss_motion
+                + self.motion_div_weight * loss_motion_div
+                + self.motion_entropy_weight * loss_motion_assignment_entropy
+                + self.motion_usage_weight * loss_motion_assignment_usage
+                + self.motionness_sparsity_weight * loss_motionness_sparsity
+            ),
+        }
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        return_losses: bool = True,
+        collect_debug: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Args:
+            features: [B, C, T, H, W] backbone features.
+            return_losses: whether to compute motion concept auxiliary losses.
+            collect_debug: reserved for future diagnostics (currently ignored).
+
+        Returns:
+            Motion concept outputs and optional ``losses`` dict.
+        """
+        del collect_debug
+
+        if features.dim() != 5:
+            raise ValueError(
+                f"features must be [B,C,T,H,W], got shape {tuple(features.shape)}"
+            )
+
+        T = features.size(2)
+        if T < 2:
+            if self.training:
+                raise ValueError(
+                    f"Need T>=2 for motion concepts during training, got T={T}"
+                )
+            motion_out = self._build_empty_motion_output(features)
+            losses: Dict[str, torch.Tensor] = (
+                self._zero_motion_losses(features) if return_losses else {}
+            )
+            return {
+                "motion_patch_embeddings": motion_out["motion_patch_embeddings"],
+                "motion_concept_representation": motion_out["motion_concept_representation"],
+                "motion_activations": motion_out["motion_activations"],
+                "motion_concept_logits": motion_out["motion_concept_logits"],
+                "motion_concept_indices": motion_out["motion_concept_indices"],
+                "motion_assignment_probs": motion_out["motion_assignment_probs"],
+                "motion_assignment_entropy": motion_out["motion_assignment_entropy"],
+                "motion_assignment_usage": motion_out["motion_assignment_usage"],
+                "motionness_map": motion_out["motionness_map"],
+                "motion_metadata": motion_out["motion_metadata"],
+                "losses": losses,
+            }
+
+        motion_out = self._build_motion_concepts(features)
+        losses = self._compute_motion_losses(motion_out) if return_losses else {}
+
+        return {
+            "motion_patch_embeddings": motion_out["motion_patch_embeddings"],
+            "motion_concept_representation": motion_out["motion_concept_representation"],
+            "motion_activations": motion_out["motion_activations"],
+            "motion_concept_logits": motion_out["motion_concept_logits"],
+            "motion_concept_indices": motion_out["motion_concept_indices"],
+            "motion_assignment_probs": motion_out["motion_assignment_probs"],
+            "motion_assignment_entropy": motion_out["motion_assignment_entropy"],
+            "motion_assignment_usage": motion_out["motion_assignment_usage"],
+            "motionness_map": motion_out["motionness_map"],
+            "motion_metadata": motion_out["motion_metadata"],
+            "losses": losses,
+        }
+
+
+# Backward-compatible alias for existing imports.
+ConceptCreation = VisualConceptCreation

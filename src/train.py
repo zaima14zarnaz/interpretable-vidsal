@@ -58,7 +58,7 @@ CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
 MAP_SAVE_INTERVAL = 500
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
-MAX_SAMPLES = 500
+MAX_SAMPLES = 1000
 USE_AMP = True
 
 # Concept-branch switches. Set either branch to False for ablations.
@@ -120,8 +120,8 @@ LOSS_LAMBDA = {
     "lambda_gate": 0.0,
 
     # Temporarily reduce visual regularizers
-    "lambda_visual_entropy": 0.02,
-    "lambda_visual_usage": 0.05,
+    "lambda_visual_entropy": 0.005,
+    "lambda_visual_usage": 0.1,
     "lambda_visual_equiv": 0.02,
     "lambda_temporal_attention_entropy": 0.0,
 
@@ -573,6 +573,61 @@ def _print_gate_debug(
         )
 
 
+def _print_decoder_concept_gate_debug(
+    model: ExplainableVidSalModel,
+    model_out: dict,
+) -> None:
+    """Print learnable and spatial decoder gate values for visual/motion concepts."""
+    decoder = getattr(model, "saliency_prediction", None)
+    if decoder is None:
+        print("DEBUG decoder gates: no saliency_prediction module found")
+        return
+
+    pred_out = model_out.get("prediction_out")
+    stage_gates = pred_out.get("stage_gates") if isinstance(pred_out, dict) else None
+
+    fusion_blocks = getattr(decoder, "fusion_blocks", None)
+    if fusion_blocks is not None:
+        for stage, block in fusion_blocks.items():
+            msg = f"DEBUG decoder visual FiLM [{stage}]"
+            if isinstance(stage_gates, dict) and stage in stage_gates:
+                gamma = stage_gates[stage].detach().float()
+                gamma_mean = float(gamma.mean().cpu())
+                gamma_std = float(gamma.std().cpu())
+                gamma_min = float(gamma.min().cpu())
+                gamma_max = float(gamma.max().cpu())
+                msg += (
+                    f" | film_gamma mean/std/min/max="
+                    f"{gamma_mean:.4f}/{gamma_std:.4f}/{gamma_min:.4f}/{gamma_max:.4f}"
+                )
+            else:
+                msg += (
+                    " | film_gamma=unavailable "
+                    "(pass return_decoder_diagnostics=True)"
+                )
+            print(msg)
+
+    motion_stages = getattr(decoder, "motion_concept_stages", ("stage3",))
+    logit_scales = getattr(decoder, "motion_concept_logit_scales", None)
+    if logit_scales is not None:
+        for motion_stage in motion_stages:
+            if motion_stage not in logit_scales:
+                continue
+            logit_scale = logit_scales[motion_stage]
+            raw_scale = float(logit_scale.detach().cpu())
+            motion_scale = float(torch.sigmoid(logit_scale.detach()).cpu())
+            print(
+                f"DEBUG decoder motion gate [{motion_stage}] | "
+                f"motion_concept_logit_scale={raw_scale:.6f} | "
+                f"motion_scale=sigmoid(logit)={motion_scale:.6f}"
+            )
+    elif getattr(model, "motion_concepts_on", False):
+        print(
+            "DEBUG decoder motion gate: motion concepts enabled but "
+            "motion_concept_logit_scales not found"
+        )
+
+
 def _print_visual_concept_usage_debug(model_out: dict, top_n: int = 10) -> None:
     concept_out = model_out.get("concept_out")
     if not isinstance(concept_out, dict):
@@ -681,6 +736,7 @@ def train_one_epoch(
                 saliency_maps=sal_batch,
                 return_details=True,
                 return_concept_losses=_return_concept_losses(),
+                return_decoder_diagnostics=(batch_idx == 0),
             )
 
             if _should_run_visual_equiv(model, epoch):
@@ -690,11 +746,13 @@ def train_one_epoch(
                     saliency_maps=sal_batch,
                     return_details=True,
                     return_concept_losses=_return_concept_losses(),
+                    return_decoder_diagnostics=False,
                 )
 
             if batch_idx == 0:
                 _print_first_batch_debug(model_out, sal_batch)
                 _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
+                _print_decoder_concept_gate_debug(model, model_out)
                 _print_visual_concept_usage_debug(model_out)
 
             if batch_idx % MAP_SAVE_INTERVAL == 0:
@@ -830,7 +888,10 @@ def validate_one_epoch(
                 saliency_maps=sal_batch,
                 return_details=True,
                 return_concept_losses=_return_concept_losses(),
+                return_decoder_diagnostics=(batch_idx == 0),
             )
+            if batch_idx == 0:
+                _print_decoder_concept_gate_debug(model, model_out)
             if batch_idx % MAP_SAVE_INTERVAL == 0:
                 save_batch_maps(
                     model_out,
@@ -933,7 +994,7 @@ def main() -> None:
         concept_dim=128,
         num_concepts=512,
         concept_hidden_dim=256,
-        saliency_hidden_dim=96,
+        saliency_hidden_dim=128,
         top_k=3,
         max_source_patches=64,
         tau_pi=0.5,
@@ -955,6 +1016,7 @@ def main() -> None:
         temporal_concepts_on=TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
+        num_motion_concepts=128,
     ).to(device)
 
     with torch.no_grad():
@@ -1129,11 +1191,13 @@ def _run_overfit_one_batch(
             saliency_maps=sal_batch,
             return_details=True,
             return_concept_losses=_return_concept_losses(),
+            return_decoder_diagnostics=True,
         )
         if step == 1:
             save_first_batch_maps(model_out, sal_batch, fix_batch, rgb_batch, output_dir)
             _print_first_batch_debug(model_out, sal_batch)
             _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
+            _print_decoder_concept_gate_debug(model, model_out)
 
         loss_dict = _compute_batch_loss(model_out, sal_batch, fix_batch=fix_batch)
         loss = loss_dict["loss_total"]

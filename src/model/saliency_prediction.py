@@ -1,9 +1,10 @@
 """
-Concept-gated multi-scale spatiotemporal saliency decoder for the last frame in a window.
+Concept-guided FiLM-and-mask multi-scale spatiotemporal saliency decoder for the last frame in a window.
 
 Stages are decoded coarse-to-fine (stage4 -> stage1). Each stage fuses full
-[B, C, T, H, W] feature and concept volumes, aggregates over time with learned
-attention, and upsamples with learned conv-transpose blocks.
+[B, C, T, H, W] feature and concept volumes through FiLM modulation and
+concept-derived feature masking, aggregates over time with learned attention,
+and upsamples with learned conv-transpose blocks.
 """
 
 from __future__ import annotations
@@ -183,6 +184,76 @@ def _build_stage_concept_volume(
             f"{_metadata_feature_shape_repr(visual_metadata if isinstance(visual_metadata, dict) else None)}"
         )
     return concept_volume
+
+
+def _build_motion_concept_volume(
+    concept_out: Dict[str, Any],
+    *,
+    stage: str = "unknown",
+) -> Optional[torch.Tensor]:
+    """
+    Build [B, concept_dim, T, H, W] motion concept volume for one stage.
+
+    Motion representations are spatial maps repeated across time because motion
+    concepts summarize temporal change at each cell rather than per-frame appearance.
+    """
+    motion_repr = concept_out.get("motion_concept_representation")
+    motion_metadata = concept_out.get("motion_metadata")
+    if not torch.is_tensor(motion_repr) or not isinstance(motion_metadata, dict):
+        return None
+    if "feature_shape" not in motion_metadata:
+        return None
+
+    try:
+        B, _, T, H, W = _feature_shape_from_metadata(motion_metadata)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ValueError(
+            f"Invalid motion_metadata['feature_shape'] at {stage}: "
+            f"{_metadata_feature_shape_repr(motion_metadata)}"
+        ) from exc
+
+    if motion_repr.dim() == 2:
+        expected = B * H * W
+        if motion_repr.shape[0] != expected:
+            raise ValueError(
+                f"motion_concept_representation length mismatch at {stage}: "
+                f"expected {expected} (=B*H*W from feature_shape "
+                f"{_metadata_feature_shape_repr(motion_metadata)}), "
+                f"got {motion_repr.shape[0]}"
+            )
+        concept_dim = motion_repr.shape[-1]
+        motion_map = (
+            motion_repr.reshape(B, H, W, concept_dim)
+            .permute(0, 3, 1, 2)
+            .contiguous()
+        )
+    elif motion_repr.dim() == 4:
+        if motion_repr.shape[0] != B:
+            raise ValueError(
+                f"motion_concept_representation batch mismatch at {stage}: "
+                f"expected B={B} from motion_metadata, got {motion_repr.shape[0]}"
+            )
+        concept_dim = motion_repr.shape[1]
+        if motion_repr.shape[-2:] != (H, W):
+            raise ValueError(
+                f"motion_concept_representation spatial mismatch at {stage}: "
+                f"expected H,W=({H},{W}) from motion_metadata, "
+                f"got {tuple(motion_repr.shape[-2:])}"
+            )
+        motion_map = motion_repr
+    else:
+        raise ValueError(
+            f"motion_concept_representation at {stage} must be "
+            f"[B*H*W, concept_dim] or [B, concept_dim, H, W], "
+            f"got shape {tuple(motion_repr.shape)}"
+        )
+
+    motion_volume = (
+        motion_map.unsqueeze(2)
+        .expand(B, concept_dim, T, H, W)
+        .contiguous()
+    )
+    return motion_volume
 
 
 def _assert_concept_volume_matches_features(
@@ -675,11 +746,12 @@ class ResidualRefineBlock(nn.Module):
 
 class ConceptGatedFusionBlock(nn.Module):
     """
-    Feature-first fusion block with concept-guided modulation.
+    Feature-first 2D fusion with concept-guided FiLM modulation and masking.
 
-    Dense backbone features form the base signal; visual concept maps modulate
-    them through FiLM and a gated concept-guidance term. An optional coarser
-    decoder map from a previous stage is added with a learnable scale.
+    Dense features form the base signal. Concept maps first modulate dense
+    features through FiLM, then produce a soft concept mask that suppresses
+    or enhances concept-conditioned feature responses. Previous decoder features
+    are added afterward.
     """
 
     def __init__(
@@ -711,18 +783,17 @@ class ConceptGatedFusionBlock(nn.Module):
             kernel_size=1,
             padding=0,
         )
-        self.gate_conv = nn.Conv2d(
-            decoder_channels * 3,
-            decoder_channels,
-            kernel_size=3,
-            padding=1,
-        )
         self.film = nn.Conv2d(decoder_channels, decoder_channels * 2, kernel_size=1)
+        self.mask_head = nn.Conv2d(
+            decoder_channels,
+            decoder_channels,
+            kernel_size=1,
+        )
         self.refine1 = ResidualRefineBlock(decoder_channels, dropout=dropout)
         self.refine2 = ResidualRefineBlock(decoder_channels, dropout=dropout)
 
-        self.concept_scale = nn.Parameter(torch.tensor(0.25))
         self.prev_scale = nn.Parameter(torch.tensor(1.0))
+        self.mask_strength_logit = nn.Parameter(torch.tensor(0.0))
 
     def forward(
         self,
@@ -750,24 +821,27 @@ class ConceptGatedFusionBlock(nn.Module):
         beta = 0.1 * beta
         feature_proj = feature_proj * gamma + beta
 
-        gate = torch.sigmoid(
-            self.gate_conv(torch.cat([feature_proj, concept_proj, prev_up], dim=1))
-        )
+        mask_strength = 2.0 * torch.sigmoid(self.mask_strength_logit)
+        concept_mask = torch.sigmoid(self.mask_head(concept_proj))
+        mask_scale = 1.0 + mask_strength * (concept_mask - 0.5)
+        feature_proj = feature_proj * mask_scale
 
-        fused = feature_proj + self.concept_scale * gate * concept_proj
+        fused = feature_proj
         if prev_decoder is not None:
             fused = fused + self.prev_scale * prev_up
 
         decoded = self.refine2(self.refine1(fused))
-        return decoded, gate
+        return decoded, concept_mask
 
 
 class SpatioTemporalConceptGatedFusionBlock(nn.Module):
     """
-    Spatiotemporal feature-first fusion over [B, C, T, H, W] volumes.
+    Feature-first 3D fusion over [B, C, T, H, W] volumes.
 
-    Fuses full temporal backbone features and concept volumes with optional
-    learned upsampling of a coarser previous decoder volume.
+    Dense features form the base signal. Concept volumes first modulate dense
+    features through FiLM, then produce a soft concept mask that suppresses
+    or enhances concept-conditioned feature responses. A coarser previous decoder
+    volume may be upsampled and added afterward.
     """
 
     def __init__(
@@ -802,18 +876,18 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             scale_factor=2,
             dropout=dropout,
         )
-        self.gate_conv = nn.Conv3d(
-            decoder_channels * 3,
-            decoder_channels,
-            kernel_size=3,
-            padding=1,
-        )
         self.film = nn.Conv3d(decoder_channels, decoder_channels * 2, kernel_size=1)
+        self.mask_head = nn.Conv3d(
+            decoder_channels,
+            decoder_channels,
+            kernel_size=1,
+        )
         self.refine1 = Residual3DRefineBlock(decoder_channels, dropout=dropout)
         self.refine2 = Residual3DRefineBlock(decoder_channels, dropout=dropout)
 
-        self.concept_scale = nn.Parameter(torch.tensor(0.25))
         self.prev_scale = nn.Parameter(torch.tensor(1.0))
+        # Initialized to 0.0 so sigmoid(0)*2 = 1.0; bounds mask strength in (0, 2).
+        self.mask_strength_logit = nn.Parameter(torch.tensor(0.0))
 
     def forward(
         self,
@@ -833,29 +907,35 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         else:
             prev_up = torch.zeros_like(feature_proj)
 
+        # FiLM modulates feature channels using concept evidence.
         film_params = self.film(concept_proj)
         gamma, beta = film_params.chunk(2, dim=1)
         gamma = 1.0 + 0.1 * torch.tanh(gamma)
         beta = 0.1 * beta
         feature_proj = feature_proj * gamma + beta
 
-        gate = torch.sigmoid(
-            self.gate_conv(torch.cat([feature_proj, concept_proj, prev_up], dim=1))
-        )
+        # The concept mask directly controls which concept-conditioned feature
+        # responses are suppressed or enhanced. This is mandatory and is the only
+        # feature fusion path; do not add back gated additive concept injection.
+        mask_strength = 2.0 * torch.sigmoid(self.mask_strength_logit)
+        concept_mask = torch.sigmoid(self.mask_head(concept_proj))
+        mask_scale = 1.0 + mask_strength * (concept_mask - 0.5)
+        feature_proj = feature_proj * mask_scale
 
-        fused = feature_proj + self.concept_scale * gate * concept_proj
+        fused = feature_proj
         if prev_decoder is not None:
             fused = fused + self.prev_scale * prev_up
 
         decoded = self.refine2(self.refine1(fused))
-        return decoded, gate
+        return decoded, concept_mask
 
 
 class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
     """
-    Coarse-to-fine spatiotemporal concept-gated decoder.
+    Coarse-to-fine spatiotemporal concept-guided FiLM-and-mask decoder.
 
-    Fuses full [B, C, T, H, W] feature and concept volumes per stage, aggregates
+    Fuses full [B, C, T, H, W] feature and concept volumes per stage through
+    concept-guided FiLM modulation and concept-derived feature masking, aggregates
     temporally with learned attention, and upsamples with learned conv transpose
     blocks to the output image resolution.
     """
@@ -871,6 +951,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         output_activation: str = "sigmoid",
         temporal_aggregation: str = "learned_all_frames",
         use_side_logit_fusion: bool = True,
+        motion_concept_stages: Tuple[str, ...] = ("stage3",),
     ):
         super().__init__()
         del feature_residual_scale, tau_pi
@@ -954,6 +1035,29 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         side_fusion_init = torch.full((num_logits,), -2.0)
         side_fusion_init[0] = 4.0
         self.side_fusion_logits = nn.Parameter(side_fusion_init)
+
+        motion_concept_stages = tuple(
+            stage for stage in motion_concept_stages if stage != "stage4"
+        )
+        allowed_motion_stages = {"stage3"}
+        invalid_motion_stages = set(motion_concept_stages) - allowed_motion_stages
+        if invalid_motion_stages:
+            raise ValueError(
+                "Only stage3 motion concept fusion is currently supported. "
+                f"Got invalid stages: {sorted(invalid_motion_stages)}"
+            )
+        self.motion_concept_stages = motion_concept_stages
+        self.motion_concept_logit_scales = nn.ParameterDict(
+            {
+                stage: nn.Parameter(torch.tensor(-1.0))
+                for stage in self.motion_concept_stages
+            }
+        )
+        self.motion_concept_stage = (
+            self.motion_concept_stages[0]
+            if len(self.motion_concept_stages) > 0
+            else "stage3"
+        )
 
     def _fuse_main_and_side_logits(
         self,
@@ -1059,7 +1163,16 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             {} if return_details else None
         )
         stage_gates: Optional[Dict[str, torch.Tensor]] = {} if return_details else None
+        stage_concept_masks: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_mask_diagnostics: Optional[Dict[str, Dict[str, float]]] = (
+            {} if return_details else None
+        )
         decoded_stage_volumes: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_motion_concept_volumes: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
         side_saliency_logits: Dict[str, torch.Tensor] = {}
@@ -1085,6 +1198,27 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 features_5d,
                 stage=stage,
             )
+
+            motion_volume: Optional[torch.Tensor] = None
+            # Motion concepts are intentionally fused only at stage3.
+            # Stage4 motion fusion was tested and removed because it hurt performance.
+            # Stage4 visual/backbone features are still decoded normally.
+            if stage == "stage3" and stage in self.motion_concept_stages:
+                motion_volume = _build_motion_concept_volume(
+                    concept_outs[stage],
+                    stage=stage,
+                )
+                if motion_volume is not None:
+                    motion_volume = _align_concept_volume_to_features(
+                        motion_volume,
+                        features_5d,
+                        stage=stage,
+                    )
+                    motion_scale = torch.sigmoid(
+                        self.motion_concept_logit_scales[stage]
+                    )
+                    concept_volume = concept_volume + motion_scale * motion_volume
+
             _assert_concept_volume_matches_features(
                 stage=stage,
                 concept_volume=concept_volume,
@@ -1092,7 +1226,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 concept_out=concept_outs[stage],
             )
 
-            decoded, gate = fusion_blocks[stage](
+            decoded, concept_mask = fusion_blocks[stage](
                 features_5d,
                 concept_volume,
                 prev_decoder=prev_decoder,
@@ -1112,8 +1246,32 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             if return_details:
                 stage_concept_volumes[stage] = concept_volume.detach()
                 stage_feature_volumes[stage] = features_5d.detach()
-                stage_gates[stage] = gate.detach()
+                stage_concept_masks[stage] = concept_mask.detach()
+                # stage_gates is kept for backward compatibility, but it now stores
+                # the concept-derived feature mask. Prefer stage_concept_masks.
+                stage_gates[stage] = concept_mask.detach()
                 decoded_stage_volumes[stage] = decoded.detach()
+                with torch.no_grad():
+                    mask_strength = 2.0 * torch.sigmoid(
+                        fusion_blocks[stage].mask_strength_logit
+                    )
+                    stage_mask_diagnostics[stage] = {
+                        "concept_mask_mean": float(
+                            concept_mask.detach().mean().cpu()
+                        ),
+                        "concept_mask_std": float(
+                            concept_mask.detach().std().cpu()
+                        ),
+                        "concept_mask_min": float(
+                            concept_mask.detach().min().cpu()
+                        ),
+                        "concept_mask_max": float(
+                            concept_mask.detach().max().cpu()
+                        ),
+                        "mask_strength": float(mask_strength.detach().cpu()),
+                    }
+                if motion_volume is not None:
+                    stage_motion_concept_volumes[stage] = motion_volume.detach()
 
         if prev_decoder is None:
             raise RuntimeError("Decoder produced no stage outputs")
@@ -1164,6 +1322,9 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             out["stage_concept_volumes"] = stage_concept_volumes
             out["stage_feature_volumes"] = stage_feature_volumes
             out["stage_gates"] = stage_gates
+            out["stage_concept_masks"] = stage_concept_masks
+            out["stage_mask_diagnostics"] = stage_mask_diagnostics
             out["decoded_stage_volumes"] = decoded_stage_volumes
+            out["stage_motion_concept_volumes"] = stage_motion_concept_volumes
 
         return out
