@@ -632,7 +632,9 @@ class MotionConceptCreation(nn.Module):
     Learns prototypes over same-location temporal differences in backbone
     features ``[B, C, T, H, W]``. Unlike appearance concepts, motion concepts
     summarize how features change across time at each spatial cell rather than
-    static patch appearance.
+    static patch appearance. The encoder consumes the ordered concatenation of
+    every signed consecutive difference (fixed window ``temporal_window_size``),
+    preserving direction and transition order.
     """
 
     def __init__(
@@ -651,8 +653,16 @@ class MotionConceptCreation(nn.Module):
         motion_div_weight: float = 0.05,
         motion_entropy_weight: float = 0.01,
         motion_usage_weight: float = 0.02,
+        temporal_window_size: int = 8,
     ):
         super().__init__()
+
+        if int(temporal_window_size) < 2:
+            raise ValueError(
+                "temporal_window_size must be >= 2 (ordered difference "
+                f"concatenation needs at least one transition), got "
+                f"{temporal_window_size!r}"
+            )
 
         self.in_channels = in_channels
         self.concept_dim = concept_dim
@@ -668,8 +678,11 @@ class MotionConceptCreation(nn.Module):
         self.motion_div_weight = motion_div_weight
         self.motion_entropy_weight = motion_entropy_weight
         self.motion_usage_weight = motion_usage_weight
+        # Fixed temporal window: the encoder input packs every signed consecutive
+        # difference in order, so its dimension depends on T (== window size).
+        self.temporal_window_size = int(temporal_window_size)
 
-        change_channels = 3 * in_channels
+        change_channels = (self.temporal_window_size - 1) * in_channels
         self.motion_encoder = nn.Sequential(
             nn.Linear(change_channels, hidden_dim),
             nn.GELU(),
@@ -826,20 +839,30 @@ class MotionConceptCreation(nn.Module):
         dtype = features.dtype
         N = H * W
 
-        delta = features[:, :, 1:] - features[:, :, :-1]
+        if T != self.temporal_window_size:
+            raise ValueError(
+                f"MotionConceptCreation was configured for "
+                f"T={self.temporal_window_size}, but received T={T}. "
+                "Ordered difference concatenation requires a fixed window length."
+            )
+
+        delta = features[:, :, 1:] - features[:, :, :-1]  # [B, C, T-1, H, W]
+        # abs_delta is still required by the motionness computation below.
         abs_delta = delta.abs()
 
-        delta_mean = delta.mean(dim=2)
-        abs_delta_mean = abs_delta.mean(dim=2)
-        abs_delta_max = abs_delta.amax(dim=2)
-        change_summary = torch.cat(
-            [delta_mean, abs_delta_mean, abs_delta_max],
-            dim=1,
-        )
+        # Preserve temporal order: concatenate every signed consecutive difference
+        # per patch as [delta_0, delta_1, ..., delta_(T-2)], each delta_t holding
+        # all C channels for transition t -> t+1. No averaging/sum/max-pooling.
+        ordered_delta = (
+            delta.permute(0, 3, 4, 2, 1)
+            .contiguous()
+            .reshape(B * N, (T - 1) * C)
+        )  # [B*H*W, (T-1)*C]
+        assert ordered_delta.shape == (B * N, (T - 1) * C)
 
-        patch_vectors = change_summary.permute(0, 2, 3, 1).reshape(B * N, 3 * C)
-        q_motion = self.motion_encoder(patch_vectors)
+        q_motion = self.motion_encoder(ordered_delta)
         q_motion = F.normalize(q_motion, dim=-1)
+        assert q_motion.shape == (B * N, self.concept_dim)
 
         c_motion = F.normalize(self.motion_concepts, dim=-1)
         raw_similarity = q_motion @ c_motion.T

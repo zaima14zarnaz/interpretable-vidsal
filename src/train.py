@@ -58,7 +58,7 @@ CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
 MAP_SAVE_INTERVAL = 500
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
-MAX_SAMPLES = 1000
+MAX_SAMPLES = 500
 USE_AMP = True
 
 # Concept-branch switches. Set either branch to False for ablations.
@@ -994,7 +994,7 @@ def main() -> None:
         concept_dim=128,
         num_concepts=512,
         concept_hidden_dim=256,
-        saliency_hidden_dim=128,
+        saliency_hidden_dim=256,
         top_k=3,
         max_source_patches=64,
         tau_pi=0.5,
@@ -1017,6 +1017,9 @@ def main() -> None:
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
         num_motion_concepts=128,
+        # Video Swin halves the temporal dim (patch stride 2), so the motion
+        # module sees WINDOW_LEN // 2 frames at the backbone stages.
+        motion_temporal_window_size=WINDOW_LEN // 2,
     ).to(device)
 
     with torch.no_grad():

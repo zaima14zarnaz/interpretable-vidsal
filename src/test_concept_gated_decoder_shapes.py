@@ -175,6 +175,8 @@ def test_full_model_forward(
         return_details=True,
         visual_concept_on=True,
         temporal_concepts_on=True,
+        # Video Swin halves the temporal dim, so stage features have T // 2 frames.
+        motion_temporal_window_size=max(T // 2, 2),
     )
     model.eval()
 
@@ -347,6 +349,8 @@ def test_full_model_forward_non_square(
         return_details=True,
         visual_concept_on=True,
         temporal_concepts_on=True,
+        # Video Swin halves the temporal dim, so stage features have T // 2 frames.
+        motion_temporal_window_size=max(T // 2, 2),
     )
     model.eval()
 
