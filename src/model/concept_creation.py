@@ -632,9 +632,9 @@ class MotionConceptCreation(nn.Module):
     Learns prototypes over same-location temporal differences in backbone
     features ``[B, C, T, H, W]``. Unlike appearance concepts, motion concepts
     summarize how features change across time at each spatial cell rather than
-    static patch appearance. The encoder consumes the ordered concatenation of
-    every signed consecutive difference (fixed window ``temporal_window_size``),
-    preserving direction and transition order.
+    static patch appearance. An LSTM consumes the ordered sequence of signed
+    consecutive differences per patch, preserving direction and transition order
+    while supporting variable temporal lengths (``T >= 2``).
     """
 
     def __init__(
@@ -653,16 +653,17 @@ class MotionConceptCreation(nn.Module):
         motion_div_weight: float = 0.05,
         motion_entropy_weight: float = 0.01,
         motion_usage_weight: float = 0.02,
-        temporal_window_size: int = 8,
+        lstm_hidden_dim: int = 256,
+        lstm_num_layers: int = 1,
+        lstm_bidirectional: bool = False,
+        lstm_dropout: float = 0.0,
     ):
         super().__init__()
 
-        if int(temporal_window_size) < 2:
-            raise ValueError(
-                "temporal_window_size must be >= 2 (ordered difference "
-                f"concatenation needs at least one transition), got "
-                f"{temporal_window_size!r}"
-            )
+        if int(lstm_hidden_dim) <= 0:
+            raise ValueError(f"lstm_hidden_dim must be > 0, got {lstm_hidden_dim!r}")
+        if int(lstm_num_layers) < 1:
+            raise ValueError(f"lstm_num_layers must be >= 1, got {lstm_num_layers!r}")
 
         self.in_channels = in_channels
         self.concept_dim = concept_dim
@@ -678,13 +679,34 @@ class MotionConceptCreation(nn.Module):
         self.motion_div_weight = motion_div_weight
         self.motion_entropy_weight = motion_entropy_weight
         self.motion_usage_weight = motion_usage_weight
-        # Fixed temporal window: the encoder input packs every signed consecutive
-        # difference in order, so its dimension depends on T (== window size).
-        self.temporal_window_size = int(temporal_window_size)
+        self.lstm_hidden_dim = int(lstm_hidden_dim)
+        self.lstm_num_layers = int(lstm_num_layers)
+        self.lstm_bidirectional = bool(lstm_bidirectional)
+        # PyTorch LSTM dropout is only active between stacked layers (num_layers > 1).
+        effective_lstm_dropout = (
+            float(lstm_dropout) if self.lstm_num_layers > 1 else 0.0
+        )
 
-        change_channels = (self.temporal_window_size - 1) * in_channels
+        # Per-timestep projection of each signed consecutive difference (C -> hidden).
+        self.motion_input_projection = nn.Sequential(
+            nn.Linear(in_channels, self.lstm_hidden_dim),
+            nn.GELU(),
+            nn.LayerNorm(self.lstm_hidden_dim),
+        )
+        # Ordered temporal-difference encoder (variable-length sequences, T >= 2).
+        self.motion_lstm = nn.LSTM(
+            input_size=self.lstm_hidden_dim,
+            hidden_size=self.lstm_hidden_dim,
+            num_layers=self.lstm_num_layers,
+            batch_first=True,
+            dropout=effective_lstm_dropout,
+            bidirectional=self.lstm_bidirectional,
+        )
+        lstm_output_dim = self.lstm_hidden_dim * (2 if self.lstm_bidirectional else 1)
+        # Post-LSTM projection to the concept space (name kept as ``motion_encoder``
+        # so optimizer parameter grouping / external references remain valid).
         self.motion_encoder = nn.Sequential(
-            nn.Linear(change_channels, hidden_dim),
+            nn.Linear(lstm_output_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.LayerNorm(hidden_dim),
@@ -839,30 +861,50 @@ class MotionConceptCreation(nn.Module):
         dtype = features.dtype
         N = H * W
 
-        if T != self.temporal_window_size:
+        if T < 2:
             raise ValueError(
-                f"MotionConceptCreation was configured for "
-                f"T={self.temporal_window_size}, but received T={T}. "
-                "Ordered difference concatenation requires a fixed window length."
+                f"MotionConceptCreation requires T >= 2, got T={T}"
             )
 
         delta = features[:, :, 1:] - features[:, :, :-1]  # [B, C, T-1, H, W]
         # abs_delta is still required by the motionness computation below.
         abs_delta = delta.abs()
 
-        # Preserve temporal order: concatenate every signed consecutive difference
-        # per patch as [delta_0, delta_1, ..., delta_(T-2)], each delta_t holding
-        # all C channels for transition t -> t+1. No averaging/sum/max-pooling.
-        ordered_delta = (
+        # Ordered per-patch difference sequence [delta_0, ..., delta_(T-2)], each
+        # delta_t = features[:,:,t+1] - features[:,:,t] holding all C channels.
+        delta_sequence = (
             delta.permute(0, 3, 4, 2, 1)
             .contiguous()
-            .reshape(B * N, (T - 1) * C)
-        )  # [B*H*W, (T-1)*C]
-        assert ordered_delta.shape == (B * N, (T - 1) * C)
+            .reshape(B * N, T - 1, C)
+        )  # [B*N, T-1, C]
 
-        q_motion = self.motion_encoder(ordered_delta)
-        q_motion = F.normalize(q_motion, dim=-1)
-        assert q_motion.shape == (B * N, self.concept_dim)
+        # Project each timestep, then encode the ordered sequence with an LSTM.
+        projected_sequence = self.motion_input_projection(
+            delta_sequence
+        )  # [B*N, T-1, lstm_hidden_dim]
+        lstm_output, (h_n, c_n) = self.motion_lstm(projected_sequence)
+
+        # Summarize the sequence from the final hidden states (no pooling). Using
+        # h_n keeps forward/backward directions correctly aligned: for a
+        # bidirectional LSTM the backward stream's summary lives at t=0 in
+        # lstm_output, so lstm_output[:, -1] alone would be direction-inconsistent.
+        num_directions = 2 if self.lstm_bidirectional else 1
+        h_n = h_n.view(
+            self.lstm_num_layers,
+            num_directions,
+            B * N,
+            self.lstm_hidden_dim,
+        )
+        final_layer_h = h_n[-1]  # [num_directions, B*N, lstm_hidden_dim]
+        if self.lstm_bidirectional:
+            trajectory_repr = torch.cat(
+                [final_layer_h[0], final_layer_h[1]], dim=-1
+            )  # [B*N, 2*lstm_hidden_dim]
+        else:
+            trajectory_repr = final_layer_h[0]  # [B*N, lstm_hidden_dim]
+
+        q_motion = self.motion_encoder(trajectory_repr)  # [B*N, concept_dim]
+        q_motion = F.normalize(q_motion, dim=-1, eps=1e-8)
 
         c_motion = F.normalize(self.motion_concepts, dim=-1)
         raw_similarity = q_motion @ c_motion.T

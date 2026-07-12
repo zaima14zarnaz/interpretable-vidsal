@@ -66,6 +66,12 @@ VISUAL_CONCEPT_ON = True
 TEMPORAL_CONCEPTS_ON = False
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
+# Motion temporal encoder (LSTM over ordered same-location feature deltas).
+MOTION_LSTM_HIDDEN_DIM = 1024
+MOTION_LSTM_NUM_LAYERS = 1
+MOTION_LSTM_BIDIRECTIONAL = True
+MOTION_LSTM_DROPOUT = 0.0
+
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
 
@@ -1017,9 +1023,10 @@ def main() -> None:
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
         num_motion_concepts=128,
-        # Video Swin halves the temporal dim (patch stride 2), so the motion
-        # module sees WINDOW_LEN // 2 frames at the backbone stages.
-        motion_temporal_window_size=WINDOW_LEN // 2,
+        motion_lstm_hidden_dim=MOTION_LSTM_HIDDEN_DIM,
+        motion_lstm_num_layers=MOTION_LSTM_NUM_LAYERS,
+        motion_lstm_bidirectional=MOTION_LSTM_BIDIRECTIONAL,
+        motion_lstm_dropout=MOTION_LSTM_DROPOUT,
     ).to(device)
 
     with torch.no_grad():

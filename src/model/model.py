@@ -107,7 +107,10 @@ class ExplainableVidSalModel(nn.Module):
         motion_assignment_temperature: float = 0.07,
         motion_hidden_dim: Optional[int] = None,
         motionness_temperature: float = 2.0,
-        motion_temporal_window_size: int = 8,
+        motion_lstm_hidden_dim: int = 256,
+        motion_lstm_num_layers: int = 1,
+        motion_lstm_bidirectional: bool = False,
+        motion_lstm_dropout: float = 0.0,
         **_deprecated_saliency_kwargs: Any,
     ):
         super().__init__()
@@ -173,9 +176,6 @@ class ExplainableVidSalModel(nn.Module):
             motion_concept_stages[0] if len(motion_concept_stages) > 0 else "stage3"
         )
         self.num_motion_concepts = int(num_motion_concepts)
-        # Stage-level temporal length seen by the motion module. Ordered
-        # difference concatenation requires a fixed window (== backbone stage T).
-        self.motion_temporal_window_size = int(motion_temporal_window_size)
         if motion_concepts_on:
             missing_motion_stages = [
                 stage for stage in motion_concept_stages if stage not in backbone_stages
@@ -245,7 +245,10 @@ class ExplainableVidSalModel(nn.Module):
                     assignment_temperature=motion_assignment_temperature,
                     assignment_mode=motion_assignment_mode,
                     motionness_temperature=motionness_temperature,
-                    temporal_window_size=self.motion_temporal_window_size,
+                    lstm_hidden_dim=motion_lstm_hidden_dim,
+                    lstm_num_layers=motion_lstm_num_layers,
+                    lstm_bidirectional=motion_lstm_bidirectional,
+                    lstm_dropout=motion_lstm_dropout,
                 )
         self.motion_concept_creation = (
             self.motion_concept_creations[self.motion_concept_stages[0]]

@@ -74,10 +74,10 @@ def build_model(device: torch.device) -> ExplainableVidSalModel:
         visual_concept_logit_scale=train_cfg.VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
         num_motion_concepts=128,
-        # Video Swin halves the temporal dim (patch stride 2), so the motion
-        # module sees WINDOW_LEN // 2 frames at the backbone stages. Reuses the
-        # single WINDOW_LEN setting to stay in sync with train.py.
-        motion_temporal_window_size=WINDOW_LEN // 2,
+        motion_lstm_hidden_dim=train_cfg.MOTION_LSTM_HIDDEN_DIM,
+        motion_lstm_num_layers=train_cfg.MOTION_LSTM_NUM_LAYERS,
+        motion_lstm_bidirectional=train_cfg.MOTION_LSTM_BIDIRECTIONAL,
+        motion_lstm_dropout=train_cfg.MOTION_LSTM_DROPOUT,
     ).to(device)
 
 
