@@ -255,15 +255,21 @@ def cc_score(
     pred_mean = pred_f.mean(dim=1, keepdim=True)
     target_mean = target_f.mean(dim=1, keepdim=True)
 
-    pred_std = pred_f.std(dim=1, unbiased=True, keepdim=True).clamp(min=eps)
-    target_std = target_f.std(dim=1, unbiased=True, keepdim=True).clamp(min=eps)
+    # Match the baseline implementation: torch.std uses sample standard
+    # deviation (unbiased=True), with no epsilon added during z-scoring.
+    # ``eps`` remains in the signature for backward API compatibility.
+    del eps
+    pred_std = pred_f.std(dim=1, unbiased=True, keepdim=True)
+    target_std = target_f.std(dim=1, unbiased=True, keepdim=True)
 
     pred_z = (pred_f - pred_mean) / pred_std
     target_z = (target_f - target_mean) / target_std
 
-    # Equivalent to MATLAB corr2 after z-scoring with sample std.
-    n = pred_f.shape[1]
-    cc = (pred_z * target_z).sum(dim=1) / max(n - 1, 1)
+    # Baseline CC: cosine similarity between the two z-scored maps.
+    ab = (pred_z * target_z).sum(dim=1)
+    aa = (pred_z * pred_z).sum(dim=1)
+    bb = (target_z * target_z).sum(dim=1)
+    cc = ab / torch.sqrt(aa * bb)
 
     return cc.mean()
 
@@ -314,7 +320,7 @@ def validate_fixation_map(fixation: torch.Tensor, name: str = "fixation") -> Non
 def nss_score(
     pred: torch.Tensor,
     fixation_map: torch.Tensor,
-    eps: float = 1e-8,
+    eps: float = 2.2204e-16,
 ) -> torch.Tensor:
     """
     True NSS.
@@ -341,8 +347,10 @@ def nss_score(
     fix_f = fixation.reshape(B, -1) > 0
 
     pred_mean = pred_f.mean(dim=1, keepdim=True)
-    pred_std = pred_f.std(dim=1, unbiased=False, keepdim=True).clamp(min=eps)
-    pred_z = (pred_f - pred_mean) / pred_std
+    # Match the baseline: sample standard deviation and epsilon added to the
+    # denominator after standard-deviation calculation.
+    pred_std = pred_f.std(dim=1, unbiased=True, keepdim=True)
+    pred_z = (pred_f - pred_mean) / (pred_std + eps)
 
     scores = []
     for i in range(B):
@@ -443,37 +451,137 @@ def sauc_score(
     fixation_threshold: float = 0.5,
     top_percent: Optional[float] = None,
     eps: float = 1e-8,
+    other_map: Optional[torch.Tensor] = None,
+    splits: int = 100,
+    stepsize: float = 0.1,
 ) -> torch.Tensor:
-    pred = prepare_prediction_map(pred)
-    fixation_map = prepare_target_last_map(fixation_map)
-    pred, fixation_map = resize_to_match(pred, fixation_map)
-    pred = normalize_minmax(pred, eps)
+    """
+    Baseline-compatible shuffled AUC.
 
+    This intentionally mirrors the supplied baseline ``auc_shuff`` protocol,
+    including its nine fixed thresholds, use of every location in
+    ``other_map`` on every split, TPR-first point sorting, and its original
+    flattened-coordinate encode/decode convention.  It is provided for direct
+    comparison with that baseline rather than as a canonical sAUC reference.
+
+    ``other_map`` should contain the shuffled-fixation map(s).  It may have one
+    map per prediction or a single map shared by the batch.  For backward
+    compatibility, if it is omitted and B > 1, each sample uses the union of
+    the other samples' fixation maps in the current batch.  With B == 1 and no
+    ``other_map``, the score is NaN because the baseline calculation requires
+    a shuffled-fixation map.
+
+    ``stepsize`` is retained to match the baseline interface; the supplied
+    baseline hard-codes thresholds 0.1 through 0.9 and does not use it.
+    """
+    del stepsize
+
+    if splits <= 0:
+        raise ValueError(f"splits must be positive, got {splits}")
+
+    # The baseline resizes the saliency prediction to the fixation-map size.
+    pred, fixation_map = resize_pred_to_target(pred, fixation_map)
+    pred = normalize_minmax(pred, eps)
     fix = make_fixation_binary(
         fixation_map, fixation_threshold, top_percent, eps
     )
 
+    prepared_other: Optional[torch.Tensor] = None
+    if other_map is not None:
+        prepared_other = prepare_target_last_map(other_map)
+        if prepared_other.shape[0] not in (1, pred.shape[0]):
+            raise ValueError(
+                "other_map batch size must be 1 or match pred; "
+                f"got {prepared_other.shape[0]} and {pred.shape[0]}"
+            )
+        if prepared_other.shape[-2:] != fix.shape[-2:]:
+            # Match the baseline expectation that gt and other_map share the
+            # same pixel grid. Nearest-neighbor preserves binary locations.
+            prepared_other = F.interpolate(
+                prepared_other,
+                size=fix.shape[-2:],
+                mode="nearest",
+            )
+        prepared_other = prepared_other == 1
+
     B = pred.shape[0]
-    aucs = []
-    for i in range(B):
-        p = pred[i, 0].reshape(-1)
-        f_i = fix[i, 0].reshape(-1)
-        pos = p[f_i]
+    thresholds = pred.new_tensor(
+        [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    )
+    sample_aucs = []
 
-        if B > 1:
-            neg_parts = []
-            for j in range(B):
-                if j == i:
-                    continue
-                fj = fix[j, 0].reshape(-1)
-                if fj.any():
-                    neg_parts.append(p[fj])
-            neg = torch.cat(neg_parts) if neg_parts else p[~f_i]
+    for sample_idx in range(B):
+        saliency = pred[sample_idx, 0]
+        gt = fix[sample_idx, 0]
+        num_fixations = int(gt.sum().item())
+
+        if prepared_other is not None:
+            other = prepared_other[
+                0 if prepared_other.shape[0] == 1 else sample_idx, 0
+            ]
+        elif B > 1:
+            keep = torch.arange(B, device=fix.device) != sample_idx
+            other = fix[keep, 0].any(dim=0)
         else:
-            neg = p[~f_i]
+            sample_aucs.append(saliency.new_tensor(float("nan")))
+            continue
 
-        aucs.append(_rank_auc(pos, neg))
-    return torch.stack(aucs).mean()
+        coords = torch.nonzero(other == 1, as_tuple=False)
+        ind = coords.shape[0]
+        if num_fixations == 0 or ind == 0:
+            sample_aucs.append(saliency.new_tensor(float("nan")))
+            continue
+
+        # Reproduce the baseline's original flattened-coordinate convention:
+        #   encoded = row * height + column
+        #   sampled = s_map[encoded % height - 1, encoded // height]
+        # This is intentionally not conventional row-major indexing.
+        height, width = saliency.shape
+        encoded = coords[:, 0] * other.shape[0] + coords[:, 1]
+        sampled_rows = encoded.remainder(height) - 1
+        sampled_cols = torch.div(encoded, height, rounding_mode="floor")
+        if (sampled_cols < 0).any() or (sampled_cols >= width).any():
+            raise IndexError(
+                "The baseline auc_shuff coordinate convention produced an "
+                "out-of-range column. Exact compatibility requires square, "
+                "same-resolution saliency and shuffled-fixation maps."
+            )
+
+        split_aucs = []
+        for _ in range(splits):
+            # The baseline permutes all candidates but then uses all of them.
+            # Retaining the permutation reproduces that behavior exactly.
+            permutation = torch.randperm(ind, device=saliency.device)
+            random_saliency = saliency[
+                sampled_rows[permutation], sampled_cols[permutation]
+            ]
+
+            area = [(saliency.new_tensor(0.0), saliency.new_tensor(0.0))]
+            for threshold in thresholds:
+                thresholded = (saliency >= threshold).to(saliency.dtype)
+                gt_numeric = gt.to(saliency.dtype)
+                num_overlap = ((thresholded + gt_numeric) == 2).sum()
+                tp = num_overlap.to(saliency.dtype) / float(num_fixations)
+                fp = (random_saliency > threshold).sum().to(saliency.dtype)
+                fp = fp / float(num_fixations)
+
+                # Match round(tp, 4) and round(fp, 4) in the baseline.
+                tp = torch.round(tp * 10000.0) / 10000.0
+                fp = torch.round(fp * 10000.0) / 10000.0
+                area.append((tp, fp))
+
+            area.append((saliency.new_tensor(1.0), saliency.new_tensor(1.0)))
+            area.sort(key=lambda point: float(point[0].detach().cpu()))
+            tp_values = torch.stack([point[0] for point in area])
+            fp_values = torch.stack([point[1] for point in area])
+            split_aucs.append(torch.trapz(tp_values, fp_values))
+
+        sample_aucs.append(torch.stack(split_aucs).mean())
+
+    valid_aucs = [score for score in sample_aucs if not torch.isnan(score)]
+    if not valid_aucs:
+        return pred.new_tensor(float("nan"))
+    return torch.stack(valid_aucs).mean()
 
 
 def compute_saliency_metrics(
@@ -483,6 +591,7 @@ def compute_saliency_metrics(
     fixation_threshold: float = 0.5,
     top_percent: Optional[float] = None,
     allow_pseudo_fixations: bool = False,
+    sauc_other_map: Optional[torch.Tensor] = None,
 ) -> Dict[str, torch.Tensor]:
     """
     Compute saliency metrics.
@@ -513,6 +622,7 @@ def compute_saliency_metrics(
             fix_map,
             fixation_threshold=0.5,
             top_percent=None,
+            other_map=sauc_other_map,
         )
         out["NSS"] = nss_score(pred, fix_map)
         return out
@@ -544,6 +654,7 @@ def compute_saliency_metrics(
         pseudo_fix,
         fixation_threshold=0.5,
         top_percent=None,
+        other_map=sauc_other_map,
     )
     out["NSS"] = nss_score(pred, pseudo_fix)
     return out

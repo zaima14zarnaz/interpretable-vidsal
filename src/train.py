@@ -1104,6 +1104,9 @@ def main() -> None:
     for epoch in range(1, EPOCHS + 1):
         print(f"\nEpoch {epoch}/{EPOCHS}")
 
+        if epoch == 2:
+            break
+
         train_loss, train_metrics = train_one_epoch(
             model,
             train_loader,
