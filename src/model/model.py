@@ -286,6 +286,62 @@ class ExplainableVidSalModel(nn.Module):
         if freeze_backbone:
             self.freeze_backbone()
 
+        self._backbone_device: Optional[torch.device] = None
+        self._head_device: Optional[torch.device] = None
+
+    @property
+    def input_device(self) -> torch.device:
+        """Device for model inputs (video tensors)."""
+        if self._backbone_device is not None:
+            return self._backbone_device
+        return next(self.backbone.parameters()).device
+
+    @property
+    def output_device(self) -> torch.device:
+        """Device for model outputs and supervision tensors."""
+        if self._head_device is not None:
+            return self._head_device
+        return self.input_device
+
+    def to_split_devices(
+        self,
+        backbone_device: torch.device,
+        head_device: torch.device,
+    ) -> "ExplainableVidSalModel":
+        """Place backbone on one device and all downstream modules on another."""
+        self.backbone.to(backbone_device)
+        self.concept_creations.to(head_device)
+        self.motion_concept_creations.to(head_device)
+        self.temporal_feature_infusers.to(head_device)
+        self.saliency_prediction.to(head_device)
+        self._backbone_device = torch.device(backbone_device)
+        self._head_device = torch.device(head_device)
+        return self
+
+    def _move_features_dict_to_head(
+        self,
+        features_dict: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        head_device = self.output_device
+        if head_device == self.input_device:
+            return features_dict
+        return {
+            stage: features.to(head_device, non_blocking=True)
+            for stage, features in features_dict.items()
+        }
+
+    def prepare_training_batch(
+        self,
+        rgb_batch: torch.Tensor,
+        sal_batch: torch.Tensor,
+        fix_batch: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Move a training batch to the backbone/head devices."""
+        rgb_batch = rgb_batch.to(self.input_device, non_blocking=True)
+        sal_batch = sal_batch.to(self.output_device, non_blocking=True)
+        fix_batch = fix_batch.to(self.output_device, non_blocking=True)
+        return rgb_batch, sal_batch, fix_batch
+
     def _resize_feature_for_concepts(
         self,
         features: torch.Tensor,
@@ -466,6 +522,7 @@ class ExplainableVidSalModel(nn.Module):
 
         with inference_ctx():
             x = self._normalize_video_layout(x)
+            x = x.to(self.input_device, non_blocking=True)
             last_rgb_frame = self._extract_last_rgb_frame(x)
 
             if self._backbone_frozen:
@@ -473,6 +530,14 @@ class ExplainableVidSalModel(nn.Module):
                     features_dict = self.backbone.forward_features(x)
             else:
                 features_dict = self.backbone.forward_features(x)
+
+            features_dict = self._move_features_dict_to_head(features_dict)
+
+            if saliency_maps is not None:
+                saliency_maps = saliency_maps.to(
+                    self.output_device,
+                    non_blocking=True,
+                )
 
             concept_outs: Dict[str, Dict[str, Any]] = {}
             decoder_features_dict: Dict[str, torch.Tensor] = {}

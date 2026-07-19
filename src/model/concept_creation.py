@@ -435,6 +435,7 @@ class VisualConceptCreation(nn.Module):
             visual_concept_indices: [B*T*N]
             visual_activations: [B*T*N, num_visual_concepts]
             visual_concept_representation: [B*T*N, concept_dim]
+            visual_feature_concept_agreement: [B*T*H*W]
             visual_metadata: dict with batch_idx, time_idx, patch_idx, patch_coords, feature_shape
         """
         B, C, T, H, W = features.shape
@@ -461,6 +462,12 @@ class VisualConceptCreation(nn.Module):
             visual_repr = visual_repr + self.visual_concept_residual_weight * q_vis
         visual_repr = F.normalize(visual_repr, dim=-1)
 
+        visual_feature_concept_agreement = F.cosine_similarity(
+            q_vis,
+            visual_repr,
+            dim=-1,
+        )
+
         reg_out = self._visual_assignment_regularizers(visual_probs)
 
         grid = self._make_grid(H, W, device, dtype)
@@ -482,6 +489,7 @@ class VisualConceptCreation(nn.Module):
             "visual_concept_indices": visual_indices,
             "visual_activations": visual_activations,
             "visual_concept_representation": visual_repr,
+            "visual_feature_concept_agreement": visual_feature_concept_agreement,
             "visual_patch_coords": visual_patch_coords,
             "visual_assignment_probs": visual_probs,
             "visual_assignment_entropy": reg_out["visual_assignment_entropy"],
@@ -571,6 +579,9 @@ class VisualConceptCreation(nn.Module):
             "losses": losses,
             "visual_patch_embeddings": visual_out["visual_patch_embeddings"],
             "visual_concept_representation": visual_out["visual_concept_representation"],
+            "visual_feature_concept_agreement": visual_out[
+                "visual_feature_concept_agreement"
+            ],
             "visual_activations": visual_out["visual_activations"],
             "visual_concept_logits": visual_out["visual_concept_logits"],
             "visual_concept_indices": visual_out["visual_concept_indices"],

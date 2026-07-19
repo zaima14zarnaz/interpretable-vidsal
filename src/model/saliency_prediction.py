@@ -186,6 +186,45 @@ def _build_stage_concept_volume(
     return concept_volume
 
 
+def _build_visual_agreement_volume(
+    concept_out: Dict[str, Any],
+    *,
+    stage: str = "unknown",
+) -> Optional[torch.Tensor]:
+    """
+    Build [B, 1, T, H, W] visual feature-concept agreement volume for one stage.
+    """
+    agreement = concept_out.get("visual_feature_concept_agreement")
+    visual_metadata = concept_out.get("visual_metadata")
+    if not torch.is_tensor(agreement) or not isinstance(visual_metadata, dict):
+        return None
+    if "feature_shape" not in visual_metadata:
+        return None
+
+    try:
+        B, _, T, H, W = _feature_shape_from_metadata(visual_metadata)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ValueError(
+            f"Invalid visual_metadata['feature_shape'] at {stage}: "
+            f"{_metadata_feature_shape_repr(visual_metadata)}"
+        ) from exc
+
+    expected = B * T * H * W
+    if agreement.dim() != 1 or agreement.shape[0] != expected:
+        raise ValueError(
+            f"visual_feature_concept_agreement length mismatch at {stage}: "
+            f"expected {expected} (=B*T*H*W from feature_shape "
+            f"{_metadata_feature_shape_repr(visual_metadata)}), "
+            f"got {tuple(agreement.shape)}"
+        )
+
+    return (
+        agreement.reshape(B, T, H, W)
+        .unsqueeze(1)
+        .contiguous()
+    )
+
+
 def _build_motion_concept_volume(
     concept_out: Dict[str, Any],
     *,
@@ -894,6 +933,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         features: torch.Tensor,
         concept_volume: torch.Tensor,
         prev_decoder: Optional[torch.Tensor] = None,
+        concept_agreement_volume: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feature_proj = self.feature_proj(features)
         concept_proj = self.concept_proj(concept_volume)
@@ -919,6 +959,12 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         # feature fusion path; do not add back gated additive concept injection.
         mask_strength = 2.0 * torch.sigmoid(self.mask_strength_logit)
         concept_mask = torch.sigmoid(self.mask_head(concept_proj))
+        if concept_agreement_volume is not None:
+            agreement_prior = ((concept_agreement_volume + 1.0) * 0.5).clamp(
+                0.0,
+                1.0,
+            )
+            concept_mask = concept_mask * agreement_prior
         mask_scale = 1.0 + mask_strength * (concept_mask - 0.5)
         feature_proj = feature_proj * mask_scale
 
@@ -1226,10 +1272,22 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 concept_out=concept_outs[stage],
             )
 
+            agreement_volume = _build_visual_agreement_volume(
+                concept_outs[stage],
+                stage=stage,
+            )
+            if agreement_volume is not None:
+                agreement_volume = _align_concept_volume_to_features(
+                    agreement_volume,
+                    features_5d,
+                    stage=stage,
+                )
+
             decoded, concept_mask = fusion_blocks[stage](
                 features_5d,
                 concept_volume,
                 prev_decoder=prev_decoder,
+                concept_agreement_volume=agreement_volume,
             )
             prev_decoder = decoded
 

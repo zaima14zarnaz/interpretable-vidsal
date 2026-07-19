@@ -68,9 +68,9 @@ VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
 # Motion temporal encoder (LSTM over ordered same-location feature deltas).
 MOTION_LSTM_HIDDEN_DIM = 1024
-MOTION_LSTM_NUM_LAYERS = 1
+MOTION_LSTM_NUM_LAYERS = 2
 MOTION_LSTM_BIDIRECTIONAL = True
-MOTION_LSTM_DROPOUT = 0.0
+MOTION_LSTM_DROPOUT = 0.1
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -939,9 +939,17 @@ def main() -> None:
     last_ckpt_path = os.path.join(run_ckpt_dir, "last_checkpoint.pth")
     set_seed(SEED)
 
+    if torch.cuda.is_available():
+        backbone_device = torch.device("cuda:0")
+        head_device = torch.device(
+            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:0"
+        )
+    else:
+        backbone_device = torch.device("cpu")
+        head_device = torch.device("cpu")
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    device = head_device
+    print(f"Backbone device: {backbone_device} | Head device: {head_device}")
     print(f"Run checkpoints will be saved to: {run_ckpt_dir}")
     print(
         "Concept branches | "
@@ -1001,7 +1009,7 @@ def main() -> None:
         num_concepts=512,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=3,
+        top_k=16,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -1027,7 +1035,7 @@ def main() -> None:
         motion_lstm_num_layers=MOTION_LSTM_NUM_LAYERS,
         motion_lstm_bidirectional=MOTION_LSTM_BIDIRECTIONAL,
         motion_lstm_dropout=MOTION_LSTM_DROPOUT,
-    ).to(device)
+    ).to_split_devices(backbone_device, head_device)
 
     with torch.no_grad():
         # Initialize final saliency logits to the observed dataset prior.
