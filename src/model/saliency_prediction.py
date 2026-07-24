@@ -51,85 +51,6 @@ def _metadata_feature_shape_repr(metadata: Optional[Dict[str, Any]]) -> Any:
     return metadata.get("feature_shape")
 
 
-def _resize_concept_map_to_target(
-    concept_map: torch.Tensor,
-    target_hw: Tuple[int, int],
-) -> torch.Tensor:
-    """Bilinearly resize [B, C, H, W] concept map to decoder feature-map size."""
-    if concept_map.shape[-2:] != target_hw:
-        return F.interpolate(
-            concept_map,
-            size=target_hw,
-            mode="bilinear",
-            align_corners=False,
-        )
-    return concept_map
-
-
-def _assert_concept_map_matches_features(
-    *,
-    stage: str,
-    concept_map: torch.Tensor,
-    feature_map: torch.Tensor,
-    concept_out: Dict[str, Any],
-) -> None:
-    if (
-        concept_map.shape[0] == feature_map.shape[0]
-        and concept_map.shape[-2:] == feature_map.shape[-2:]
-    ):
-        return
-
-    visual_metadata = concept_out.get("visual_metadata")
-    metadata = concept_out.get("metadata")
-    raise ValueError(
-        f"Concept map / feature map shape mismatch at {stage}: "
-        f"feature_map shape={tuple(feature_map.shape)}, "
-        f"concept_map shape={tuple(concept_map.shape)}, "
-        f"visual_metadata['feature_shape']="
-        f"{_metadata_feature_shape_repr(visual_metadata if isinstance(visual_metadata, dict) else None)}, "
-        f"metadata['feature_shape']="
-        f"{_metadata_feature_shape_repr(metadata if isinstance(metadata, dict) else None)}"
-    )
-
-
-def _build_visual_concept_map(
-    concept_out: Dict[str, Any],
-    target_hw: Tuple[int, int],
-    *,
-    stage: str = "unknown",
-) -> Optional[torch.Tensor]:
-    visual_repr = concept_out.get("visual_concept_representation")
-    visual_metadata = concept_out.get("visual_metadata")
-    if not torch.is_tensor(visual_repr) or not isinstance(visual_metadata, dict):
-        return None
-    if "feature_shape" not in visual_metadata:
-        return None
-
-    try:
-        B, _, T, H, W = _feature_shape_from_metadata(visual_metadata)
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(
-            f"Invalid visual_metadata['feature_shape'] at {stage}: "
-            f"{_metadata_feature_shape_repr(visual_metadata)}"
-        ) from exc
-
-    expected = B * T * H * W
-    if visual_repr.shape[0] != expected:
-        raise ValueError(
-            f"visual_concept_representation length mismatch at {stage}: "
-            f"expected {expected} (=B*T*H*W from feature_shape "
-            f"{_metadata_feature_shape_repr(visual_metadata)}), "
-            f"got {visual_repr.shape[0]}"
-        )
-
-    concept_dim = visual_repr.shape[-1]
-    visual_map = (
-        visual_repr.reshape(B, T, H, W, concept_dim)[:, -1]
-        .permute(0, 3, 1, 2)
-    )
-    return _resize_concept_map_to_target(visual_map, target_hw)
-
-
 def _build_visual_concept_volume(
     concept_out: Dict[str, Any],
     *,
@@ -335,55 +256,6 @@ def _assert_concept_volume_matches_features(
         f"metadata['feature_shape']="
         f"{_metadata_feature_shape_repr(metadata if isinstance(metadata, dict) else None)}"
     )
-
-
-def _concept_volume_to_fusion_map(concept_volume: torch.Tensor) -> torch.Tensor:
-    """Aggregate a temporal concept volume to a 2D map for conv fusion blocks."""
-    if concept_volume.dim() != 5:
-        raise ValueError(
-            f"concept_volume must be [B,concept_dim,T,H,W], got {tuple(concept_volume.shape)}"
-        )
-    return concept_volume.mean(dim=2)
-
-
-def _resize_concept_volume_to_features(
-    concept_volume: torch.Tensor,
-    features_5d: torch.Tensor,
-) -> torch.Tensor:
-    """Trilinearly resize concept volume to match decoder feature [T,H,W]."""
-    _, _, T_f, H_f, W_f = features_5d.shape
-    if concept_volume.shape[2:] == (T_f, H_f, W_f):
-        return concept_volume
-    return F.interpolate(
-        concept_volume,
-        size=(T_f, H_f, W_f),
-        mode="trilinear",
-        align_corners=False,
-    )
-
-
-def _build_stage_concept_map(
-    concept_out: Dict[str, Any],
-    target_hw: Tuple[int, int],
-    *,
-    stage: str = "unknown",
-) -> torch.Tensor:
-    """
-    Build [B, concept_dim, target_h, target_w] visual concept map for one stage.
-
-    Concept tensors are reshaped using visual_metadata feature_shape (B,C,T,H,W),
-    then bilinearly interpolated to the decoder backbone feature-map size.
-    """
-    visual_map = _build_visual_concept_map(concept_out, target_hw, stage=stage)
-    if visual_map is None:
-        visual_metadata = concept_out.get("visual_metadata")
-        raise ValueError(
-            f"concept_out at {stage} must provide visual_concept_representation and "
-            f"visual_metadata['feature_shape']; got visual_metadata="
-            f"{_metadata_feature_shape_repr(visual_metadata if isinstance(visual_metadata, dict) else None)}"
-        )
-
-    return visual_map
 
 
 def _pick_2d_groups(channels: int, preferred: int = 8) -> int:
@@ -595,33 +467,6 @@ class Residual3DRefineBlock(nn.Module):
         return residual + self.layer_scale * y
 
 
-class Residual2DRefineBlock(nn.Module):
-    """Lightweight 2D residual refinement block."""
-
-    def __init__(
-        self,
-        channels: int,
-        *,
-        dropout: float = 0.05,
-        num_groups: int = 8,
-    ):
-        super().__init__()
-        groups = _pick_2d_groups(channels, num_groups)
-        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
-        self.norm1 = nn.GroupNorm(groups, channels)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
-        self.norm2 = nn.GroupNorm(groups, channels)
-        self.act = nn.ReLU()
-        self.dropout = nn.Dropout2d(dropout) if dropout > 0.0 else nn.Identity()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        y = self.act(self.norm1(self.conv1(x)))
-        y = self.dropout(y)
-        y = self.norm2(self.conv2(y))
-        return self.act(residual + y)
-
-
 class LearnedSpatialUpsample3D(nn.Module):
     """Learned spatial upsampling for decoder volumes; temporal length is unchanged."""
 
@@ -728,151 +573,6 @@ class LearnedFinalUpsample2D(nn.Module):
         return y
 
 
-class ConvGNAct(nn.Module):
-    """Conv2d + GroupNorm + ReLU."""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        *,
-        kernel_size: int = 1,
-        padding: int = 0,
-        num_groups: int = 8,
-    ):
-        super().__init__()
-        groups = _pick_2d_groups(out_channels, num_groups)
-        self.conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            padding=padding,
-            bias=False,
-        )
-        self.norm = nn.GroupNorm(groups, out_channels)
-        self.act = nn.ReLU()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.act(self.norm(self.conv(x)))
-
-
-class ResidualRefineBlock(nn.Module):
-    """Lightweight 3x3 residual refinement block."""
-
-    def __init__(
-        self,
-        channels: int,
-        *,
-        dropout: float = 0.05,
-        num_groups: int = 8,
-    ):
-        super().__init__()
-        groups = _pick_2d_groups(channels, num_groups)
-        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
-        self.norm1 = nn.GroupNorm(groups, channels)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
-        self.norm2 = nn.GroupNorm(groups, channels)
-        self.act = nn.ReLU()
-        self.dropout = nn.Dropout2d(dropout) if dropout > 0.0 else nn.Identity()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        y = self.act(self.norm1(self.conv1(x)))
-        y = self.dropout(y)
-        y = self.norm2(self.conv2(y))
-        return self.act(residual + y)
-
-
-class ConceptGatedFusionBlock(nn.Module):
-    """
-    Feature-first 2D fusion with concept-guided FiLM modulation and masking.
-
-    Dense features form the base signal. Concept maps first modulate dense
-    features through FiLM, then produce a soft concept mask that suppresses
-    or enhances concept-conditioned feature responses. Previous decoder features
-    are added afterward.
-    """
-
-    def __init__(
-        self,
-        feature_channels: int,
-        concept_dim: int,
-        decoder_channels: int,
-        feature_residual_scale: float = 0.25,
-        dropout: float = 0.05,
-    ):
-        super().__init__()
-        del feature_residual_scale
-
-        self.feature_proj = ConvGNAct(
-            feature_channels,
-            decoder_channels,
-            kernel_size=1,
-            padding=0,
-        )
-        self.concept_proj = ConvGNAct(
-            concept_dim,
-            decoder_channels,
-            kernel_size=1,
-            padding=0,
-        )
-        self.prev_proj = ConvGNAct(
-            decoder_channels,
-            decoder_channels,
-            kernel_size=1,
-            padding=0,
-        )
-        self.film = nn.Conv2d(decoder_channels, decoder_channels * 2, kernel_size=1)
-        self.mask_head = nn.Conv2d(
-            decoder_channels,
-            decoder_channels,
-            kernel_size=1,
-        )
-        self.refine1 = ResidualRefineBlock(decoder_channels, dropout=dropout)
-        self.refine2 = ResidualRefineBlock(decoder_channels, dropout=dropout)
-
-        self.prev_scale = nn.Parameter(torch.tensor(1.0))
-        self.mask_strength_logit = nn.Parameter(torch.tensor(0.0))
-
-    def forward(
-        self,
-        features: torch.Tensor,
-        concept_map: torch.Tensor,
-        prev_decoder: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        feature_proj = self.feature_proj(features)
-        concept_proj = self.concept_proj(concept_map)
-
-        if prev_decoder is not None:
-            prev_up = F.interpolate(
-                prev_decoder,
-                size=concept_map.shape[-2:],
-                mode="bilinear",
-                align_corners=False,
-            )
-            prev_up = self.prev_proj(prev_up)
-        else:
-            prev_up = torch.zeros_like(concept_proj)
-
-        film_params = self.film(concept_proj)
-        gamma, beta = film_params.chunk(2, dim=1)
-        gamma = 1.0 + 0.1 * torch.tanh(gamma)
-        beta = 0.1 * beta
-        feature_proj = feature_proj * gamma + beta
-
-        mask_strength = 2.0 * torch.sigmoid(self.mask_strength_logit)
-        concept_mask = torch.sigmoid(self.mask_head(concept_proj))
-        mask_scale = 1.0 + mask_strength * (concept_mask - 0.5)
-        feature_proj = feature_proj * mask_scale
-
-        fused = feature_proj
-        if prev_decoder is not None:
-            fused = fused + self.prev_scale * prev_up
-
-        decoded = self.refine2(self.refine1(fused))
-        return decoded, concept_mask
-
-
 class SpatioTemporalConceptGatedFusionBlock(nn.Module):
     """
     Feature-first 3D fusion over [B, C, T, H, W] volumes.
@@ -947,7 +647,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         else:
             prev_up = torch.zeros_like(feature_proj)
 
-        # FiLM modulates feature channels using concept evidence.
+        # FiLM modulates feature channels using concept evidence before masking.
         film_params = self.film(concept_proj)
         gamma, beta = film_params.chunk(2, dim=1)
         gamma = 1.0 + 0.1 * torch.tanh(gamma)

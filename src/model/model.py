@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.backbones.video_swin import VideoSwinTransformer
+from model.backbones.video_swin_custom import VideoSwinTransformer
 from model.concept_creation import MotionConceptCreation, VisualConceptCreation
 from model.saliency_prediction import ConceptGatedMultiScaleSaliencyDecoder
 from model.temporal_feature_infusion import SpatioTemporal3DFeatureInfusion
@@ -54,6 +54,7 @@ class ExplainableVidSalModel(nn.Module):
         pretrained_backbone: bool = True,
         freeze_backbone: bool = True,
         backbone_gradient_checkpointing: bool = False,
+        backbone_normalize: bool = True,
         input_format: str = "BTCHW",
         resize_to: Union[int, Tuple[int, int]] = (224, 384),
         concept_dim: int = 256,
@@ -198,7 +199,7 @@ class ExplainableVidSalModel(nn.Module):
             input_format=input_format,
             output_format="BCTHW",
             resize_to=resize_to,
-            normalize=True,
+            normalize=backbone_normalize,
             gradient_checkpointing=backbone_gradient_checkpointing,
         )
 
@@ -380,8 +381,18 @@ class ExplainableVidSalModel(nn.Module):
         )
 
     def _normalize_video_layout(self, x: torch.Tensor) -> torch.Tensor:
-        """Accept dataloader layout [B, T, H, W, 3] and convert to configured input_format."""
-        if x.dim() == 5 and x.shape[-1] == 3:
+        """
+        Accept dataloader layouts and convert to configured input_format.
+
+        Supports:
+            [B, T, 3, H, W]  (current DatasetLoader output)
+            [B, T, H, W, 3]  (legacy uint8-style layout)
+        """
+        if x.dim() != 5:
+            return x
+        if x.shape[2] == 3:
+            return x
+        if x.shape[-1] == 3:
             return x.permute(0, 1, 4, 2, 3)
         return x
 

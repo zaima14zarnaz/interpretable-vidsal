@@ -1,18 +1,20 @@
 {
-  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260710_173733/epoch_002.pth",
+  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260722_201317/epoch_100.pth",
   "val_dir": "/data/quantization/zaima/dh1k/testing",
-  "num_samples": 3722,
-  "num_windows": 3722,
+  "num_samples": 58773,
+  "num_windows": 58773,
   "window_len": 16,
   "batch_size": 4,
-  "mean_loss": -1.1882339029119746,
+  "backbone_device": "cuda:0",
+  "head_device": "cuda:1",
+  "mean_loss": 0.21570249920619905,
   "metrics": {
-    "CC": 0.5178222617946169,
-    "SIM": 0.38051094059931984,
-    "AUC": 0.914608280387122,
-    "sAUC": 0.5744790184055842,
-    "NSS": 3.068801612208394
+    "CC": 0.5432165314280845,
+    "SIM": 0.4093393356959595,
+    "AUC": 0.9216257136990088,
+    "sAUC": 0.77193954070125,
+    "NSS": 3.184015770110412
   },
-  "checkpoint_epoch": 2,
-  "evaluated_at": "2026-07-10T18:54:39"
+  "checkpoint_epoch": 100,
+  "evaluated_at": "2026-07-23T16:56:03"
 }

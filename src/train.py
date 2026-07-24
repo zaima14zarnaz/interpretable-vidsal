@@ -6,6 +6,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import random
 import sys
 import math
+import pandas as pd
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
@@ -23,6 +24,7 @@ from tqdm import tqdm
 from pre_process.collate import video_saliency_collate_fn
 from model.losses import compute_total_loss
 from model.metrics import MetricAverager, compute_saliency_metrics
+from metrics import prepare_target_last_map
 from model.model import ExplainableVidSalModel
 from pre_process.dataloader import DatasetLoader
 
@@ -105,14 +107,15 @@ LOSS_LAMBDA = {
     "lambda_fid": 0.0,
 
     # Main dense saliency losses
-    "lambda_dense": 0.05,
+    "lambda_dense": 1.0,
     "lambda_bce": 0.0,
-    "lambda_kl": 2.0,
-    "lambda_cc": 0.5,
-    "lambda_nss": 0.5,
+    "lambda_kl": 1.0,
+    "lambda_cc": 1.0,
+    "lambda_nss": 0.1,
+    "lambda_similarity": 1.0,
 
     # Disable explicit background suppression for now
-    "topk_percent": 0.005,
+    "topk_percent": 0.000,
     "topk_bg_weight": 0.0,
 
     # Disable old concept-map saliency supervision for now
@@ -120,15 +123,15 @@ LOSS_LAMBDA = {
     "lambda_concept_kl": 0.0,
 
     # Temporarily weaken concept regularizers until maps stop collapsing
-    "lambda_align": 0.05,
-    "lambda_sparse": 0.05,
-    "lambda_div": 0.05,
+    "lambda_align": 0.00,
+    "lambda_sparse": 0.00,
+    "lambda_div": 0.00,
     "lambda_gate": 0.0,
 
     # Temporarily reduce visual regularizers
     "lambda_visual_entropy": 0.005,
     "lambda_visual_usage": 0.1,
-    "lambda_visual_equiv": 0.02,
+    "lambda_visual_equiv": 0.00,
     "lambda_temporal_attention_entropy": 0.0,
 
     "patch_from_logits": False,
@@ -724,11 +727,13 @@ def train_one_epoch(
         n_frames,
         valid_mask,
     ) in enumerate(pbar):
-        rgb_batch = rgb_batch.to(device, non_blocking=True)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
-        sal_batch = sal_batch.to(device, non_blocking=True)
-        fix_batch = fix_batch.to(device, non_blocking=True)
+        rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+        )
         fix_batch = (fix_batch > 0).float()
 
         equiv_model_out = None
@@ -778,7 +783,7 @@ def train_one_epoch(
         if batch_idx == 0:
             with torch.no_grad():
                 pred = model_out["saliency_map"].detach()
-                target_last = sal_batch[:, -1:].detach().float()
+                target_last = prepare_target_last_map(sal_batch).detach().float()
                 if target_last.numel() > 0 and target_last.max() > 2.0:
                     target_last = target_last / 255.0
 
@@ -796,7 +801,7 @@ def train_one_epoch(
                     float(target_last.mean().cpu()),
                     float(target_last.std().cpu()),
                 )
-                target_fix_last = fix_batch[:, -1:].detach().float()
+                target_fix_last = prepare_target_last_map(fix_batch).detach().float()
                 print(
                     "DEBUG fixation pixels per sample:",
                     target_fix_last.flatten(1).sum(dim=1).detach().cpu().tolist(),
@@ -877,11 +882,13 @@ def validate_one_epoch(
         n_frames,
         valid_mask,
     ) in enumerate(pbar):
-        rgb_batch = rgb_batch.to(device, non_blocking=True)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
-        sal_batch = sal_batch.to(device, non_blocking=True)
-        fix_batch = fix_batch.to(device, non_blocking=True)
+        rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+        )
         fix_batch = (fix_batch > 0).float()
 
         with autocast(
@@ -958,8 +965,8 @@ def main() -> None:
         f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
     )
 
-    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=16)
-    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=16)
+    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=1, random_train_sampling=True)
+    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=16, random_train_sampling=False)
 
     # g = torch.Generator().manual_seed(SEED)
     # idx = torch.randperm(len(train_dataset), generator=g)[:MAX_SAMPLES].tolist()
@@ -1112,8 +1119,8 @@ def main() -> None:
     for epoch in range(1, EPOCHS + 1):
         print(f"\nEpoch {epoch}/{EPOCHS}")
 
-        if epoch == 2:
-            break
+        # if epoch == 5:
+        #     break
 
         train_loss, train_metrics = train_one_epoch(
             model,
@@ -1148,14 +1155,18 @@ def main() -> None:
         if train_metrics is not None:
             print(
                 f"Train metrics | CC: {train_metrics['CC']:.4f} | "
-                f"SIM: {train_metrics['SIM']:.4f} | AUC: {train_metrics['AUC']:.4f} | "
-                f"sAUC: {train_metrics['sAUC']:.4f} | NSS: {train_metrics['NSS']:.4f}"
+                f"SIM: {train_metrics['SIM']:.4f} | "
+                # f"AUC: {train_metrics['AUC']:.4f} | "
+                # f"sAUC: {train_metrics['sAUC']:.4f} | "
+                f"NSS: {train_metrics['NSS']:.4f}"
             )
         if val_metrics is not None:
             print(
                 f"Val metrics   | CC: {val_metrics['CC']:.4f} | "
-                f"SIM: {val_metrics['SIM']:.4f} | AUC: {val_metrics['AUC']:.4f} | "
-                f"sAUC: {val_metrics['sAUC']:.4f} | NSS: {val_metrics['NSS']:.4f}"
+                f"SIM: {val_metrics['SIM']:.4f} |"
+                # f"AUC: {val_metrics['AUC']:.4f} | "
+                # f"sAUC: {val_metrics['sAUC']:.4f} | "
+                f"NSS: {val_metrics['NSS']:.4f}"
             )
 
         update_loss_curve(train_losses, val_losses, OUTPUT_DIR)
@@ -1179,6 +1190,10 @@ def main() -> None:
             best_val_loss = val_loss
             torch.save(checkpoint, best_ckpt_path)
             print(f"  New best val loss: {best_val_loss:.6f} (saved {best_ckpt_path})")
+        
+        # Write code to save the val metrics to a csv file
+        val_metrics_df = pd.DataFrame(val_metrics_history)
+        val_metrics_df.to_csv(os.path.join(OUTPUT_DIR, "val_metrics.csv"), index=False)
 
     print(f"\nTraining complete. Outputs saved to {OUTPUT_DIR}/")
     print(f"Run checkpoints: {run_ckpt_dir}")
@@ -1199,9 +1214,11 @@ def _run_overfit_one_batch(
 
     batch = next(iter(loader))
     video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask = batch
-    rgb_batch = rgb_batch.to(device)
-    sal_batch = sal_batch.to(device)
-    fix_batch = fix_batch.to(device)
+    rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
+        rgb_batch,
+        sal_batch,
+        fix_batch,
+    )
     fix_batch = (fix_batch > 0).float()
 
     model.train()

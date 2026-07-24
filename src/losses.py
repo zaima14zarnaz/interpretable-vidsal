@@ -13,6 +13,7 @@ import math
 
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 
 
 def _to_float_tensor(x: torch.Tensor) -> torch.Tensor:
@@ -410,6 +411,7 @@ def compute_dense_metric_losses(
     fixation_maps: Optional[torch.Tensor] = None,
     lambda_cc: float = 0.0,
     lambda_nss: float = 0.0,
+    lambda_similarity: float = 0.0,
 ) -> Dict[str, torch.Tensor]:
     """
     Optional dense saliency metric losses.
@@ -460,10 +462,13 @@ def compute_dense_metric_losses(
 
         target_fix_last = (target_fix_last > 0.0).float()
         loss_nss = spatial_nss_loss(pred_dense, target_fix_last)
-
+    loss_similarity = zero
+    if lambda_similarity > 0:
+        loss_similarity = spatial_similarity_loss(pred_dense, saliency_maps)
     return {
         "loss_cc": loss_cc,
         "loss_nss": loss_nss,
+        "loss_sim": loss_similarity,
     }
 
 
@@ -1162,6 +1167,7 @@ def compute_total_loss(
     lambda_topk: float = 0.0,
     lambda_cc: float = 0.0,
     lambda_nss: float = 0.0,
+    lambda_similarity: float = 0.0,
     topk_percent: float = 0.05,
     topk_bg_weight: float = 0.15,
     lambda_concept_dense: float = 0.0,
@@ -1177,7 +1183,7 @@ def compute_total_loss(
     equiv_model_out: Optional[Dict[str, Any]] = None,
     fixation_maps: Optional[torch.Tensor] = None,
     patch_from_logits: bool = True,
-    enable_side_aux: bool = True,
+    enable_side_aux: bool = False,
     side_stage_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Union[torch.Tensor, None]]:
     """
@@ -1226,6 +1232,7 @@ def compute_total_loss(
 
     loss_cc = metric_out["loss_cc"]
     loss_nss = metric_out["loss_nss"]
+    loss_similarity = metric_out["loss_sim"]
 
     loss_fid = fid_out["loss_fid"]
     ref = loss_fid
@@ -1311,6 +1318,7 @@ def compute_total_loss(
         lambda_fid * loss_fid
         + lambda_cc * loss_cc
         + lambda_nss * loss_nss
+        + lambda_similarity * loss_similarity
         + lambda_align * loss_align
         + lambda_sparse * loss_sparse
         + lambda_div * loss_div

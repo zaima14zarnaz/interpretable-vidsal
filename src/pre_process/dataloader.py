@@ -1,5 +1,6 @@
 import os
-from typing import Callable, List, Optional, Tuple
+import re
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
@@ -8,25 +9,31 @@ from torch.utils.data import Dataset
 
 class DatasetLoader(Dataset):
     """
-    Video saliency dataset loader for UCF-style layouts.
+    DHF1K / UCF-style video saliency dataset loader.
 
-    Each video lives in ``dataset_dir/<video_filename>/`` with:
-      - ``images/``: RGB frames
-      - ``maps/``: continuous saliency density maps
-      - ``fixation/``: binary fixation maps
+    Expected layout:
+        dataset_dir/<video_name>/images/
+        dataset_dir/<video_name>/maps/
+        dataset_dir/<video_name>/fixation/
 
-    Filenames in ``maps/`` and ``fixation/`` match those in ``images/``.
+    Each sample returns:
+        video_filename, rgb_frame_set, final_sal_map, final_fix_map, n_frames
 
-    Each sample is a temporal window of up to ``window_len`` consecutive frames.
-    Videos shorter than ``window_len`` are skipped.
+    Shapes:
+        rgb_frame_set: [T, H, W, 3]
+        final_sal_map: [H, W]
+        final_fix_map: [H, W]
 
-    Missing saliency or fixation maps: if a non-final frame in the window has no
-    map, a zero dummy map is used. If the last frame in the window is missing
-    either saliency or fixation, that window is not indexed (or the final frame
-    is omitted when building the window).
+    Important:
+        This loader assumes last-frame saliency prediction.
+        It loads a window of RGB frames, but only the final frame's saliency
+        and fixation maps as supervision.
 
-    Returns per index:
-      video_filename, rgb_frame_set, sal_map_set, fix_map_set, n_frames
+    HSFI-Net-style sampling:
+        If random_train_sampling=True, __len__ is the number of videos and each
+        __getitem__ samples one random valid clip start from that video. This
+        matches the original HSFI-Net training loader's one-random-clip-per-video
+        behavior, while keeping this loader's paths, transforms, and return type.
     """
 
     IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
@@ -36,8 +43,10 @@ class DatasetLoader(Dataset):
         dataset_dir: str,
         window_len: int,
         stride: int = 1,
+        joint_transform: Optional[Callable] = None,
         transform_rgb: Optional[Callable] = None,
         transform_sal: Optional[Callable] = None,
+        random_train_sampling: bool = False,
     ):
         if window_len < 1:
             raise ValueError(f"window_len must be >= 1, got {window_len}")
@@ -47,11 +56,25 @@ class DatasetLoader(Dataset):
         self.dataset_dir = os.path.abspath(dataset_dir)
         self.window_len = window_len
         self.stride = stride
+        self.random_train_sampling = random_train_sampling
+
+        # Preferred: one synchronized transform for RGB window + saliency + fixation.
+        self.joint_transform = joint_transform
+
+        # Kept for compatibility. Avoid random crop/flip/resize here unless
+        # the same operation is already handled by joint_transform.
         self.transform_rgb = transform_rgb
         self.transform_sal = transform_sal
 
         self.video_dirs: List[str] = []
-        self.windows: List[Tuple[str, int]] = []  # (video_filename, start_index)
+        self.windows: List[Tuple[str, int]] = []
+
+        # Used only when random_train_sampling=True. Each index corresponds to
+        # one video, then __getitem__ randomly selects a valid start for it.
+        self.video_random_starts: Dict[str, List[int]] = {}
+
+        # Fix 4: cache frame names instead of listing directory in every __getitem__.
+        self.video_frame_names: Dict[str, List[str]] = {}
 
         for name in sorted(os.listdir(self.dataset_dir)):
             video_path = os.path.join(self.dataset_dir, name)
@@ -61,6 +84,7 @@ class DatasetLoader(Dataset):
             images_dir = os.path.join(video_path, "images")
             maps_dir = os.path.join(video_path, "maps")
             fixations_dir = os.path.join(video_path, "fixation")
+
             if (
                 not os.path.isdir(images_dir)
                 or not os.path.isdir(maps_dir)
@@ -69,36 +93,64 @@ class DatasetLoader(Dataset):
                 continue
 
             frame_names = self._list_image_names(images_dir)
-            if not frame_names:
+            if len(frame_names) < window_len:
+                continue
+
+            n_frames = len(frame_names)
+            valid_starts: List[int] = []
+
+            # HSFI-Net training samples random starts at frame-level granularity,
+            # not at the deterministic sliding-window stride.
+            candidate_stride = 1 if random_train_sampling else stride
+            for start in range(0, n_frames - window_len + 1, candidate_stride):
+                final_fname = frame_names[start + window_len - 1]
+
+                # Only index windows with valid final-frame supervision.
+                if not self._has_sal_map(maps_dir, final_fname):
+                    continue
+                if not self._has_fixation_map(fixations_dir, final_fname):
+                    continue
+
+                valid_starts.append(start)
+                if not random_train_sampling:
+                    self.windows.append((name, start))
+
+            if not valid_starts:
                 continue
 
             self.video_dirs.append(name)
-            n_frames = len(frame_names)
-            if n_frames < window_len:
-                continue
+            self.video_frame_names[name] = frame_names
+            if random_train_sampling:
+                self.video_random_starts[name] = valid_starts
 
-            for start in range(0, n_frames - window_len + 1, stride):
-                last_fname = frame_names[start + window_len - 1]
-                last_has_sal = self._has_sal_map(maps_dir, last_fname)
-                last_has_fix = self._has_fixation_map(fixations_dir, last_fname)
-                if not last_has_sal or not last_has_fix:
-                    continue
-                self.windows.append((name, start))
-
-        if not self.windows:
+        if random_train_sampling:
+            if not self.video_dirs:
+                raise RuntimeError(
+                    f"No valid videos found under {self.dataset_dir}. "
+                    "Expected subdirs with 'images/', 'maps/', and 'fixation/'."
+                )
+        elif not self.windows:
             raise RuntimeError(
                 f"No valid video windows found under {self.dataset_dir}. "
                 "Expected subdirs with 'images/', 'maps/', and 'fixation/'."
             )
 
     @staticmethod
-    def _list_image_names(images_dir: str) -> List[str]:
+    def _natural_key(filename: str):
+        # Safer than plain sort if filenames are not zero-padded.
+        return [
+            int(part) if part.isdigit() else part.lower()
+            for part in re.split(r"(\d+)", filename)
+        ]
+
+    @classmethod
+    def _list_image_names(cls, images_dir: str) -> List[str]:
         image_files = [
             f
             for f in os.listdir(images_dir)
-            if f.lower().endswith(DatasetLoader.IMAGE_EXTS)
+            if f.lower().endswith(cls.IMAGE_EXTS)
         ]
-        image_files.sort()
+        image_files.sort(key=cls._natural_key)
         return image_files
 
     @staticmethod
@@ -109,103 +161,118 @@ class DatasetLoader(Dataset):
     def _has_fixation_map(fixations_dir: str, frame_name: str) -> bool:
         return os.path.isfile(os.path.join(fixations_dir, frame_name))
 
-    def _dummy_sal_map(self, height: int, width: int) -> np.ndarray:
-        return np.zeros((height, width), dtype=np.float32)
+    @staticmethod
+    def _load_rgb_pil(path: str) -> Image.Image:
+        # Fix 6: close file handle immediately after copying image into memory.
+        with Image.open(path) as img:
+            return img.convert("RGB").copy()
 
-    def _dummy_fix_map(self, height: int, width: int) -> np.ndarray:
-        return np.zeros((height, width), dtype=np.float32)
+    @staticmethod
+    def _load_gray_pil(path: str) -> Image.Image:
+        with Image.open(path) as img:
+            return img.convert("L").copy()
 
-    def __len__(self) -> int:
-        return len(self.windows)
-
-    def _load_rgb(self, path: str) -> np.ndarray:
-        img = Image.open(path).convert("RGB")
+    def _rgb_to_array(self, img: Image.Image) -> np.ndarray:
         arr = np.asarray(img, dtype=np.uint8)
         if self.transform_rgb is not None:
             arr = self.transform_rgb(arr)
         return arr
 
-    def _load_sal(self, path: str) -> np.ndarray:
-        sal = Image.open(path).convert("L")
-        arr = np.asarray(sal, dtype=np.float32) / 255.0
+    def _sal_to_array(self, img: Image.Image) -> np.ndarray:
+        arr = np.asarray(img, dtype=np.float32) / 255.0
         if self.transform_sal is not None:
             arr = self.transform_sal(arr)
         return arr
 
-    def _load_fixation(self, path: str) -> np.ndarray:
-        fix = Image.open(path).convert("L")
-        arr = np.asarray(fix, dtype=np.uint8)
+    @staticmethod
+    def _fix_to_array(img: Image.Image) -> np.ndarray:
+        arr = np.asarray(img, dtype=np.uint8)
+        return (arr > 0).astype(np.float32)
 
-        # Convert 0/255 or grayscale fixation image to binary 0/1.
-        # Use > 0 so anti-aliased fixation points are still retained.
-        arr = (arr > 0).astype(np.float32)
-
-        return arr
+    def __len__(self) -> int:
+        if self.random_train_sampling:
+            return len(self.video_dirs)
+        return len(self.windows)
 
     def __getitem__(self, idx: int):
-        video_filename, start = self.windows[idx]
+        if self.random_train_sampling:
+            video_filename = self.video_dirs[idx]
+            starts = self.video_random_starts[video_filename]
+            start = int(np.random.choice(starts))
+        else:
+            video_filename, start = self.windows[idx]
+
         video_path = os.path.join(self.dataset_dir, video_filename)
         images_dir = os.path.join(video_path, "images")
         maps_dir = os.path.join(video_path, "maps")
         fixations_dir = os.path.join(video_path, "fixation")
 
-        frame_names = self._list_image_names(images_dir)
-        end = min(start + self.window_len, len(frame_names))
-        window_frames = frame_names[start:end]
+        frame_names = self.video_frame_names[video_filename]
+        window_frames = frame_names[start : start + self.window_len]
 
-        rgb_frames = []
-        sal_maps = []
-        fix_maps = []
-        for offset, fname in enumerate(window_frames):
-            is_last_in_window = offset == len(window_frames) - 1
-            has_sal = self._has_sal_map(maps_dir, fname)
-            has_fix = self._has_fixation_map(fixations_dir, fname)
-
-            if is_last_in_window and (not has_sal or not has_fix):
-                continue
-
-            rgb = self._load_rgb(os.path.join(images_dir, fname))
-            rgb_frames.append(rgb)
-
-            if has_sal:
-                sal_maps.append(self._load_sal(os.path.join(maps_dir, fname)))
-            else:
-                sal_maps.append(self._dummy_sal_map(rgb.shape[0], rgb.shape[1]))
-
-            if has_fix:
-                fix_map = self._load_fixation(os.path.join(fixations_dir, fname))
-                if is_last_in_window and fix_map.max() <= 0.0:
-                    print(
-                        f"Warning: empty fixation map for final frame "
-                        f"'{video_filename}/{fname}'"
-                    )
-                fix_maps.append(fix_map)
-            else:
-                fix_maps.append(self._dummy_fix_map(rgb.shape[0], rgb.shape[1]))
-
-        if not rgb_frames:
+        if len(window_frames) != self.window_len:
             raise RuntimeError(
-                f"Window {idx} for video '{video_filename}' produced no frames "
-                f"(start={start}, window_len={self.window_len})."
+                f"Window for video '{video_filename}' has "
+                f"{len(window_frames)} frames, expected {self.window_len}."
             )
 
-        n_frames = len(rgb_frames)
+        final_fname = window_frames[-1]
+        final_sal_path = os.path.join(maps_dir, final_fname)
+        final_fix_path = os.path.join(fixations_dir, final_fname)
+
+        # Fix 5: this should never fail because __init__ filtered invalid windows.
+        # If it does fail, raise instead of silently returning a shorter sample.
+        if not os.path.isfile(final_sal_path):
+            raise FileNotFoundError(
+                f"Missing final saliency map for indexed window: "
+                f"{video_filename}/{final_fname}"
+            )
+        if not os.path.isfile(final_fix_path):
+            raise FileNotFoundError(
+                f"Missing final fixation map for indexed window: "
+                f"{video_filename}/{final_fname}"
+            )
+
+        rgb_imgs = [
+            self._load_rgb_pil(os.path.join(images_dir, fname))
+            for fname in window_frames
+        ]
+        final_sal = self._load_gray_pil(final_sal_path)
+        final_fix = self._load_gray_pil(final_fix_path)
+
+        # Fix 1: one synchronized transform for the whole window and both targets.
+        if self.joint_transform is not None:
+            rgb_imgs, final_sal, final_fix = self.joint_transform(
+                rgb_imgs,
+                final_sal,
+                final_fix,
+            )
+
+        rgb_frames = [self._rgb_to_array(img) for img in rgb_imgs]
+        final_sal_map = self._sal_to_array(final_sal)
+        final_fix_map = self._fix_to_array(final_fix)
+
         rgb_frame_set = np.stack(rgb_frames, axis=0)  # [T, H, W, 3]
-        sal_map_set = np.stack(sal_maps, axis=0)  # [T, H, W]
-        fix_map_set = np.stack(fix_maps, axis=0)  # [T, H, W]
+        n_frames = rgb_frame_set.shape[0]
 
-        if fix_map_set.shape != sal_map_set.shape:
-            raise ValueError(
-                f"fix_map_set shape {fix_map_set.shape} != "
-                f"sal_map_set shape {sal_map_set.shape} "
-                f"for video '{video_filename}'"
+        if n_frames != self.window_len:
+            raise RuntimeError(
+                f"Expected {self.window_len} frames, got {n_frames} "
+                f"for video '{video_filename}', start={start}."
             )
 
-        unique_fix = np.unique(fix_map_set)
-        if not np.all(np.isin(unique_fix, [0.0, 1.0])):
+        if final_sal_map.shape != final_fix_map.shape:
             raise ValueError(
-                f"fix_map_set must be binary {{0,1}}, got unique values {unique_fix} "
-                f"for video '{video_filename}'"
+                f"final_sal_map shape {final_sal_map.shape} != "
+                f"final_fix_map shape {final_fix_map.shape} "
+                f"for video '{video_filename}/{final_fname}'"
             )
 
-        return video_filename, rgb_frame_set, sal_map_set, fix_map_set, n_frames
+        if final_fix_map.max() <= 0.0:
+            print(
+                f"Warning: empty final fixation map for "
+                f"'{video_filename}/{final_fname}'"
+            )
+
+        return video_filename, rgb_frame_set, final_sal_map, final_fix_map, n_frames
+

@@ -664,6 +664,7 @@ class MetricAverager:
     """Running average of saliency metrics over evaluation batches."""
 
     METRIC_KEYS = ("CC", "SIM", "AUC", "sAUC", "NSS")
+    # METRIC_KEYS = ("CC", "SIM", "NSS")
 
     def __init__(self) -> None:
         self.reset()

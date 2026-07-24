@@ -1,5 +1,6 @@
 src/training_outputs/
 src/evaluation_outputs/
+src/baselines/
 *.pth
 __pycache__/
 *.pyc
