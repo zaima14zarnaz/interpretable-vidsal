@@ -626,7 +626,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
 
         self.prev_scale = nn.Parameter(torch.tensor(1.0))
         # Initialized to 0.0 so sigmoid(0)*2 = 1.0; bounds mask strength in (0, 2).
-        self.mask_strength_logit = nn.Parameter(torch.tensor(0.0))
+        self.mask_strength_logit = nn.Parameter(torch.tensor(1.0))
 
     def forward(
         self,
