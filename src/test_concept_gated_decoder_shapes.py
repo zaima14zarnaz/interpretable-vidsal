@@ -27,6 +27,7 @@ def _make_fake_concept_out(
     C: int,
     concept_dim: int,
     num_trajectories: int,
+    top_k: int = 10,
     device: torch.device,
 ) -> Dict[str, Any]:
     N = H * W
@@ -51,6 +52,8 @@ def _make_fake_concept_out(
 
     return {
         "concept_representation": torch.randn(num_trajectories, concept_dim, device=device),
+        "active_visual_prototypes": torch.randn(B, top_k, concept_dim, device=device),
+        "visual_validity_mask": torch.ones(B, top_k, dtype=torch.bool, device=device),
         "visual_concept_representation": torch.randn(B * T * H * W, concept_dim, device=device),
         "visual_metadata": {
             "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
@@ -150,6 +153,11 @@ def test_decoder_output_shapes(
     saliency_map = out["saliency_map"]
     assert not torch.isnan(saliency_map).any(), "saliency_map contains NaN"
     assert not torch.isinf(saliency_map).any(), "saliency_map contains Inf"
+
+    assert torch.is_tensor(out["mask_diversity_loss"])
+    assert torch.isfinite(out["mask_diversity_loss"])
+    assert isinstance(out["stage_mask_diversity_losses"], dict)
+    assert len(out["stage_mask_diversity_losses"]) == len(STAGE_CONFIG)
 
 
 def test_full_model_forward(

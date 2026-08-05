@@ -134,6 +134,9 @@ LOSS_LAMBDA = {
     "lambda_visual_equiv": 0.00,
     "lambda_temporal_attention_entropy": 0.0,
 
+    # Encourage diverse final cosine-derived masks at each decoder stage.
+    "mask_diversity_weight": 0.01,
+
     "patch_from_logits": False,
 
     # Deep supervision on per-stage decoder side outputs (training only).
@@ -637,6 +640,42 @@ def _print_decoder_concept_gate_debug(
         )
 
 
+def _print_multi_mask_diagnostics(model_out: dict) -> None:
+    """Print per-stage multi-mask diagnostics from decoder stage_mask_diagnostics."""
+    pred_out = model_out.get("prediction_out")
+    if not isinstance(pred_out, dict):
+        print("DEBUG multi-mask: unavailable (missing prediction_out)")
+        return
+
+    stage_diag = pred_out.get("stage_mask_diagnostics")
+    if not isinstance(stage_diag, dict) or not stage_diag:
+        print(
+            "DEBUG multi-mask: unavailable "
+            "(pass return_decoder_diagnostics=True on the logging batch)"
+        )
+        return
+
+    for stage in sorted(stage_diag.keys()):
+        diag = stage_diag.get(stage)
+        if not isinstance(diag, dict):
+            continue
+        between_var = float(diag.get("between_mask_variance", float("nan")))
+        spatial_var = float(diag.get("per_mask_spatial_variance", float("nan")))
+        pair_corr = float(diag.get("mean_pairwise_mask_correlation", float("nan")))
+        print(
+            f"multi-mask [{stage}] | "
+            f"between_var={between_var:.6f} | "
+            f"spatial_var={spatial_var:.6f} | "
+            f"pair_corr={pair_corr:.6f}"
+        )
+        per_mask_std = [
+            float(diag.get(f"mask_{mask_idx}_std", float("nan")))
+            for mask_idx in range(1, 5)
+        ]
+        per_mask_std_str = ", ".join(f"{value:.6f}" for value in per_mask_std)
+        print(f"multi-mask [{stage}] | per-mask std=[{per_mask_std_str}]")
+
+
 def _print_visual_concept_usage_debug(model_out: dict, top_n: int = 10) -> None:
     concept_out = model_out.get("concept_out")
     if not isinstance(concept_out, dict):
@@ -764,6 +803,7 @@ def train_one_epoch(
                 _print_first_batch_debug(model_out, sal_batch)
                 _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
                 _print_decoder_concept_gate_debug(model, model_out)
+                _print_multi_mask_diagnostics(model_out)
                 _print_visual_concept_usage_debug(model_out)
 
             if batch_idx % MAP_SAVE_INTERVAL == 0:
@@ -821,6 +861,12 @@ def train_one_epoch(
                         if torch.is_tensor(v) and v.ndim == 0
                     },
                 )
+                if torch.is_tensor(loss_dict.get("loss_mask_diversity")):
+                    print(
+                        "DEBUG mask diversity:"
+                        f" raw={float(loss_dict['loss_mask_diversity'].detach().cpu()):.6f}"
+                        f" weighted={float(loss_dict['loss_mask_diversity_weighted'].detach().cpu()):.6f}"
+                    )
 
         if scaler is not None and _amp_enabled(device):
             scaler.scale(loss).backward()
@@ -905,6 +951,7 @@ def validate_one_epoch(
             )
             if batch_idx == 0:
                 _print_decoder_concept_gate_debug(model, model_out)
+                _print_multi_mask_diagnostics(model_out)
             if batch_idx % MAP_SAVE_INTERVAL == 0:
                 save_batch_maps(
                     model_out,
@@ -1236,8 +1283,7 @@ def _run_overfit_one_batch(
             _print_first_batch_debug(model_out, sal_batch)
             _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
             _print_decoder_concept_gate_debug(model, model_out)
-
-        loss_dict = _compute_batch_loss(model_out, sal_batch, fix_batch=fix_batch)
+            _print_multi_mask_diagnostics(model_out)
         loss = loss_dict["loss_total"]
         loss.backward()
         torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)

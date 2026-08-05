@@ -34,7 +34,7 @@ torch.backends.cudnn.allow_tf32 = True
 # Edit these directly (no argparse).
 # ---------------------------------------------------------------------------
 CHECKPOINT_PATH = (
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260722_201317/epoch_100.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260804_121409/epoch_096.pth"
 )
 VAL_DATASET_DIR = train_cfg.VAL_DATASET_DIR
 WINDOW_LEN = train_cfg.WINDOW_LEN

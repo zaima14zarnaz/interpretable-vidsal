@@ -1156,6 +1156,88 @@ def compute_temporal_attention_entropy_loss(
     return -normalized_entropy.mean()
 
 
+def compute_mask_diversity_loss(multi_masks: torch.Tensor) -> torch.Tensor:
+    """
+    Differentiable diversity loss over R final cosine-derived masks.
+
+    Args:
+        multi_masks: [B, R, T, H, W]
+
+    Returns:
+        Scalar loss encouraging low pairwise correlation between masks while
+        discouraging spatially constant (collapsed) masks.
+    """
+    if not torch.is_tensor(multi_masks):
+        raise ValueError(
+            f"multi_masks must be a torch.Tensor, got {type(multi_masks)!r}"
+        )
+    if multi_masks.dim() != 5:
+        raise ValueError(
+            f"multi_masks must be [B,R,T,H,W], got {tuple(multi_masks.shape)}"
+        )
+
+    masks_flat = multi_masks.flatten(start_dim=2)
+    centered = masks_flat - masks_flat.mean(dim=-1, keepdim=True)
+    normalized = F.normalize(centered, p=2, dim=-1, eps=1e-6)
+
+    gram = normalized @ normalized.transpose(1, 2)
+    _, num_masks, _ = gram.shape
+    if num_masks <= 1:
+        diversity_loss = gram.sum() * 0.0
+    else:
+        off_diag_mask = ~torch.eye(
+            num_masks,
+            dtype=torch.bool,
+            device=gram.device,
+        )
+        diversity_loss = gram[:, off_diag_mask].pow(2).mean()
+
+    spatial_std = masks_flat.std(dim=-1, unbiased=False)
+    variance_floor_loss = F.relu(0.05 - spatial_std).mean()
+
+    return diversity_loss + 0.1 * variance_floor_loss
+
+
+def compute_stage_mask_diversity_losses(
+    stage_multi_masks: Dict[str, torch.Tensor],
+    *,
+    reference: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """
+    Per-stage mask diversity losses and their mean across decoded stages.
+
+    Args:
+        stage_multi_masks: mapping stage -> differentiable [B,R,T,H,W] masks
+        reference: optional tensor used to derive device/dtype for a zero fallback
+
+    Returns:
+        mask_diversity_loss: mean over stages
+        stage_mask_diversity_losses: per-stage scalar losses
+    """
+    if not stage_multi_masks:
+        if reference is not None:
+            zero = reference.sum() * 0.0
+        else:
+            zero = torch.zeros((), device="cpu")
+        return zero, {}
+
+    stage_losses: Dict[str, torch.Tensor] = {}
+    for stage, masks in stage_multi_masks.items():
+        if not torch.is_tensor(masks):
+            continue
+        stage_losses[stage] = compute_mask_diversity_loss(masks)
+
+    if not stage_losses:
+        if reference is not None:
+            zero = reference.sum() * 0.0
+        else:
+            zero = torch.zeros((), device="cpu")
+        return zero, {}
+
+    mask_diversity_loss = torch.stack(list(stage_losses.values())).mean()
+    return mask_diversity_loss, stage_losses
+
+
 def compute_total_loss(
     model_out: Dict[str, Any],
     saliency_maps: torch.Tensor,
@@ -1185,6 +1267,7 @@ def compute_total_loss(
     patch_from_logits: bool = True,
     enable_side_aux: bool = False,
     side_stage_weights: Optional[Dict[str, float]] = None,
+    mask_diversity_weight: float = 0.01,
 ) -> Dict[str, Union[torch.Tensor, None]]:
     """
     Total training loss for ExplainableVidSalModel (return_details=True).
@@ -1312,6 +1395,11 @@ def compute_total_loss(
         )
         loss_decoder_side_aux = side_loss_out["loss_decoder_side_aux"]
 
+    loss_mask_diversity = prediction_out.get("mask_diversity_loss")
+    if not torch.is_tensor(loss_mask_diversity):
+        loss_mask_diversity = ref.sum() * 0.0
+    loss_mask_diversity_weighted = mask_diversity_weight * loss_mask_diversity
+
     loss_total_concept = _aggregate_concept_total_loss(concept_out, ref)
 
     loss_total = (
@@ -1331,6 +1419,7 @@ def compute_total_loss(
         + lambda_temporal_attention_entropy * loss_temporal_attention_entropy
         + loss_decoder_side_aux
         + loss_total_concept
+        + loss_mask_diversity_weighted
     )
 
     result = {
@@ -1356,6 +1445,8 @@ def compute_total_loss(
         "loss_temporal_attention_entropy": loss_temporal_attention_entropy,
         "loss_total_concept": loss_total_concept,
         "loss_decoder_side_aux": loss_decoder_side_aux,
+        "loss_mask_diversity": loss_mask_diversity,
+        "loss_mask_diversity_weighted": loss_mask_diversity_weighted,
         "delta_target": fid_out["delta_target"],
         "target_patch_grid": fid_out["target_patch_grid"],
         "source_mixture_grid": fid_out["source_mixture_grid"],

@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from losses import compute_stage_mask_diversity_losses
+
 _STAGE_ORDER = ("stage4", "stage3", "stage2", "stage1")
 _SIDE_UPSAMPLE_SCALES: Dict[str, int] = {
     "stage1": 4,
@@ -573,14 +575,97 @@ class LearnedFinalUpsample2D(nn.Module):
         return y
 
 
+def _compute_multi_mask_diagnostics(
+    multi_masks: torch.Tensor,
+    *,
+    mask_strength: float,
+) -> Dict[str, float]:
+    """
+    Scalar diagnostics for final cosine-derived multi-masks [B,R,T,H,W].
+
+    All statistics are computed under ``torch.no_grad()``.
+    """
+    with torch.no_grad():
+        if multi_masks.dim() != 5:
+            raise ValueError(
+                f"multi_masks must be [B,R,T,H,W], got {tuple(multi_masks.shape)}"
+            )
+
+        between_mask_variance = float(
+            multi_masks.var(dim=1, unbiased=False).mean().cpu()
+        )
+        per_mask_spatial_variance = float(
+            multi_masks.flatten(2).var(dim=-1, unbiased=False).mean().cpu()
+        )
+
+        masks_flat = multi_masks.flatten(start_dim=2)
+        centered = masks_flat - masks_flat.mean(dim=-1, keepdim=True)
+        normalized = F.normalize(centered, p=2, dim=-1, eps=1e-6)
+        gram = normalized @ normalized.transpose(1, 2)
+        num_masks = int(gram.shape[1])
+        if num_masks <= 1:
+            mean_pairwise_mask_correlation = 0.0
+        else:
+            off_diag_mask = ~torch.eye(
+                num_masks,
+                dtype=torch.bool,
+                device=gram.device,
+            )
+            mean_pairwise_mask_correlation = float(
+                gram[:, off_diag_mask].abs().mean().cpu()
+            )
+
+        diagnostics: Dict[str, float] = {
+            "between_mask_variance": between_mask_variance,
+            "per_mask_spatial_variance": per_mask_spatial_variance,
+            "mean_pairwise_mask_correlation": mean_pairwise_mask_correlation,
+            "mask_strength": float(mask_strength),
+        }
+
+        for mask_idx in range(num_masks):
+            mask_r = multi_masks[:, mask_idx]
+            label = mask_idx + 1
+            diagnostics[f"mask_{label}_mean"] = float(mask_r.mean().cpu())
+            diagnostics[f"mask_{label}_std"] = float(
+                mask_r.std(unbiased=False).cpu()
+            )
+            diagnostics[f"mask_{label}_min"] = float(mask_r.min().cpu())
+            diagnostics[f"mask_{label}_max"] = float(mask_r.max().cpu())
+
+        return diagnostics
+
+
+def _masked_softmax(
+    logits: torch.Tensor,
+    validity_mask: torch.Tensor,
+    dim: int = -1,
+) -> torch.Tensor:
+    """Softmax over dim with invalid concept slots masked to -inf."""
+    if validity_mask.dim() == 2 and logits.dim() == 3:
+        mask = validity_mask.unsqueeze(1).expand(-1, logits.shape[1], -1)
+    else:
+        mask = validity_mask
+    masked_logits = logits.masked_fill(~mask, float("-inf"))
+    return torch.softmax(masked_logits, dim=dim)
+
+
+def _motion_prototypes_available(concept_out: Dict[str, Any]) -> bool:
+    prototypes = concept_out.get("active_motion_prototypes")
+    validity = concept_out.get("motion_validity_mask")
+    if not torch.is_tensor(prototypes) or not torch.is_tensor(validity):
+        return False
+    return bool(validity.any().item())
+
+
 class SpatioTemporalConceptGatedFusionBlock(nn.Module):
     """
     Feature-first 3D fusion over [B, C, T, H, W] volumes.
 
     Dense features form the base signal. Concept volumes first modulate dense
-    features through FiLM, then produce a soft concept mask that suppresses
-    or enhances concept-conditioned feature responses. A coarser previous decoder
-    volume may be upsampled and added afterward.
+    features through FiLM, then R independent cosine-similarity concept masks
+    gate separate lightweight feature branches whose fused update is added
+    residually. A coarser previous decoder volume may be upsampled and added
+    afterward.
     """
 
     def __init__(
@@ -589,8 +674,23 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         concept_dim: int,
         decoder_channels: int,
         dropout: float = 0.05,
+        num_masks: int = 4,
+        mask_embed_dim: Optional[int] = None,
+        max_strength: float = 1.0,
     ):
         super().__init__()
+
+        if num_masks < 1:
+            raise ValueError(f"num_masks must be >= 1, got {num_masks}")
+
+        self.num_masks = int(num_masks)
+        self.decoder_channels = decoder_channels
+        self.mask_embed_dim = (
+            int(mask_embed_dim)
+            if mask_embed_dim is not None
+            else max(decoder_channels // 2, 32)
+        )
+        self.max_strength = float(max_strength)
 
         self.feature_proj = Conv3DGNAct(
             feature_channels,
@@ -616,25 +716,120 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             dropout=dropout,
         )
         self.film = nn.Conv3d(decoder_channels, decoder_channels * 2, kernel_size=1)
-        self.mask_head = nn.Conv3d(
-            decoder_channels,
-            decoder_channels,
-            kernel_size=1,
-        )
         self.refine1 = Residual3DRefineBlock(decoder_channels, dropout=dropout)
         self.refine2 = Residual3DRefineBlock(decoder_channels, dropout=dropout)
 
+        self.feature_token_proj = nn.Linear(decoder_channels, self.mask_embed_dim)
+        self.concept_proto_proj = nn.Linear(concept_dim, self.mask_embed_dim)
+        self.visual_mask_queries = nn.Parameter(
+            torch.randn(self.num_masks, self.mask_embed_dim) * 0.02
+        )
+        self.motion_mask_queries = nn.Parameter(
+            torch.randn(self.num_masks, self.mask_embed_dim) * 0.02
+        )
+        self.mask_feature_branches = nn.ModuleList(
+            [
+                Conv3DGNAct(
+                    decoder_channels,
+                    decoder_channels,
+                    kernel_size=1,
+                    padding=0,
+                )
+                for _ in range(self.num_masks)
+            ]
+        )
+        self.mask_fusion = nn.Conv3d(
+            decoder_channels * self.num_masks,
+            decoder_channels,
+            kernel_size=1,
+            bias=True,
+        )
+
+        self.gate_temperature = nn.Parameter(torch.ones(self.num_masks))
+        self.gate_threshold = nn.Parameter(torch.zeros(self.num_masks))
+        # sigmoid(-2.197) ≈ 0.1 -> strength ≈ 0.1 when max_strength=1.0
+        self.raw_strength = nn.Parameter(torch.tensor(1.0))
+
         self.prev_scale = nn.Parameter(torch.tensor(1.0))
-        # Initialized to 0.0 so sigmoid(0)*2 = 1.0; bounds mask strength in (0, 2).
-        self.mask_strength_logit = nn.Parameter(torch.tensor(1.0))
+
+    def _compute_modality_masks(
+        self,
+        feature_proj: torch.Tensor,
+        active_prototypes: torch.Tensor,
+        validity_mask: torch.Tensor,
+        mask_queries: torch.Tensor,
+        num_masks: int,
+        gate_offset: int = 0,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        B, _, T, H, W = feature_proj.shape
+        N = T * H * W
+        K = active_prototypes.shape[1]
+
+        feature_tokens = feature_proj.permute(0, 2, 3, 4, 1).reshape(B, N, -1)
+        feature_tokens = F.normalize(self.feature_token_proj(feature_tokens), dim=-1)
+        proto_tokens = F.normalize(
+            self.concept_proto_proj(active_prototypes),
+            dim=-1,
+        )
+
+        concept_maps_flat = torch.einsum("bkd,bnd->bkn", proto_tokens, feature_tokens)
+        concept_maps = concept_maps_flat.reshape(B, K, T, H, W)
+
+        weight_logits = torch.stack(
+            [
+                torch.einsum("bkd,d->bk", proto_tokens, mask_queries[r])
+                for r in range(num_masks)
+            ],
+            dim=1,
+        )
+        concept_weights = _masked_softmax(weight_logits, validity_mask, dim=-1)
+
+        multi_masks_flat = torch.einsum(
+            "brk,bkn->brn",
+            concept_weights,
+            concept_maps_flat,
+        )
+        multi_masks = multi_masks_flat.reshape(B, num_masks, T, H, W)
+
+        gate_indices = torch.arange(
+            gate_offset,
+            gate_offset + num_masks,
+            device=feature_proj.device,
+        )
+        temps = self.gate_temperature.index_select(0, gate_indices).view(
+            1, num_masks, 1, 1, 1
+        )
+        thresholds = self.gate_threshold.index_select(0, gate_indices).view(
+            1, num_masks, 1, 1, 1
+        )
+        multi_mask_gates = torch.sigmoid(temps * (multi_masks - thresholds))
+
+        return concept_maps, concept_weights, multi_masks, multi_mask_gates
+
+    def _apply_multi_mask_branches(
+        self,
+        feature_proj: torch.Tensor,
+        multi_mask_gates: torch.Tensor,
+    ) -> torch.Tensor:
+        gated_branches = []
+        for r in range(self.num_masks):
+            branch_r = self.mask_feature_branches[r](feature_proj)
+            gate_r = multi_mask_gates[:, r : r + 1]
+            gated_branches.append(gate_r * branch_r)
+        return self.mask_fusion(torch.cat(gated_branches, dim=1))
 
     def forward(
         self,
         features: torch.Tensor,
         concept_volume: torch.Tensor,
         prev_decoder: Optional[torch.Tensor] = None,
-        concept_agreement_volume: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        *,
+        active_visual_prototypes: torch.Tensor,
+        visual_validity_mask: torch.Tensor,
+        active_motion_prototypes: Optional[torch.Tensor] = None,
+        motion_validity_mask: Optional[torch.Tensor] = None,
+        use_motion_masks: bool = False,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         feature_proj = self.feature_proj(features)
         concept_proj = self.concept_proj(concept_volume)
 
@@ -647,33 +842,96 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         else:
             prev_up = torch.zeros_like(feature_proj)
 
-        # FiLM modulates feature channels using concept evidence before masking.
         film_params = self.film(concept_proj)
         gamma, beta = film_params.chunk(2, dim=1)
         gamma = 1.0 + 0.1 * torch.tanh(gamma)
         beta = 0.1 * beta
         feature_proj = feature_proj * gamma + beta
 
-        # The concept mask directly controls which concept-conditioned feature
-        # responses are suppressed or enhanced. This is mandatory and is the only
-        # feature fusion path; do not add back gated additive concept injection.
-        mask_strength = 2.0 * torch.sigmoid(self.mask_strength_logit)
-        concept_mask = torch.sigmoid(self.mask_head(concept_proj))
-        if concept_agreement_volume is not None:
-            agreement_prior = ((concept_agreement_volume + 1.0) * 0.5).clamp(
-                0.0,
-                1.0,
+        motion_available = (
+            use_motion_masks
+            and active_motion_prototypes is not None
+            and motion_validity_mask is not None
+            and bool(motion_validity_mask.any().item())
+        )
+
+        if motion_available:
+            num_visual_masks = self.num_masks // 2
+            num_motion_masks = self.num_masks - num_visual_masks
+            visual_maps, visual_weights, visual_masks, visual_gates = (
+                self._compute_modality_masks(
+                    feature_proj,
+                    active_visual_prototypes,
+                    visual_validity_mask,
+                    self.visual_mask_queries,
+                    num_visual_masks,
+                    gate_offset=0,
+                )
             )
-            concept_mask = concept_mask * agreement_prior
-        mask_scale = 1.0 + mask_strength * (concept_mask - 0.5)
-        feature_proj = feature_proj * mask_scale
+            motion_maps, motion_weights, motion_masks, motion_gates = (
+                self._compute_modality_masks(
+                    feature_proj,
+                    active_motion_prototypes,
+                    motion_validity_mask,
+                    self.motion_mask_queries,
+                    num_motion_masks,
+                    gate_offset=num_visual_masks,
+                )
+            )
+            multi_masks = torch.cat([visual_masks, motion_masks], dim=1)
+            multi_mask_gates = torch.cat([visual_gates, motion_gates], dim=1)
+            mask_modality_labels = torch.tensor(
+                [0] * num_visual_masks + [1] * num_motion_masks,
+                device=feature_proj.device,
+                dtype=torch.long,
+            )
+            motion_concept_maps = motion_maps
+            motion_concept_weights = motion_weights
+        else:
+            visual_maps, visual_weights, multi_masks, multi_mask_gates = (
+                self._compute_modality_masks(
+                    feature_proj,
+                    active_visual_prototypes,
+                    visual_validity_mask,
+                    self.visual_mask_queries,
+                    self.num_masks,
+                    gate_offset=0,
+                )
+            )
+            mask_modality_labels = torch.zeros(
+                self.num_masks,
+                device=feature_proj.device,
+                dtype=torch.long,
+            )
+            motion_concept_maps = None
+            motion_concept_weights = None
+
+        fused_update = self._apply_multi_mask_branches(feature_proj, multi_mask_gates)
+        strength = self.max_strength * torch.sigmoid(self.raw_strength)
+        feature_proj = feature_proj + strength * fused_update
 
         fused = feature_proj
         if prev_decoder is not None:
             fused = fused + self.prev_scale * prev_up
 
         decoded = self.refine2(self.refine1(fused))
-        return decoded, concept_mask
+
+        concept_mask = multi_mask_gates.mean(dim=1, keepdim=True)
+
+        mask_outputs: Dict[str, torch.Tensor] = {
+            "concept_mask": concept_mask,
+            "multi_masks": multi_masks,
+            "multi_mask_gates": multi_mask_gates,
+            "visual_concept_maps": visual_maps,
+            "visual_concept_weights": visual_weights,
+            "mask_modality_labels": mask_modality_labels,
+        }
+        if motion_concept_maps is not None:
+            mask_outputs["motion_concept_maps"] = motion_concept_maps
+        if motion_concept_weights is not None:
+            mask_outputs["motion_concept_weights"] = motion_concept_weights
+
+        return decoded, mask_outputs
 
 
 class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
@@ -698,6 +956,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         temporal_aggregation: str = "learned_all_frames",
         use_side_logit_fusion: bool = True,
         motion_concept_stages: Tuple[str, ...] = ("stage3",),
+        num_masks: int = 4,
     ):
         super().__init__()
         del feature_residual_scale, tau_pi
@@ -717,6 +976,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         self.output_activation = output_activation
         self.temporal_aggregation = temporal_aggregation
         self.use_side_logit_fusion = bool(use_side_logit_fusion)
+        self.num_masks = int(num_masks)
 
         hidden_channels = max(decoder_channels // 2, 32)
         attn_hidden = max(decoder_channels // 2, 1)
@@ -728,6 +988,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     concept_dim=concept_dim,
                     decoder_channels=decoder_channels,
                     dropout=dropout,
+                    num_masks=self.num_masks,
                 )
                 for stage, channels in self.stage_channels.items()
             }
@@ -915,6 +1176,27 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         stage_mask_diagnostics: Optional[Dict[str, Dict[str, float]]] = (
             {} if return_details else None
         )
+        stage_multi_masks: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_multi_mask_gates: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_visual_concept_maps: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_visual_concept_weights: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_motion_concept_maps: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_motion_concept_weights: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
+        stage_mask_modality_labels: Optional[Dict[str, torch.Tensor]] = (
+            {} if return_details else None
+        )
         decoded_stage_volumes: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
@@ -924,6 +1206,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         side_saliency_logits: Dict[str, torch.Tensor] = {}
         side_patch_logits: Dict[str, torch.Tensor] = {}
         side_temporal_weights: Dict[str, torch.Tensor] = {}
+        stage_multi_masks_for_loss: Dict[str, torch.Tensor] = {}
 
         prev_decoder: Optional[torch.Tensor] = None
 
@@ -972,23 +1255,42 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 concept_out=concept_outs[stage],
             )
 
-            agreement_volume = _build_visual_agreement_volume(
-                concept_outs[stage],
-                stage=stage,
+            stage_concept_out = concept_outs[stage]
+            active_visual_prototypes = stage_concept_out.get(
+                "active_visual_prototypes"
             )
-            if agreement_volume is not None:
-                agreement_volume = _align_concept_volume_to_features(
-                    agreement_volume,
-                    features_5d,
-                    stage=stage,
+            visual_validity_mask = stage_concept_out.get("visual_validity_mask")
+            if (
+                not torch.is_tensor(active_visual_prototypes)
+                or not torch.is_tensor(visual_validity_mask)
+            ):
+                raise ValueError(
+                    f"concept_out at {stage} must provide active_visual_prototypes "
+                    f"and visual_validity_mask"
                 )
 
-            decoded, concept_mask = fusion_blocks[stage](
+            use_motion_masks = (
+                stage == "stage3"
+                and stage in self.motion_concept_stages
+                and _motion_prototypes_available(stage_concept_out)
+            )
+            active_motion_prototypes = stage_concept_out.get(
+                "active_motion_prototypes"
+            )
+            motion_validity_mask = stage_concept_out.get("motion_validity_mask")
+
+            decoded, mask_outputs = fusion_blocks[stage](
                 features_5d,
                 concept_volume,
                 prev_decoder=prev_decoder,
-                concept_agreement_volume=agreement_volume,
+                active_visual_prototypes=active_visual_prototypes,
+                visual_validity_mask=visual_validity_mask,
+                active_motion_prototypes=active_motion_prototypes,
+                motion_validity_mask=motion_validity_mask,
+                use_motion_masks=use_motion_masks,
             )
+            concept_mask = mask_outputs["concept_mask"]
+            stage_multi_masks_for_loss[stage] = mask_outputs["multi_masks"]
             prev_decoder = decoded
 
             side_volume = side_feature_heads[stage](decoded)
@@ -1005,13 +1307,39 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 stage_concept_volumes[stage] = concept_volume.detach()
                 stage_feature_volumes[stage] = features_5d.detach()
                 stage_concept_masks[stage] = concept_mask.detach()
-                # stage_gates is kept for backward compatibility, but it now stores
-                # the concept-derived feature mask. Prefer stage_concept_masks.
                 stage_gates[stage] = concept_mask.detach()
+                stage_multi_masks[stage] = mask_outputs["multi_masks"]
+                stage_multi_mask_gates[stage] = mask_outputs["multi_mask_gates"]
+                stage_visual_concept_maps[stage] = mask_outputs["visual_concept_maps"]
+                stage_visual_concept_weights[stage] = mask_outputs[
+                    "visual_concept_weights"
+                ]
+                stage_mask_modality_labels[stage] = mask_outputs[
+                    "mask_modality_labels"
+                ]
+                if mask_outputs.get("motion_concept_maps") is not None:
+                    stage_motion_concept_maps[stage] = mask_outputs[
+                        "motion_concept_maps"
+                    ]
+                if mask_outputs.get("motion_concept_weights") is not None:
+                    stage_motion_concept_weights[stage] = mask_outputs[
+                        "motion_concept_weights"
+                    ]
                 decoded_stage_volumes[stage] = decoded.detach()
                 with torch.no_grad():
-                    mask_strength = 2.0 * torch.sigmoid(
-                        fusion_blocks[stage].mask_strength_logit
+                    multi_masks = mask_outputs["multi_masks"]
+                    multi_mask_gates = mask_outputs["multi_mask_gates"]
+                    mask_strength = float(
+                        (
+                            fusion_blocks[stage].max_strength
+                            * torch.sigmoid(fusion_blocks[stage].raw_strength)
+                        )
+                        .detach()
+                        .cpu()
+                    )
+                    multi_mask_diag = _compute_multi_mask_diagnostics(
+                        multi_masks,
+                        mask_strength=mask_strength,
                     )
                     stage_mask_diagnostics[stage] = {
                         "concept_mask_mean": float(
@@ -1026,13 +1354,30 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                         "concept_mask_max": float(
                             concept_mask.detach().max().cpu()
                         ),
-                        "mask_strength": float(mask_strength.detach().cpu()),
+                        "multi_mask_mean": float(multi_masks.mean().cpu()),
+                        "multi_mask_std": float(multi_masks.std().cpu()),
+                        "multi_mask_gate_mean": float(
+                            multi_mask_gates.mean().cpu()
+                        ),
+                        "multi_mask_gate_std": float(
+                            multi_mask_gates.std().cpu()
+                        ),
+                        "residual_strength": mask_strength,
+                        "num_masks": float(self.num_masks),
+                        **multi_mask_diag,
                     }
                 if motion_volume is not None:
                     stage_motion_concept_volumes[stage] = motion_volume.detach()
 
         if prev_decoder is None:
             raise RuntimeError("Decoder produced no stage outputs")
+
+        mask_diversity_loss, stage_mask_diversity_losses = (
+            compute_stage_mask_diversity_losses(
+                stage_multi_masks_for_loss,
+                reference=prev_decoder,
+            )
+        )
 
         final_feature_2d, temporal_weights = self._aggregate_temporal_features(
             prev_decoder
@@ -1074,6 +1419,8 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             "side_temporal_weights": side_temporal_weights,
             "output_activation": self.output_activation,
             "decoder_temporal_diagnostics": decoder_temporal_diagnostics,
+            "mask_diversity_loss": mask_diversity_loss,
+            "stage_mask_diversity_losses": stage_mask_diversity_losses,
         }
 
         if return_details:
@@ -1082,6 +1429,13 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             out["stage_gates"] = stage_gates
             out["stage_concept_masks"] = stage_concept_masks
             out["stage_mask_diagnostics"] = stage_mask_diagnostics
+            out["stage_multi_masks"] = stage_multi_masks
+            out["stage_multi_mask_gates"] = stage_multi_mask_gates
+            out["stage_visual_concept_maps"] = stage_visual_concept_maps
+            out["stage_visual_concept_weights"] = stage_visual_concept_weights
+            out["stage_motion_concept_maps"] = stage_motion_concept_maps
+            out["stage_motion_concept_weights"] = stage_motion_concept_weights
+            out["stage_mask_modality_labels"] = stage_mask_modality_labels
             out["decoded_stage_volumes"] = decoded_stage_volumes
             out["stage_motion_concept_volumes"] = stage_motion_concept_volumes
 

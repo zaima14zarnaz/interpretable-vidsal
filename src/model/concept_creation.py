@@ -194,6 +194,50 @@ class VisualConceptCreation(nn.Module):
         off_diag = cos[mask]
         return F.relu(off_diag - self.diversity_margin).pow(2).mean()
 
+    @staticmethod
+    def _extract_active_prototypes(
+        activations: torch.Tensor,
+        batch_idx: torch.Tensor,
+        B: int,
+        prototypes: torch.Tensor,
+        top_k: int,
+        *,
+        validity_eps: float = 1e-6,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Select per-sample active concept prototypes by mean patch activation.
+
+        Returns:
+            active_prototypes: [B, K, concept_dim]
+            validity_mask: [B, K] bool
+        """
+        device = activations.device
+        dtype = activations.dtype
+        num_concepts = int(prototypes.shape[0])
+        K = min(int(top_k), num_concepts)
+
+        usage = torch.zeros(B, num_concepts, device=device, dtype=dtype)
+        usage.index_add_(0, batch_idx, activations)
+        counts = torch.zeros(B, device=device, dtype=dtype)
+        counts.index_add_(
+            0,
+            batch_idx,
+            torch.ones(batch_idx.shape[0], device=device, dtype=dtype),
+        )
+        usage = usage / counts.unsqueeze(-1).clamp_min(1.0)
+
+        topk_vals, topk_idx = usage.topk(K, dim=-1)
+        proto_n = F.normalize(prototypes, dim=-1)
+        active = proto_n[topk_idx]
+        validity = topk_vals > validity_eps
+
+        if K < top_k:
+            pad_k = top_k - K
+            active = F.pad(active, (0, 0, 0, pad_k))
+            validity = F.pad(validity, (0, pad_k), value=False)
+
+        return active, validity
+
     def _compute_visual_assignments(
         self, raw_similarity: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
@@ -483,7 +527,17 @@ class VisualConceptCreation(nn.Module):
             "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
         }
 
+        active_visual_prototypes, visual_validity_mask = self._extract_active_prototypes(
+            visual_activations,
+            visual_metadata["batch_idx"],
+            B,
+            self.visual_concepts,
+            self.top_k,
+        )
+
         return {
+            "active_visual_prototypes": active_visual_prototypes,
+            "visual_validity_mask": visual_validity_mask,
             "visual_patch_embeddings": q_vis,
             "visual_concept_logits": visual_logits,
             "visual_concept_indices": visual_indices,
@@ -577,6 +631,8 @@ class VisualConceptCreation(nn.Module):
             "gate_probs": None,
             "metadata": None,
             "losses": losses,
+            "active_visual_prototypes": visual_out["active_visual_prototypes"],
+            "visual_validity_mask": visual_out["visual_validity_mask"],
             "visual_patch_embeddings": visual_out["visual_patch_embeddings"],
             "visual_concept_representation": visual_out["visual_concept_representation"],
             "visual_feature_concept_agreement": visual_out[
@@ -654,6 +710,7 @@ class MotionConceptCreation(nn.Module):
         concept_dim: int = 256,
         num_motion_concepts: int = 32,
         hidden_dim: int = 512,
+        top_k: int = 10,
         assignment_temperature: float = 0.07,
         assignment_mode: str = "straight_through",
         diversity_margin: float = 0.2,
@@ -680,6 +737,7 @@ class MotionConceptCreation(nn.Module):
         self.concept_dim = concept_dim
         self.num_motion_concepts = num_motion_concepts
         self.hidden_dim = hidden_dim
+        self.top_k = top_k
         self.assignment_temperature = assignment_temperature
         self.assignment_mode = assignment_mode
         self.diversity_margin = diversity_margin
@@ -946,7 +1004,19 @@ class MotionConceptCreation(nn.Module):
             "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
         }
 
+        active_motion_prototypes, motion_validity_mask = (
+            VisualConceptCreation._extract_active_prototypes(
+                motion_activations,
+                motion_metadata["batch_idx"],
+                B,
+                self.motion_concepts,
+                self.top_k,
+            )
+        )
+
         return {
+            "active_motion_prototypes": active_motion_prototypes,
+            "motion_validity_mask": motion_validity_mask,
             "motion_patch_embeddings": q_motion,
             "motion_concept_representation": motion_repr,
             "motion_activations": motion_activations,
@@ -1013,6 +1083,19 @@ class MotionConceptCreation(nn.Module):
         }
 
         return {
+            "active_motion_prototypes": torch.zeros(
+                B,
+                self.top_k,
+                self.concept_dim,
+                device=device,
+                dtype=dtype,
+            ),
+            "motion_validity_mask": torch.zeros(
+                B,
+                self.top_k,
+                dtype=torch.bool,
+                device=device,
+            ),
             "motion_patch_embeddings": zeros_patch,
             "motion_concept_representation": zeros_patch,
             "motion_activations": uniform,
@@ -1104,6 +1187,8 @@ class MotionConceptCreation(nn.Module):
                 self._zero_motion_losses(features) if return_losses else {}
             )
             return {
+                "active_motion_prototypes": motion_out["active_motion_prototypes"],
+                "motion_validity_mask": motion_out["motion_validity_mask"],
                 "motion_patch_embeddings": motion_out["motion_patch_embeddings"],
                 "motion_concept_representation": motion_out["motion_concept_representation"],
                 "motion_activations": motion_out["motion_activations"],
@@ -1121,6 +1206,8 @@ class MotionConceptCreation(nn.Module):
         losses = self._compute_motion_losses(motion_out) if return_losses else {}
 
         return {
+            "active_motion_prototypes": motion_out["active_motion_prototypes"],
+            "motion_validity_mask": motion_out["motion_validity_mask"],
             "motion_patch_embeddings": motion_out["motion_patch_embeddings"],
             "motion_concept_representation": motion_out["motion_concept_representation"],
             "motion_activations": motion_out["motion_activations"],

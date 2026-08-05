@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import torch
 
-from losses import _inject_feature_shape, _is_new_decoder, compute_total_loss
+from losses import (
+    _inject_feature_shape,
+    _is_new_decoder,
+    compute_mask_diversity_loss,
+    compute_total_loss,
+)
 
 
 def test_inject_feature_shape_without_selected_metadata() -> None:
@@ -65,11 +70,53 @@ def test_compute_total_loss_new_decoder() -> None:
 
     assert torch.isfinite(loss_dict["loss_total"])
     assert loss_dict["loss_delta"].detach().item() == 0.0
+    assert torch.is_tensor(loss_dict["loss_mask_diversity"])
+    assert loss_dict["loss_mask_diversity"].detach().item() == 0.0
+
+
+def test_compute_mask_diversity_loss() -> None:
+    torch.manual_seed(0)
+    multi_masks = torch.randn(2, 4, 3, 8, 8)
+    loss = compute_mask_diversity_loss(multi_masks)
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+
+    constant = torch.ones(2, 4, 3, 8, 8)
+    loss_constant = compute_mask_diversity_loss(constant)
+    assert torch.isfinite(loss_constant)
+    assert loss_constant.detach().item() > 0.0
+
+    model_out = {
+        "prediction_out": {
+            "saliency_map": torch.rand(2, 1, 32, 32),
+            "saliency_logits": torch.randn(2, 1, 32, 32),
+            "mask_diversity_loss": loss,
+        }
+    }
+    loss_dict = compute_total_loss(
+        model_out,
+        torch.rand(2, 32, 32),
+        lambda_dense=0.0,
+        lambda_kl=0.0,
+        lambda_cc=0.0,
+        lambda_nss=0.0,
+        mask_diversity_weight=0.01,
+    )
+    expected_weighted = 0.01 * loss
+    torch.testing.assert_close(
+        loss_dict["loss_mask_diversity_weighted"],
+        expected_weighted,
+    )
+    torch.testing.assert_close(
+        loss_dict["loss_total"],
+        expected_weighted,
+    )
 
 
 def main() -> None:
     test_inject_feature_shape_without_selected_metadata()
     test_compute_total_loss_new_decoder()
+    test_compute_mask_diversity_loss()
     print("OK")
 
 

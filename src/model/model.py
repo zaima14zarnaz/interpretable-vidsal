@@ -243,6 +243,7 @@ class ExplainableVidSalModel(nn.Module):
                     concept_dim=concept_dim,
                     num_motion_concepts=num_motion_concepts,
                     hidden_dim=motion_hidden_dim or concept_hidden_dim,
+                    top_k=top_k,
                     assignment_temperature=motion_assignment_temperature,
                     assignment_mode=motion_assignment_mode,
                     motionness_temperature=motionness_temperature,
