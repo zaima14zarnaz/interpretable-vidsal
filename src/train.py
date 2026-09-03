@@ -43,13 +43,13 @@ VAL_DATASET_DIR = (
 WINDOW_LEN = 16
 
 EPOCHS = 100
-BATCH_SIZE = 4  # effective optimizer batch size
+BATCH_SIZE = 2  # effective optimizer batch size
 FREEZE_BACKBONE = False
 # When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
 # gradients so the optimizer still sees BATCH_SIZE samples per step.
-MICRO_BATCH_SIZE = 4
-# Gradient checkpointing disabled (saves memory when True, but adds recompute overhead).
-BACKBONE_GRADIENT_CHECKPOINTING = False
+MICRO_BATCH_SIZE = 1
+# Gradient checkpointing trades recompute for lower activation memory during backbone fine-tuning.
+BACKBONE_GRADIENT_CHECKPOINTING = True
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
 LR = 5e-5
 WEIGHT_DECAY = 1e-4
@@ -994,9 +994,9 @@ def main() -> None:
     set_seed(SEED)
 
     if torch.cuda.is_available():
-        backbone_device = torch.device("cuda:0")
+        backbone_device = torch.device("cuda:1")
         head_device = torch.device(
-            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:0"
+            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:1"
         )
     else:
         backbone_device = torch.device("cpu")
@@ -1056,7 +1056,7 @@ def main() -> None:
         backbone_stages=("stage1", "stage2", "stage3", "stage4"),
         pretrained_backbone=True,
         freeze_backbone=FREEZE_BACKBONE,
-        backbone_gradient_checkpointing=False,
+        backbone_gradient_checkpointing=BACKBONE_GRADIENT_CHECKPOINTING,
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=128,

@@ -611,19 +611,19 @@ def compute_saliency_metrics(
         fix_map = prepare_target_last_map(fixation_target)
         fix_map = (fix_map > 0).float()
 
-        out["AUC"] = auc_judd_score(
-            pred,
-            fix_map,
-            fixation_threshold=0.5,
-            top_percent=None,
-        )
-        out["sAUC"] = sauc_score(
-            pred,
-            fix_map,
-            fixation_threshold=0.5,
-            top_percent=None,
-            other_map=sauc_other_map,
-        )
+        # out["AUC"] = auc_judd_score(
+        #     pred,
+        #     fix_map,
+        #     fixation_threshold=0.5,
+        #     top_percent=None,
+        # )
+        # out["sAUC"] = sauc_score(
+        #     pred,
+        #     fix_map,
+        #     fixation_threshold=0.5,
+        #     top_percent=None,
+        #     other_map=sauc_other_map,
+        # )
         out["NSS"] = nss_score(pred, fix_map)
         return out
 
@@ -643,19 +643,19 @@ def compute_saliency_metrics(
         top_percent=top_percent,
     ).float()
 
-    out["AUC"] = auc_judd_score(
-        pred,
-        pseudo_fix,
-        fixation_threshold=0.5,
-        top_percent=None,
-    )
-    out["sAUC"] = sauc_score(
-        pred,
-        pseudo_fix,
-        fixation_threshold=0.5,
-        top_percent=None,
-        other_map=sauc_other_map,
-    )
+    # out["AUC"] = auc_judd_score(
+    #     pred,
+    #     pseudo_fix,
+    #     fixation_threshold=0.5,
+    #     top_percent=None,
+    # )
+    # out["sAUC"] = sauc_score(
+    #     pred,
+    #     pseudo_fix,
+    #     fixation_threshold=0.5,
+    #     top_percent=None,
+    #     other_map=sauc_other_map,
+    # )
     out["NSS"] = nss_score(pred, pseudo_fix)
     return out
 
@@ -663,8 +663,8 @@ def compute_saliency_metrics(
 class MetricAverager:
     """Running average of saliency metrics over evaluation batches."""
 
-    METRIC_KEYS = ("CC", "SIM", "AUC", "sAUC", "NSS")
-    # METRIC_KEYS = ("CC", "SIM", "NSS")
+    # METRIC_KEYS = ("CC", "SIM", "AUC", "sAUC", "NSS")
+    METRIC_KEYS = ("CC", "SIM", "NSS")
 
     def __init__(self) -> None:
         self.reset()
