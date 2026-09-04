@@ -96,11 +96,6 @@ def build_model(
         temporal_concepts_on=train_cfg.TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=train_cfg.VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
-        num_motion_concepts=128,
-        motion_lstm_hidden_dim=train_cfg.MOTION_LSTM_HIDDEN_DIM,
-        motion_lstm_num_layers=train_cfg.MOTION_LSTM_NUM_LAYERS,
-        motion_lstm_bidirectional=train_cfg.MOTION_LSTM_BIDIRECTIONAL,
-        motion_lstm_dropout=train_cfg.MOTION_LSTM_DROPOUT,
     ).to_split_devices(backbone_device, head_device)
 
 

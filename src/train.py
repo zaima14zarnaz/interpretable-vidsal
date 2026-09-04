@@ -42,12 +42,12 @@ VAL_DATASET_DIR = (
 )
 WINDOW_LEN = 16
 
-EPOCHS = 100
-BATCH_SIZE = 2  # effective optimizer batch size
+EPOCHS = 200
+BATCH_SIZE = 4  # effective optimizer batch size
 FREEZE_BACKBONE = False
 # When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
 # gradients so the optimizer still sees BATCH_SIZE samples per step.
-MICRO_BATCH_SIZE = 1
+MICRO_BATCH_SIZE = 4
 # Gradient checkpointing trades recompute for lower activation memory during backbone fine-tuning.
 BACKBONE_GRADIENT_CHECKPOINTING = True
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
@@ -63,16 +63,13 @@ OVERFIT_STEPS = 300
 MAX_SAMPLES = 500
 USE_AMP = True
 
-# Concept-branch switches. Set either branch to False for ablations.
+# Concept-branch switches. Set a branch to False for ablations.
 VISUAL_CONCEPT_ON = True
 TEMPORAL_CONCEPTS_ON = False
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
-# Motion temporal encoder (LSTM over ordered same-location feature deltas).
-MOTION_LSTM_HIDDEN_DIM = 1024
-MOTION_LSTM_NUM_LAYERS = 2
-MOTION_LSTM_BIDIRECTIONAL = True
-MOTION_LSTM_DROPOUT = 0.1
+# Last-frame patch-priority map KL at Stage 3 and Stage 4.
+PRIORITY_LOSS_WEIGHT = 0.05
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -134,8 +131,7 @@ LOSS_LAMBDA = {
     "lambda_visual_equiv": 0.00,
     "lambda_temporal_attention_entropy": 0.0,
 
-    # Encourage diverse final cosine-derived masks at each decoder stage.
-    "mask_diversity_weight": 0.01,
+    "priority_loss_weight": PRIORITY_LOSS_WEIGHT,
 
     "patch_from_logits": False,
 
@@ -589,7 +585,7 @@ def _print_decoder_concept_gate_debug(
     model: ExplainableVidSalModel,
     model_out: dict,
 ) -> None:
-    """Print learnable and spatial decoder gate values for visual/motion concepts."""
+    """Print visual FiLM diagnostics and patch-priority residual strength."""
     decoder = getattr(model, "saliency_prediction", None)
     if decoder is None:
         print("DEBUG decoder gates: no saliency_prediction module found")
@@ -617,40 +613,48 @@ def _print_decoder_concept_gate_debug(
                     " | film_gamma=unavailable "
                     "(pass return_decoder_diagnostics=True)"
                 )
+            raw_strength = getattr(block, "raw_strength", None)
+            if torch.is_tensor(raw_strength):
+                alpha = float(
+                    (block.max_strength * torch.sigmoid(raw_strength.detach())).cpu()
+                )
+                msg += f" | patch_priority_alpha={alpha:.4f}"
             print(msg)
 
-    motion_stages = getattr(decoder, "motion_concept_stages", ("stage3",))
-    logit_scales = getattr(decoder, "motion_concept_logit_scales", None)
-    if logit_scales is not None:
-        for motion_stage in motion_stages:
-            if motion_stage not in logit_scales:
-                continue
-            logit_scale = logit_scales[motion_stage]
-            raw_scale = float(logit_scale.detach().cpu())
-            motion_scale = float(torch.sigmoid(logit_scale.detach()).cpu())
-            print(
-                f"DEBUG decoder motion gate [{motion_stage}] | "
-                f"motion_concept_logit_scale={raw_scale:.6f} | "
-                f"motion_scale=sigmoid(logit)={motion_scale:.6f}"
-            )
-    elif getattr(model, "motion_concepts_on", False):
-        print(
-            "DEBUG decoder motion gate: motion concepts enabled but "
-            "motion_concept_logit_scales not found"
-        )
+    if isinstance(pred_out, dict):
+        factorized_stats = pred_out.get("stage_factorized_comparison_stats")
+        if isinstance(factorized_stats, dict) and factorized_stats:
+            for stage in sorted(factorized_stats.keys()):
+                stats = factorized_stats[stage]
+                if not isinstance(stats, dict):
+                    continue
+                print(
+                    f"DEBUG factorized comparison [{stage}] | "
+                    f"query_norm_mean={float(stats.get('query_norm_mean', float('nan'))):.4f} | "
+                    f"key_norm_mean={float(stats.get('key_norm_mean', float('nan'))):.4f} | "
+                    f"context_mean={float(stats.get('context_mean', float('nan'))):.4f} | "
+                    f"context_std={float(stats.get('context_std', float('nan'))):.4f} | "
+                    f"context_min={float(stats.get('context_min', float('nan'))):.4f} | "
+                    f"context_max={float(stats.get('context_max', float('nan'))):.4f} | "
+                    f"total_candidate_weight={float(stats.get('total_candidate_weight', float('nan'))):.4f} | "
+                    f"spatial_strength={float(stats.get('spatial_strength', float('nan'))):.4f} | "
+                    f"spatial_freq_entropy={float(stats.get('spatial_frequency_weight_entropy', float('nan'))):.4f} | "
+                    f"spatial_freq_weight_mean={float(stats.get('spatial_frequency_weights', float('nan'))):.4f} | "
+                    f"rank={float(stats.get('factorized_rank', float('nan'))):.0f}"
+                )
 
 
-def _print_multi_mask_diagnostics(model_out: dict) -> None:
-    """Print per-stage multi-mask diagnostics from decoder stage_mask_diagnostics."""
+def _print_patch_priority_diagnostics(model_out: dict) -> None:
+    """Print per-stage patch-priority map diagnostics."""
     pred_out = model_out.get("prediction_out")
     if not isinstance(pred_out, dict):
-        print("DEBUG multi-mask: unavailable (missing prediction_out)")
+        print("DEBUG patch-priority map: unavailable (missing prediction_out)")
         return
 
     stage_diag = pred_out.get("stage_mask_diagnostics")
     if not isinstance(stage_diag, dict) or not stage_diag:
         print(
-            "DEBUG multi-mask: unavailable "
+            "DEBUG patch-priority map: unavailable "
             "(pass return_decoder_diagnostics=True on the logging batch)"
         )
         return
@@ -659,21 +663,14 @@ def _print_multi_mask_diagnostics(model_out: dict) -> None:
         diag = stage_diag.get(stage)
         if not isinstance(diag, dict):
             continue
-        between_var = float(diag.get("between_mask_variance", float("nan")))
-        spatial_var = float(diag.get("per_mask_spatial_variance", float("nan")))
-        pair_corr = float(diag.get("mean_pairwise_mask_correlation", float("nan")))
         print(
-            f"multi-mask [{stage}] | "
-            f"between_var={between_var:.6f} | "
-            f"spatial_var={spatial_var:.6f} | "
-            f"pair_corr={pair_corr:.6f}"
+            f"patch-priority map [{stage}] | "
+            f"mean={float(diag.get('patch_priority_mean', float('nan'))):.6f} | "
+            f"std={float(diag.get('patch_priority_std', float('nan'))):.6f} | "
+            f"min={float(diag.get('patch_priority_min', float('nan'))):.6f} | "
+            f"max={float(diag.get('patch_priority_max', float('nan'))):.6f} | "
+            f"alpha={float(diag.get('residual_strength', float('nan'))):.6f}"
         )
-        per_mask_std = [
-            float(diag.get(f"mask_{mask_idx}_std", float("nan")))
-            for mask_idx in range(1, 5)
-        ]
-        per_mask_std_str = ", ".join(f"{value:.6f}" for value in per_mask_std)
-        print(f"multi-mask [{stage}] | per-mask std=[{per_mask_std_str}]")
 
 
 def _print_visual_concept_usage_debug(model_out: dict, top_n: int = 10) -> None:
@@ -803,7 +800,7 @@ def train_one_epoch(
                 _print_first_batch_debug(model_out, sal_batch)
                 _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
                 _print_decoder_concept_gate_debug(model, model_out)
-                _print_multi_mask_diagnostics(model_out)
+                _print_patch_priority_diagnostics(model_out)
                 _print_visual_concept_usage_debug(model_out)
 
             if batch_idx % MAP_SAVE_INTERVAL == 0:
@@ -861,12 +858,6 @@ def train_one_epoch(
                         if torch.is_tensor(v) and v.ndim == 0
                     },
                 )
-                if torch.is_tensor(loss_dict.get("loss_mask_diversity")):
-                    print(
-                        "DEBUG mask diversity:"
-                        f" raw={float(loss_dict['loss_mask_diversity'].detach().cpu()):.6f}"
-                        f" weighted={float(loss_dict['loss_mask_diversity_weighted'].detach().cpu()):.6f}"
-                    )
 
         if scaler is not None and _amp_enabled(device):
             scaler.scale(loss).backward()
@@ -951,7 +942,7 @@ def validate_one_epoch(
             )
             if batch_idx == 0:
                 _print_decoder_concept_gate_debug(model, model_out)
-                _print_multi_mask_diagnostics(model_out)
+                _print_patch_priority_diagnostics(model_out)
             if batch_idx % MAP_SAVE_INTERVAL == 0:
                 save_batch_maps(
                     model_out,
@@ -1009,6 +1000,7 @@ def main() -> None:
         "Concept branches | "
         f"visual_concept_on={VISUAL_CONCEPT_ON} | "
         f"temporal_concepts_on={TEMPORAL_CONCEPTS_ON} | "
+        f"priority_loss_weight={PRIORITY_LOSS_WEIGHT} | "
         f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
     )
 
@@ -1063,7 +1055,7 @@ def main() -> None:
         num_concepts=512,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=16,
+        top_k=8,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -1084,11 +1076,6 @@ def main() -> None:
         temporal_concepts_on=TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
-        num_motion_concepts=128,
-        motion_lstm_hidden_dim=MOTION_LSTM_HIDDEN_DIM,
-        motion_lstm_num_layers=MOTION_LSTM_NUM_LAYERS,
-        motion_lstm_bidirectional=MOTION_LSTM_BIDIRECTIONAL,
-        motion_lstm_dropout=MOTION_LSTM_DROPOUT,
     ).to_split_devices(backbone_device, head_device)
 
     with torch.no_grad():
@@ -1283,7 +1270,12 @@ def _run_overfit_one_batch(
             _print_first_batch_debug(model_out, sal_batch)
             _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
             _print_decoder_concept_gate_debug(model, model_out)
-            _print_multi_mask_diagnostics(model_out)
+            _print_patch_priority_diagnostics(model_out)
+        loss_dict = _compute_batch_loss(
+            model_out,
+            sal_batch,
+            fix_batch=fix_batch,
+        )
         loss = loss_dict["loss_total"]
         loss.backward()
         torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)

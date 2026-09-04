@@ -2,9 +2,16 @@
 Concept-guided FiLM-and-mask multi-scale spatiotemporal saliency decoder for the last frame in a window.
 
 Stages are decoded coarse-to-fine (stage4 -> stage1). Each stage fuses full
-[B, C, T, H, W] feature and concept volumes through FiLM modulation and
-concept-derived feature masking, aggregates over time with learned attention,
-and upsamples with learned conv-transpose blocks.
+[B, C, T, H, W] feature and concept volumes through FiLM modulation. Stages 3
+and 4 score every valid concept-patch activation with unary scores and a
+low-rank factorized antisymmetric concept-patch comparison modulated by an
+explicit learned spatial-relevance kernel. Every directed pair interaction is
+defined implicitly through query/key projections and a symmetric Fourier spatial
+kernel, while its activation-weighted aggregate is computed exactly via augmented
+global query/key summaries in O(N) memory and computation. FiLM features are then
+updated with a 1x1x1 conv-GN-ReLU branch and the patch-priority map is applied
+as residual spatial gating of that update. Temporal aggregation and learned
+upsampling produce the last-frame saliency map.
 """
 
 from __future__ import annotations
@@ -15,8 +22,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from losses import compute_stage_mask_diversity_losses
 
 _STAGE_ORDER = ("stage4", "stage3", "stage2", "stage1")
 _SIDE_UPSAMPLE_SCALES: Dict[str, int] = {
@@ -107,115 +112,6 @@ def _build_stage_concept_volume(
             f"{_metadata_feature_shape_repr(visual_metadata if isinstance(visual_metadata, dict) else None)}"
         )
     return concept_volume
-
-
-def _build_visual_agreement_volume(
-    concept_out: Dict[str, Any],
-    *,
-    stage: str = "unknown",
-) -> Optional[torch.Tensor]:
-    """
-    Build [B, 1, T, H, W] visual feature-concept agreement volume for one stage.
-    """
-    agreement = concept_out.get("visual_feature_concept_agreement")
-    visual_metadata = concept_out.get("visual_metadata")
-    if not torch.is_tensor(agreement) or not isinstance(visual_metadata, dict):
-        return None
-    if "feature_shape" not in visual_metadata:
-        return None
-
-    try:
-        B, _, T, H, W = _feature_shape_from_metadata(visual_metadata)
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(
-            f"Invalid visual_metadata['feature_shape'] at {stage}: "
-            f"{_metadata_feature_shape_repr(visual_metadata)}"
-        ) from exc
-
-    expected = B * T * H * W
-    if agreement.dim() != 1 or agreement.shape[0] != expected:
-        raise ValueError(
-            f"visual_feature_concept_agreement length mismatch at {stage}: "
-            f"expected {expected} (=B*T*H*W from feature_shape "
-            f"{_metadata_feature_shape_repr(visual_metadata)}), "
-            f"got {tuple(agreement.shape)}"
-        )
-
-    return (
-        agreement.reshape(B, T, H, W)
-        .unsqueeze(1)
-        .contiguous()
-    )
-
-
-def _build_motion_concept_volume(
-    concept_out: Dict[str, Any],
-    *,
-    stage: str = "unknown",
-) -> Optional[torch.Tensor]:
-    """
-    Build [B, concept_dim, T, H, W] motion concept volume for one stage.
-
-    Motion representations are spatial maps repeated across time because motion
-    concepts summarize temporal change at each cell rather than per-frame appearance.
-    """
-    motion_repr = concept_out.get("motion_concept_representation")
-    motion_metadata = concept_out.get("motion_metadata")
-    if not torch.is_tensor(motion_repr) or not isinstance(motion_metadata, dict):
-        return None
-    if "feature_shape" not in motion_metadata:
-        return None
-
-    try:
-        B, _, T, H, W = _feature_shape_from_metadata(motion_metadata)
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(
-            f"Invalid motion_metadata['feature_shape'] at {stage}: "
-            f"{_metadata_feature_shape_repr(motion_metadata)}"
-        ) from exc
-
-    if motion_repr.dim() == 2:
-        expected = B * H * W
-        if motion_repr.shape[0] != expected:
-            raise ValueError(
-                f"motion_concept_representation length mismatch at {stage}: "
-                f"expected {expected} (=B*H*W from feature_shape "
-                f"{_metadata_feature_shape_repr(motion_metadata)}), "
-                f"got {motion_repr.shape[0]}"
-            )
-        concept_dim = motion_repr.shape[-1]
-        motion_map = (
-            motion_repr.reshape(B, H, W, concept_dim)
-            .permute(0, 3, 1, 2)
-            .contiguous()
-        )
-    elif motion_repr.dim() == 4:
-        if motion_repr.shape[0] != B:
-            raise ValueError(
-                f"motion_concept_representation batch mismatch at {stage}: "
-                f"expected B={B} from motion_metadata, got {motion_repr.shape[0]}"
-            )
-        concept_dim = motion_repr.shape[1]
-        if motion_repr.shape[-2:] != (H, W):
-            raise ValueError(
-                f"motion_concept_representation spatial mismatch at {stage}: "
-                f"expected H,W=({H},{W}) from motion_metadata, "
-                f"got {tuple(motion_repr.shape[-2:])}"
-            )
-        motion_map = motion_repr
-    else:
-        raise ValueError(
-            f"motion_concept_representation at {stage} must be "
-            f"[B*H*W, concept_dim] or [B, concept_dim, H, W], "
-            f"got shape {tuple(motion_repr.shape)}"
-        )
-
-    motion_volume = (
-        motion_map.unsqueeze(2)
-        .expand(B, concept_dim, T, H, W)
-        .contiguous()
-    )
-    return motion_volume
 
 
 def _assert_concept_volume_matches_features(
@@ -575,64 +471,11 @@ class LearnedFinalUpsample2D(nn.Module):
         return y
 
 
-def _compute_multi_mask_diagnostics(
-    multi_masks: torch.Tensor,
-    *,
-    mask_strength: float,
-) -> Dict[str, float]:
-    """
-    Scalar diagnostics for final cosine-derived multi-masks [B,R,T,H,W].
-
-    All statistics are computed under ``torch.no_grad()``.
-    """
-    with torch.no_grad():
-        if multi_masks.dim() != 5:
-            raise ValueError(
-                f"multi_masks must be [B,R,T,H,W], got {tuple(multi_masks.shape)}"
-            )
-
-        between_mask_variance = float(
-            multi_masks.var(dim=1, unbiased=False).mean().cpu()
-        )
-        per_mask_spatial_variance = float(
-            multi_masks.flatten(2).var(dim=-1, unbiased=False).mean().cpu()
-        )
-
-        masks_flat = multi_masks.flatten(start_dim=2)
-        centered = masks_flat - masks_flat.mean(dim=-1, keepdim=True)
-        normalized = F.normalize(centered, p=2, dim=-1, eps=1e-6)
-        gram = normalized @ normalized.transpose(1, 2)
-        num_masks = int(gram.shape[1])
-        if num_masks <= 1:
-            mean_pairwise_mask_correlation = 0.0
-        else:
-            off_diag_mask = ~torch.eye(
-                num_masks,
-                dtype=torch.bool,
-                device=gram.device,
-            )
-            mean_pairwise_mask_correlation = float(
-                gram[:, off_diag_mask].abs().mean().cpu()
-            )
-
-        diagnostics: Dict[str, float] = {
-            "between_mask_variance": between_mask_variance,
-            "per_mask_spatial_variance": per_mask_spatial_variance,
-            "mean_pairwise_mask_correlation": mean_pairwise_mask_correlation,
-            "mask_strength": float(mask_strength),
-        }
-
-        for mask_idx in range(num_masks):
-            mask_r = multi_masks[:, mask_idx]
-            label = mask_idx + 1
-            diagnostics[f"mask_{label}_mean"] = float(mask_r.mean().cpu())
-            diagnostics[f"mask_{label}_std"] = float(
-                mask_r.std(unbiased=False).cpu()
-            )
-            diagnostics[f"mask_{label}_min"] = float(mask_r.min().cpu())
-            diagnostics[f"mask_{label}_max"] = float(mask_r.max().cpu())
-
-        return diagnostics
+_GROUPING_EPS = 1e-6
+_PRIORITY_EPS = 1e-6
+_MASKED_LOGIT_FILL = -1e4
+_PATCH_PRIORITY_STAGES = ("stage3", "stage4")
+_POS_NUM_FREQUENCIES = 8
 
 
 def _masked_softmax(
@@ -640,21 +483,39 @@ def _masked_softmax(
     validity_mask: torch.Tensor,
     dim: int = -1,
 ) -> torch.Tensor:
-    """Softmax over dim with invalid concept slots masked to -inf."""
+    """Numerically safe softmax over valid concept slots.
+
+    Invalid slots receive exactly zero weight. Rows with at least one valid
+    slot sum to one. Rows with no valid slot return zeros rather than NaNs.
+    """
     if validity_mask.dim() == 2 and logits.dim() == 3:
         mask = validity_mask.unsqueeze(1).expand(-1, logits.shape[1], -1)
     else:
         mask = validity_mask
-    masked_logits = logits.masked_fill(~mask, float("-inf"))
-    return torch.softmax(masked_logits, dim=dim)
+    mask = mask.bool()
+    masked_logits = logits.masked_fill(~mask, _MASKED_LOGIT_FILL)
+    weights = torch.softmax(masked_logits, dim=dim)
+    weights = weights * mask.to(dtype=weights.dtype)
+    normalizer = weights.sum(dim=dim, keepdim=True)
+    weights = weights / normalizer.clamp_min(_GROUPING_EPS)
+    return torch.where(normalizer > 0, weights, torch.zeros_like(weights))
 
 
-def _motion_prototypes_available(concept_out: Dict[str, Any]) -> bool:
-    prototypes = concept_out.get("active_motion_prototypes")
-    validity = concept_out.get("motion_validity_mask")
-    if not torch.is_tensor(prototypes) or not torch.is_tensor(validity):
-        return False
-    return bool(validity.any().item())
+def _sinusoidal_2d_encoding(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    num_frequencies: int,
+) -> torch.Tensor:
+    """Fixed sinusoidal encoding of normalized coordinates in ``[0, 1]``."""
+    freqs = (2.0 ** torch.arange(
+        num_frequencies, device=x.device, dtype=x.dtype
+    )) * math.pi
+    x_ang = x.unsqueeze(-1) * freqs
+    y_ang = y.unsqueeze(-1) * freqs
+    return torch.cat(
+        [x_ang.sin(), x_ang.cos(), y_ang.sin(), y_ang.cos()],
+        dim=-1,
+    )
 
 
 class SpatioTemporalConceptGatedFusionBlock(nn.Module):
@@ -662,10 +523,18 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
     Feature-first 3D fusion over [B, C, T, H, W] volumes.
 
     Dense features form the base signal. Concept volumes first modulate dense
-    features through FiLM, then R independent cosine-similarity concept masks
-    gate separate lightweight feature branches whose fused update is added
-    residually. A coarser previous decoder volume may be upsampled and added
-    afterward.
+    features through FiLM.     At stages 3 and 4, every valid concept-patch activation is scored with
+    unary terms and a low-rank factorized antisymmetric concept-patch
+    comparison modulated by an explicit learned spatial-relevance kernel.
+    Each directed pair score combines content antisymmetry with a symmetric
+    Fourier spatial kernel; the activation-weighted aggregate is computed
+    exactly from augmented global query/key summaries without materializing
+    ``N x N`` tensors. A 1x1x1 conv-GroupNorm-ReLU branch then updates the
+    FiLM features; the patch-priority map gates that update residually:
+
+    ``guided = film_features + alpha_stage * (priority_mask * branch(film_features))``.
+
+    A coarser previous decoder volume may be upsampled and added afterward.
     """
 
     def __init__(
@@ -674,16 +543,33 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         concept_dim: int,
         decoder_channels: int,
         dropout: float = 0.05,
-        num_masks: int = 4,
         mask_embed_dim: Optional[int] = None,
         max_strength: float = 1.0,
+        assignment_temperature: float = 0.07,
+        priority_temperature: float = 0.1,
+        use_null_prototype: bool = True,
+        enable_patch_prioritization: bool = False,
+        factorized_rank: int = 32,
+        pos_num_frequencies: int = _POS_NUM_FREQUENCIES,
     ):
         super().__init__()
 
-        if num_masks < 1:
-            raise ValueError(f"num_masks must be >= 1, got {num_masks}")
+        if assignment_temperature <= 0.0:
+            raise ValueError(
+                f"assignment_temperature must be > 0, got {assignment_temperature}"
+            )
+        if priority_temperature <= 0.0:
+            raise ValueError(
+                f"priority_temperature must be > 0, got {priority_temperature}"
+            )
+        if factorized_rank < 1:
+            raise ValueError(f"factorized_rank must be >= 1, got {factorized_rank}")
+        if pos_num_frequencies < 1:
+            raise ValueError(
+                f"pos_num_frequencies must be >= 1, got {pos_num_frequencies}"
+            )
 
-        self.num_masks = int(num_masks)
+        self.concept_dim = int(concept_dim)
         self.decoder_channels = decoder_channels
         self.mask_embed_dim = (
             int(mask_embed_dim)
@@ -691,6 +577,15 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             else max(decoder_channels // 2, 32)
         )
         self.max_strength = float(max_strength)
+        self.assignment_temperature = float(assignment_temperature)
+        self.priority_temperature = float(priority_temperature)
+        self.use_null_prototype = bool(use_null_prototype)
+        self.enable_patch_prioritization = bool(enable_patch_prioritization)
+        self.factorized_rank = int(factorized_rank)
+        self.pos_num_frequencies = int(pos_num_frequencies)
+        self.pos_dim = 4 * self.pos_num_frequencies
+        self.token_dim = 2 * self.mask_embed_dim + self.pos_dim + 1
+        priority_hidden = max(int(decoder_channels), 32)
 
         self.feature_proj = Conv3DGNAct(
             feature_channels,
@@ -718,105 +613,451 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         self.film = nn.Conv3d(decoder_channels, decoder_channels * 2, kernel_size=1)
         self.refine1 = Residual3DRefineBlock(decoder_channels, dropout=dropout)
         self.refine2 = Residual3DRefineBlock(decoder_channels, dropout=dropout)
-
-        self.feature_token_proj = nn.Linear(decoder_channels, self.mask_embed_dim)
-        self.concept_proto_proj = nn.Linear(concept_dim, self.mask_embed_dim)
-        self.visual_mask_queries = nn.Parameter(
-            torch.randn(self.num_masks, self.mask_embed_dim) * 0.02
-        )
-        self.motion_mask_queries = nn.Parameter(
-            torch.randn(self.num_masks, self.mask_embed_dim) * 0.02
-        )
-        self.mask_feature_branches = nn.ModuleList(
-            [
-                Conv3DGNAct(
-                    decoder_channels,
-                    decoder_channels,
-                    kernel_size=1,
-                    padding=0,
-                )
-                for _ in range(self.num_masks)
-            ]
-        )
-        self.mask_fusion = nn.Conv3d(
-            decoder_channels * self.num_masks,
-            decoder_channels,
-            kernel_size=1,
-            bias=True,
-        )
-
-        self.gate_temperature = nn.Parameter(torch.ones(self.num_masks))
-        self.gate_threshold = nn.Parameter(torch.zeros(self.num_masks))
-        # sigmoid(-2.197) ≈ 0.1 -> strength ≈ 0.1 when max_strength=1.0
-        self.raw_strength = nn.Parameter(torch.tensor(1.0))
-
         self.prev_scale = nn.Parameter(torch.tensor(1.0))
 
-    def _compute_modality_masks(
+        if self.enable_patch_prioritization:
+            self.feature_token_proj = nn.Linear(decoder_channels, self.mask_embed_dim)
+            self.concept_proto_proj = nn.Linear(concept_dim, self.mask_embed_dim)
+            self.unary_priority_mlp = nn.Sequential(
+                nn.Linear(self.token_dim, priority_hidden),
+                nn.ReLU(),
+                # Softmax over candidates is shift-invariant, so a last-layer
+                # bias cannot receive a useful gradient.
+                nn.Linear(priority_hidden, 1, bias=False),
+            )
+            self.factor_query = nn.Sequential(
+                nn.Linear(self.token_dim, priority_hidden),
+                nn.ReLU(),
+                nn.Linear(priority_hidden, self.factorized_rank, bias=False),
+            )
+            self.factor_key = nn.Sequential(
+                nn.Linear(self.token_dim, priority_hidden),
+                nn.ReLU(),
+                nn.Linear(priority_hidden, self.factorized_rank, bias=False),
+            )
+            nn.init.normal_(self.factor_query[-1].weight, std=1e-3)
+            nn.init.normal_(self.factor_key[-1].weight, std=1.2e-3)
+            self.raw_spatial_frequency_weights = nn.Parameter(
+                torch.zeros(2 * self.pos_num_frequencies)
+            )
+            # sigmoid(-2.1972246) ≈ 0.1; begins near content-only comparison.
+            self.raw_spatial_strength = nn.Parameter(torch.tensor(-2.1972246))
+            self.mask_feature_branch = Conv3DGNAct(
+                decoder_channels,
+                decoder_channels,
+                kernel_size=1,
+                padding=0,
+            )
+            self.null_prototype = nn.Parameter(torch.randn(self.concept_dim) * 0.02)
+            self.raw_pairwise_strength = nn.Parameter(torch.tensor(0.0))
+            # sigmoid(-2.197) ≈ 0.1; residual strength for
+            # film + alpha * (priority_mask * branch(film)).
+            self.raw_strength = nn.Parameter(torch.tensor(-2.197))
+        else:
+            self.feature_token_proj = None
+            self.concept_proto_proj = None
+            self.unary_priority_mlp = None
+            self.factor_query = None
+            self.factor_key = None
+            self.mask_feature_branch = None
+            self.null_prototype = None
+            self.raw_pairwise_strength = None
+            self.raw_strength = None
+            self.raw_spatial_frequency_weights = None
+            self.raw_spatial_strength = None
+
+    @property
+    def spatial_strength(self) -> torch.Tensor:
+        if self.raw_spatial_strength is None:
+            raise RuntimeError(
+                "spatial_strength is only defined when patch prioritization is enabled"
+            )
+        return torch.sigmoid(self.raw_spatial_strength)
+
+    @property
+    def pairwise_strength(self) -> torch.Tensor:
+        if self.raw_pairwise_strength is None:
+            raise RuntimeError("pairwise_strength is only defined when patch prioritization is enabled")
+        return F.softplus(self.raw_pairwise_strength)
+
+    def _normalized_spatial_grid(
+        self,
+        height: int,
+        width: int,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        ys = (torch.arange(height, device=device, dtype=dtype) + 0.5) / float(height)
+        xs = (torch.arange(width, device=device, dtype=dtype) + 0.5) / float(width)
+        grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+        return grid_y, grid_x
+
+    def _compute_soft_activations(
         self,
         feature_proj: torch.Tensor,
         active_prototypes: torch.Tensor,
         validity_mask: torch.Tensor,
-        mask_queries: torch.Tensor,
-        num_masks: int,
-        gate_offset: int = 0,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Dict[str, torch.Tensor]:
+        """Soft concept-patch activations ``a_ij`` with a null prototype in assignment."""
         B, _, T, H, W = feature_proj.shape
-        N = T * H * W
-        K = active_prototypes.shape[1]
+        K = int(active_prototypes.shape[1])
+        dtype = feature_proj.dtype
+        validity = validity_mask.bool()
+        if validity.dim() != 2 or validity.shape[0] != B or validity.shape[1] != K:
+            raise ValueError(
+                f"validity_mask must be [B, K]=[{B}, {K}], got {tuple(validity.shape)}"
+            )
 
-        feature_tokens = feature_proj.permute(0, 2, 3, 4, 1).reshape(B, N, -1)
-        feature_tokens = F.normalize(self.feature_token_proj(feature_tokens), dim=-1)
-        proto_tokens = F.normalize(
-            self.concept_proto_proj(active_prototypes),
+        projected_features = self.feature_token_proj(
+            feature_proj.permute(0, 2, 3, 4, 1)
+        )
+        projected_prototypes = self.concept_proto_proj(active_prototypes)
+        feature_tokens = F.normalize(projected_features, dim=-1)
+        proto_tokens = F.normalize(projected_prototypes, dim=-1)
+        similarity_maps = torch.einsum(
+            "bke,bthwe->btkhw",
+            proto_tokens,
+            feature_tokens,
+        )
+
+        valid_spatial = validity[:, None, :, None, None]
+        assignment_logits = similarity_maps / self.assignment_temperature
+        assignment_logits = assignment_logits.masked_fill(
+            ~valid_spatial, _MASKED_LOGIT_FILL
+        )
+        if self.use_null_prototype:
+            null_tokens = F.normalize(
+                self.concept_proto_proj(
+                    self.null_prototype.to(dtype=dtype).view(1, 1, -1)
+                ),
+                dim=-1,
+            ).expand(B, 1, -1)
+            null_similarity = torch.einsum(
+                "bke,bthwe->btkhw",
+                null_tokens,
+                feature_tokens,
+            )
+            assignment_logits = torch.cat(
+                [assignment_logits, null_similarity / self.assignment_temperature],
+                dim=2,
+            )
+            assignment = torch.softmax(assignment_logits, dim=2)
+            activations = assignment[:, :, :K]
+        else:
+            activations = torch.nan_to_num(
+                torch.softmax(assignment_logits, dim=2),
+                nan=0.0,
+            )
+        activations = activations * valid_spatial.to(dtype=activations.dtype)
+        return {
+            "similarity_maps": similarity_maps,
+            "activations": activations,
+            "validity_mask": validity,
+            "prototypes": active_prototypes,
+            "projected_features": projected_features,
+            "projected_prototypes": projected_prototypes,
+        }
+
+    def _build_activation_tokens(
+        self,
+        projected_features: torch.Tensor,
+        projected_prototypes: torch.Tensor,
+        activations: torch.Tensor,
+        concept_id_offset: int = 0,
+    ) -> Dict[str, torch.Tensor]:
+        """One token per concept-patch pair; coordinates are in ``[0, 1]``."""
+        B, T, H, W, embed_dim = projected_features.shape
+        K = int(projected_prototypes.shape[1])
+        dtype = projected_features.dtype
+        device = projected_features.device
+        N = K * H * W
+
+        grid_y, grid_x = self._normalized_spatial_grid(
+            H, W, device=device, dtype=dtype
+        )
+        pos_hw = _sinusoidal_2d_encoding(
+            grid_x, grid_y, self.pos_num_frequencies
+        )
+
+        feat_flat = (
+            projected_features.reshape(B, T, 1, H * W, embed_dim)
+            .expand(-1, -1, K, -1, -1)
+            .reshape(B, T, N, embed_dim)
+        )
+        proto_flat = (
+            projected_prototypes[:, None, :, None, :]
+            .expand(-1, T, -1, H * W, -1)
+            .reshape(B, T, N, embed_dim)
+        )
+        pos_flat = (
+            pos_hw.reshape(1, 1, 1, H * W, self.pos_dim)
+            .expand(B, T, K, -1, -1)
+            .reshape(B, T, N, self.pos_dim)
+        )
+        act_flat = activations.reshape(B, T, N, 1)
+        tokens = torch.cat([feat_flat, proto_flat, pos_flat, act_flat], dim=-1)
+
+        patch_index = torch.arange(H * W, device=device).repeat(K)
+        concept_index = (
+            torch.arange(K, device=device).repeat_interleave(H * W) + concept_id_offset
+        )
+        x_coords = grid_x.reshape(-1).repeat(K)
+        y_coords = grid_y.reshape(-1).repeat(K)
+        return {
+            "tokens": tokens,
+            "activations": act_flat.squeeze(-1),
+            "patch_index": patch_index,
+            "concept_index": concept_index,
+            "x_coords": x_coords,
+            "y_coords": y_coords,
+            "num_concepts": activations.new_tensor(K, dtype=torch.long),
+            "spatial_hw": (H, W),
+        }
+
+    @property
+    def factor_scale(self) -> float:
+        return float(self.factorized_rank) ** -0.5
+
+    def _build_spatial_factors(
+        self,
+        x_coords: torch.Tensor,
+        y_coords: torch.Tensor,
+        *,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Build augmented spatial factors ``eta`` and normalized ``rho`` for ``[N]`` coords."""
+        x = x_coords.to(device=device, dtype=dtype)
+        y = y_coords.to(device=device, dtype=dtype)
+        pos_encoding = _sinusoidal_2d_encoding(
+            x, y, self.pos_num_frequencies
+        )
+        beta = F.softplus(self.raw_spatial_frequency_weights.to(dtype=dtype)) + _PRIORITY_EPS
+        num_freq = self.pos_num_frequencies
+        beta_x = beta[:num_freq]
+        beta_y = beta[num_freq:]
+        expanded_beta = torch.cat(
+            [beta_x, beta_x, beta_y, beta_y],
             dim=-1,
         )
+        weighted_pos = pos_encoding * expanded_beta.sqrt()
+        weighted_pos = F.normalize(weighted_pos, dim=-1, eps=_PRIORITY_EPS)
+        rho = torch.cat(
+            [torch.ones_like(weighted_pos[..., :1]), weighted_pos],
+            dim=-1,
+        ) / math.sqrt(2.0)
 
-        concept_maps_flat = torch.einsum("bkd,bnd->bkn", proto_tokens, feature_tokens)
-        concept_maps = concept_maps_flat.reshape(B, K, T, H, W)
-
-        weight_logits = torch.stack(
+        spatial_strength = self.spatial_strength.to(dtype=dtype, device=device)
+        eta = torch.cat(
             [
-                torch.einsum("bkd,d->bk", proto_tokens, mask_queries[r])
-                for r in range(num_masks)
+                (1.0 - spatial_strength).clamp_min(_PRIORITY_EPS).sqrt().expand(
+                    rho.shape[0], 1
+                ),
+                spatial_strength.clamp_min(0.0).sqrt() * rho,
             ],
-            dim=1,
+            dim=-1,
         )
-        concept_weights = _masked_softmax(weight_logits, validity_mask, dim=-1)
+        return eta, rho
 
-        multi_masks_flat = torch.einsum(
-            "brk,bkn->brn",
-            concept_weights,
-            concept_maps_flat,
-        )
-        multi_masks = multi_masks_flat.reshape(B, num_masks, T, H, W)
-
-        gate_indices = torch.arange(
-            gate_offset,
-            gate_offset + num_masks,
-            device=feature_proj.device,
-        )
-        temps = self.gate_temperature.index_select(0, gate_indices).view(
-            1, num_masks, 1, 1, 1
-        )
-        thresholds = self.gate_threshold.index_select(0, gate_indices).view(
-            1, num_masks, 1, 1, 1
-        )
-        multi_mask_gates = torch.sigmoid(temps * (multi_masks - thresholds))
-
-        return concept_maps, concept_weights, multi_masks, multi_mask_gates
-
-    def _apply_multi_mask_branches(
+    def _spatial_relevance_for_pairs(
         self,
-        feature_proj: torch.Tensor,
-        multi_mask_gates: torch.Tensor,
+        eta: torch.Tensor,
+        candidate_n: torch.Tensor,
+        candidate_m: torch.Tensor,
     ) -> torch.Tensor:
-        gated_branches = []
-        for r in range(self.num_masks):
-            branch_r = self.mask_feature_branches[r](feature_proj)
-            gate_r = multi_mask_gates[:, r : r + 1]
-            gated_branches.append(gate_r * branch_r)
-        return self.mask_fusion(torch.cat(gated_branches, dim=1))
+        """Evaluate the symmetric spatial kernel for selected candidate pairs only."""
+        return torch.einsum("ns,ms->nm", eta[candidate_n], eta[candidate_m])
+
+    def _spatial_diagnostic_stats(self, dtype: torch.dtype) -> Dict[str, torch.Tensor]:
+        beta = F.softplus(self.raw_spatial_frequency_weights.to(dtype=dtype)) + _PRIORITY_EPS
+        beta_norm = beta / beta.sum().clamp_min(_PRIORITY_EPS)
+        entropy = -(beta_norm * beta_norm.log()).sum()
+        return {
+            "spatial_strength": self.spatial_strength.to(dtype=dtype).detach(),
+            "spatial_frequency_weights": beta.detach(),
+            "spatial_frequency_weight_entropy": entropy.detach(),
+        }
+
+    def _factorized_comparison_stats(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        context: torch.Tensor,
+        weights: torch.Tensor,
+        total_weight: torch.Tensor,
+        candidate_valid: torch.Tensor,
+        dtype: torch.dtype,
+    ) -> Dict[str, torch.Tensor]:
+        """Detached diagnostics for low-rank factorized antisymmetric comparison."""
+        valid = candidate_valid.unsqueeze(1).expand_as(context)
+        ctx = context.masked_fill(~valid, float("nan")).reshape(-1)
+        finite_ctx = ctx[torch.isfinite(ctx)]
+        zero = context.new_zeros(())
+        q_norm = q.norm(dim=-1).masked_fill(~valid, float("nan"))
+        k_norm = k.norm(dim=-1).masked_fill(~valid, float("nan"))
+        if finite_ctx.numel() == 0:
+            ctx_mean = ctx_std = ctx_min = ctx_max = zero
+        else:
+            ctx_mean = finite_ctx.mean()
+            ctx_std = finite_ctx.std(unbiased=False)
+            ctx_min = finite_ctx.min()
+            ctx_max = finite_ctx.max()
+        stats = {
+            "query_norm_mean": q_norm.nanmean().detach(),
+            "key_norm_mean": k_norm.nanmean().detach(),
+            "context_mean": ctx_mean.detach(),
+            "context_std": ctx_std.detach(),
+            "context_min": ctx_min.detach(),
+            "context_max": ctx_max.detach(),
+            "total_candidate_weight": total_weight.mean().detach(),
+            "factorized_rank": context.new_tensor(float(self.factorized_rank)),
+        }
+        stats.update(self._spatial_diagnostic_stats(dtype))
+        return stats
+
+    def _factorized_pairwise_context(
+        self,
+        tokens: torch.Tensor,
+        activations: torch.Tensor,
+        candidate_valid: torch.Tensor,
+        x_coords: torch.Tensor,
+        y_coords: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Low-rank factorized antisymmetric concept-patch comparison with spatial kernel.
+
+        For each candidate ``n``, aggregates competitor scores
+        ``g_{nm} * (dot(q_n, k_m) - dot(q_m, k_n)) / sqrt(R)`` weighted by
+        nonnegative activations over ``m != n``, where ``g_{nm} = eta_n^T eta_m``
+        is the explicit symmetric spatial relevance kernel. Self terms cancel in
+        the numerator, so the aggregate is computed exactly from augmented
+        global query/key summaries in ``O(B T N R S)`` time and memory.
+        """
+        valid = candidate_valid[:, None, :].to(dtype=tokens.dtype)
+        weights = activations.clamp_min(0.0) * valid
+
+        q = self.factor_query(tokens)
+        k = self.factor_key(tokens)
+        eta, _ = self._build_spatial_factors(
+            x_coords,
+            y_coords,
+            dtype=tokens.dtype,
+            device=tokens.device,
+        )
+
+        q_global = torch.einsum("btn,btnr,ns->btrs", weights, q, eta)
+        k_global = torch.einsum("btn,btnr,ns->btrs", weights, k, eta)
+        total_weight = weights.sum(dim=2)
+
+        q_against_k = torch.einsum("btnr,ns,btrs->btn", q, eta, k_global)
+        q_against_q = torch.einsum("btrs,btnr,ns->btn", q_global, k, eta)
+        numerator = (q_against_k - q_against_q) / math.sqrt(self.factorized_rank)
+        denominator = total_weight.unsqueeze(-1) - weights
+        context = numerator / denominator.clamp_min(_PRIORITY_EPS)
+        context = torch.where(
+            denominator > _PRIORITY_EPS,
+            context,
+            torch.zeros_like(context),
+        )
+        context = context * valid
+        stats = self._factorized_comparison_stats(
+            q,
+            k,
+            context,
+            weights,
+            total_weight,
+            candidate_valid,
+            tokens.dtype,
+        )
+        return context, stats
+
+    def _prioritize_concept_patch_activations(
+        self,
+        modality_outs: List[Dict[str, torch.Tensor]],
+    ) -> Dict[str, torch.Tensor]:
+        """Score every valid concept-patch activation independently per frame."""
+        if not modality_outs:
+            raise ValueError("at least one concept modality is required")
+
+        token_parts: List[Dict[str, torch.Tensor]] = []
+        concept_offset = 0
+        activation_maps: List[torch.Tensor] = []
+        validity_masks: List[torch.Tensor] = []
+        for modality in modality_outs:
+            H, W = modality["activations"].shape[-2:]
+            part = self._build_activation_tokens(
+                modality["projected_features"],
+                modality["projected_prototypes"],
+                modality["activations"],
+                concept_id_offset=concept_offset,
+            )
+            token_parts.append(part)
+            activation_maps.append(modality["activations"])
+            validity_masks.append(modality["validity_mask"])
+            concept_offset += int(modality["activations"].shape[2])
+
+        tokens = torch.cat([part["tokens"] for part in token_parts], dim=2)
+        activations = torch.cat([part["activations"] for part in token_parts], dim=2)
+        x_coords = torch.cat([part["x_coords"] for part in token_parts], dim=0)
+        y_coords = torch.cat([part["y_coords"] for part in token_parts], dim=0)
+        validity = torch.cat(validity_masks, dim=1)
+        B, T, N, _ = tokens.shape
+        H, W = token_parts[0]["spatial_hw"]
+        K = N // (H * W)
+        candidate_valid = (
+            validity[:, :, None]
+            .expand(-1, -1, H * W)
+            .reshape(B, N)
+        )
+
+        unary = self.unary_priority_mlp(tokens).squeeze(-1)
+        context, factorized_stats = self._factorized_pairwise_context(
+            tokens,
+            activations,
+            candidate_valid,
+            x_coords,
+            y_coords,
+        )
+        scores = unary + self.pairwise_strength * context
+        priority_logits = (
+            scores / self.priority_temperature
+            + torch.log(activations.clamp_min(0.0) + _PRIORITY_EPS)
+        )
+        concept_priorities_flat = _masked_softmax(
+            priority_logits,
+            candidate_valid,
+            dim=-1,
+        )
+        if not bool(validity.any(dim=-1).all().item()):
+            raise ValueError(
+                "Priority softmax requires at least one valid concept prototype "
+                "for every batch item."
+            )
+
+        concept_priorities = concept_priorities_flat.view(B, T, K, H, W)
+        patch_priority_map = concept_priorities.sum(dim=2)
+        # [B, 1, T, H, W] broadcasts over channels of [B, C, T, H, W] FiLM features.
+        priority_mask = patch_priority_map.unsqueeze(1)
+        return {
+            "priority_mask": priority_mask,
+            "concept_priorities": concept_priorities,
+            "concept_validity": validity,
+            "patch_priority_map": patch_priority_map,
+            "unary_scores": unary.view(B, T, K, H, W),
+            "pairwise_context": context.view(B, T, K, H, W),
+            "factorized_comparison_stats": factorized_stats,
+        }
+
+    def _assert_required_visual_prototypes(
+        self,
+        visual_validity_mask: torch.Tensor,
+    ) -> None:
+        validity = visual_validity_mask.bool()
+        if validity.numel() == 0 or not bool(validity.any(dim=-1).all().item()):
+            raise ValueError(
+                "Visual concept activations are required for mask construction, but "
+                "at least one batch item has no valid visual prototypes."
+            )
 
     def forward(
         self,
@@ -826,122 +1067,79 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         *,
         active_visual_prototypes: torch.Tensor,
         visual_validity_mask: torch.Tensor,
-        active_motion_prototypes: Optional[torch.Tensor] = None,
-        motion_validity_mask: Optional[torch.Tensor] = None,
-        use_motion_masks: bool = False,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         feature_proj = self.feature_proj(features)
         concept_proj = self.concept_proj(concept_volume)
 
+        prev_up = None
         if prev_decoder is not None:
             prev_up = self.prev_upsample(
                 prev_decoder,
                 target_thw=feature_proj.shape[-3:],
             )
             prev_up = self.prev_proj(prev_up)
-        else:
-            prev_up = torch.zeros_like(feature_proj)
 
         film_params = self.film(concept_proj)
         gamma, beta = film_params.chunk(2, dim=1)
         gamma = 1.0 + 0.1 * torch.tanh(gamma)
         beta = 0.1 * beta
-        feature_proj = feature_proj * gamma + beta
+        film_features = feature_proj * gamma + beta
 
-        motion_available = (
-            use_motion_masks
-            and active_motion_prototypes is not None
-            and motion_validity_mask is not None
-            and bool(motion_validity_mask.any().item())
-        )
-
-        if motion_available:
-            num_visual_masks = self.num_masks // 2
-            num_motion_masks = self.num_masks - num_visual_masks
-            visual_maps, visual_weights, visual_masks, visual_gates = (
-                self._compute_modality_masks(
-                    feature_proj,
-                    active_visual_prototypes,
-                    visual_validity_mask,
-                    self.visual_mask_queries,
-                    num_visual_masks,
-                    gate_offset=0,
+        mask_outputs: Dict[str, torch.Tensor] = {}
+        if self.enable_patch_prioritization:
+            self._assert_required_visual_prototypes(visual_validity_mask)
+            visual_out = self._compute_soft_activations(
+                film_features,
+                active_visual_prototypes,
+                visual_validity_mask,
+            )
+            priority_out = self._prioritize_concept_patch_activations([visual_out])
+            priority_mask = priority_out["priority_mask"]
+            if priority_mask.shape[1] != 1:
+                raise ValueError(
+                    "patch-priority mask must have a singleton channel dimension "
+                    f"[B, 1, T, H, W], got {tuple(priority_mask.shape)}"
                 )
+            alpha = self.max_strength * torch.sigmoid(self.raw_strength)
+            branched = self.mask_feature_branch(film_features)
+            feature_proj = film_features + alpha * (priority_mask * branched)
+            mask_outputs.update(
+                {
+                    "priority_mask": priority_mask,
+                    "concept_priorities": priority_out["concept_priorities"],
+                    "concept_validity": priority_out["concept_validity"],
+                    "patch_priority_map": priority_out["patch_priority_map"],
+                    "unary_scores": priority_out["unary_scores"],
+                    "pairwise_context": priority_out["pairwise_context"],
+                    "factorized_comparison_stats": priority_out[
+                        "factorized_comparison_stats"
+                    ],
+                    "visual_similarity_maps": visual_out["similarity_maps"],
+                    "concept_patch_activations": visual_out["activations"],
+                    "residual_strength": alpha.detach(),
+                }
             )
-            motion_maps, motion_weights, motion_masks, motion_gates = (
-                self._compute_modality_masks(
-                    feature_proj,
-                    active_motion_prototypes,
-                    motion_validity_mask,
-                    self.motion_mask_queries,
-                    num_motion_masks,
-                    gate_offset=num_visual_masks,
-                )
-            )
-            multi_masks = torch.cat([visual_masks, motion_masks], dim=1)
-            multi_mask_gates = torch.cat([visual_gates, motion_gates], dim=1)
-            mask_modality_labels = torch.tensor(
-                [0] * num_visual_masks + [1] * num_motion_masks,
-                device=feature_proj.device,
-                dtype=torch.long,
-            )
-            motion_concept_maps = motion_maps
-            motion_concept_weights = motion_weights
         else:
-            visual_maps, visual_weights, multi_masks, multi_mask_gates = (
-                self._compute_modality_masks(
-                    feature_proj,
-                    active_visual_prototypes,
-                    visual_validity_mask,
-                    self.visual_mask_queries,
-                    self.num_masks,
-                    gate_offset=0,
-                )
-            )
-            mask_modality_labels = torch.zeros(
-                self.num_masks,
-                device=feature_proj.device,
-                dtype=torch.long,
-            )
-            motion_concept_maps = None
-            motion_concept_weights = None
-
-        fused_update = self._apply_multi_mask_branches(feature_proj, multi_mask_gates)
-        strength = self.max_strength * torch.sigmoid(self.raw_strength)
-        feature_proj = feature_proj + strength * fused_update
+            feature_proj = film_features
 
         fused = feature_proj
-        if prev_decoder is not None:
+        if prev_up is not None:
             fused = fused + self.prev_scale * prev_up
 
         decoded = self.refine2(self.refine1(fused))
-
-        concept_mask = multi_mask_gates.mean(dim=1, keepdim=True)
-
-        mask_outputs: Dict[str, torch.Tensor] = {
-            "concept_mask": concept_mask,
-            "multi_masks": multi_masks,
-            "multi_mask_gates": multi_mask_gates,
-            "visual_concept_maps": visual_maps,
-            "visual_concept_weights": visual_weights,
-            "mask_modality_labels": mask_modality_labels,
-        }
-        if motion_concept_maps is not None:
-            mask_outputs["motion_concept_maps"] = motion_concept_maps
-        if motion_concept_weights is not None:
-            mask_outputs["motion_concept_weights"] = motion_concept_weights
-
         return decoded, mask_outputs
 
 
 class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
     """
-    Coarse-to-fine spatiotemporal concept-guided FiLM-and-mask decoder.
+    Coarse-to-fine spatiotemporal decoder with concept-patch prioritization at
+    stages 3 and 4.
 
-    Fuses full [B, C, T, H, W] feature and concept volumes per stage through
-    concept-guided FiLM modulation and concept-derived feature masking, aggregates
-    temporally with learned attention, and upsamples with learned conv transpose
-    blocks to the output image resolution.
+    Stages decode stage4 -> stage1. Each stage fuses full [B, C, T, H, W]
+    feature and concept volumes through FiLM. Stages 3 and 4 score every valid
+    concept-patch activation, update FiLM features with a 1x1x1 conv-GN-ReLU
+    branch, and apply the residual patch-priority mask to that update. Temporal
+    aggregation and learned upsampling produce the last-frame saliency map.
     """
 
     def __init__(
@@ -955,11 +1153,13 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         output_activation: str = "sigmoid",
         temporal_aggregation: str = "learned_all_frames",
         use_side_logit_fusion: bool = True,
-        motion_concept_stages: Tuple[str, ...] = ("stage3",),
-        num_masks: int = 4,
+        assignment_temperature: float = 0.07,
+        priority_temperature: float = 0.1,
+        factorized_rank: int = 32,
+        distance_gate_range: float = 0.5,
     ):
         super().__init__()
-        del feature_residual_scale, tau_pi
+        del feature_residual_scale, tau_pi, distance_gate_range
 
         if output_activation not in ("sigmoid", "none"):
             raise ValueError("output_activation must be 'sigmoid' or 'none'")
@@ -976,7 +1176,11 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         self.output_activation = output_activation
         self.temporal_aggregation = temporal_aggregation
         self.use_side_logit_fusion = bool(use_side_logit_fusion)
-        self.num_masks = int(num_masks)
+        self.patch_priority_stages = tuple(
+            stage
+            for stage in _PATCH_PRIORITY_STAGES
+            if stage in self.stage_channels
+        )
 
         hidden_channels = max(decoder_channels // 2, 32)
         attn_hidden = max(decoder_channels // 2, 1)
@@ -988,7 +1192,10 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     concept_dim=concept_dim,
                     decoder_channels=decoder_channels,
                     dropout=dropout,
-                    num_masks=self.num_masks,
+                    assignment_temperature=assignment_temperature,
+                    priority_temperature=priority_temperature,
+                    enable_patch_prioritization=stage in self.patch_priority_stages,
+                    factorized_rank=factorized_rank,
                 )
                 for stage, channels in self.stage_channels.items()
             }
@@ -1042,29 +1249,6 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         side_fusion_init = torch.full((num_logits,), -2.0)
         side_fusion_init[0] = 4.0
         self.side_fusion_logits = nn.Parameter(side_fusion_init)
-
-        motion_concept_stages = tuple(
-            stage for stage in motion_concept_stages if stage != "stage4"
-        )
-        allowed_motion_stages = {"stage3"}
-        invalid_motion_stages = set(motion_concept_stages) - allowed_motion_stages
-        if invalid_motion_stages:
-            raise ValueError(
-                "Only stage3 motion concept fusion is currently supported. "
-                f"Got invalid stages: {sorted(invalid_motion_stages)}"
-            )
-        self.motion_concept_stages = motion_concept_stages
-        self.motion_concept_logit_scales = nn.ParameterDict(
-            {
-                stage: nn.Parameter(torch.tensor(-1.0))
-                for stage in self.motion_concept_stages
-            }
-        )
-        self.motion_concept_stage = (
-            self.motion_concept_stages[0]
-            if len(self.motion_concept_stages) > 0
-            else "stage3"
-        )
 
     def _fuse_main_and_side_logits(
         self,
@@ -1176,37 +1360,34 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         stage_mask_diagnostics: Optional[Dict[str, Dict[str, float]]] = (
             {} if return_details else None
         )
-        stage_multi_masks: Optional[Dict[str, torch.Tensor]] = (
+        stage_concept_priorities: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
-        stage_multi_mask_gates: Optional[Dict[str, torch.Tensor]] = (
+        stage_concept_validity: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
-        stage_visual_concept_maps: Optional[Dict[str, torch.Tensor]] = (
+        stage_visual_similarity_maps: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
-        stage_visual_concept_weights: Optional[Dict[str, torch.Tensor]] = (
+        stage_concept_patch_activations: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
-        stage_motion_concept_maps: Optional[Dict[str, torch.Tensor]] = (
+        stage_unary_scores: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
-        stage_motion_concept_weights: Optional[Dict[str, torch.Tensor]] = (
+        stage_pairwise_context: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
-        stage_mask_modality_labels: Optional[Dict[str, torch.Tensor]] = (
+        stage_factorized_comparison_stats: Optional[Dict[str, Dict[str, float]]] = (
             {} if return_details else None
         )
+        stage_patch_priority_maps: Dict[str, torch.Tensor] = {}
         decoded_stage_volumes: Optional[Dict[str, torch.Tensor]] = (
-            {} if return_details else None
-        )
-        stage_motion_concept_volumes: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
         side_saliency_logits: Dict[str, torch.Tensor] = {}
         side_patch_logits: Dict[str, torch.Tensor] = {}
         side_temporal_weights: Dict[str, torch.Tensor] = {}
-        stage_multi_masks_for_loss: Dict[str, torch.Tensor] = {}
 
         prev_decoder: Optional[torch.Tensor] = None
 
@@ -1227,26 +1408,6 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 features_5d,
                 stage=stage,
             )
-
-            motion_volume: Optional[torch.Tensor] = None
-            # Motion concepts are intentionally fused only at stage3.
-            # Stage4 motion fusion was tested and removed because it hurt performance.
-            # Stage4 visual/backbone features are still decoded normally.
-            if stage == "stage3" and stage in self.motion_concept_stages:
-                motion_volume = _build_motion_concept_volume(
-                    concept_outs[stage],
-                    stage=stage,
-                )
-                if motion_volume is not None:
-                    motion_volume = _align_concept_volume_to_features(
-                        motion_volume,
-                        features_5d,
-                        stage=stage,
-                    )
-                    motion_scale = torch.sigmoid(
-                        self.motion_concept_logit_scales[stage]
-                    )
-                    concept_volume = concept_volume + motion_scale * motion_volume
 
             _assert_concept_volume_matches_features(
                 stage=stage,
@@ -1269,28 +1430,15 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     f"and visual_validity_mask"
                 )
 
-            use_motion_masks = (
-                stage == "stage3"
-                and stage in self.motion_concept_stages
-                and _motion_prototypes_available(stage_concept_out)
-            )
-            active_motion_prototypes = stage_concept_out.get(
-                "active_motion_prototypes"
-            )
-            motion_validity_mask = stage_concept_out.get("motion_validity_mask")
-
             decoded, mask_outputs = fusion_blocks[stage](
                 features_5d,
                 concept_volume,
                 prev_decoder=prev_decoder,
                 active_visual_prototypes=active_visual_prototypes,
                 visual_validity_mask=visual_validity_mask,
-                active_motion_prototypes=active_motion_prototypes,
-                motion_validity_mask=motion_validity_mask,
-                use_motion_masks=use_motion_masks,
             )
-            concept_mask = mask_outputs["concept_mask"]
-            stage_multi_masks_for_loss[stage] = mask_outputs["multi_masks"]
+            if "patch_priority_map" in mask_outputs:
+                stage_patch_priority_maps[stage] = mask_outputs["patch_priority_map"]
             prev_decoder = decoded
 
             side_volume = side_feature_heads[stage](decoded)
@@ -1306,78 +1454,81 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             if return_details:
                 stage_concept_volumes[stage] = concept_volume.detach()
                 stage_feature_volumes[stage] = features_5d.detach()
-                stage_concept_masks[stage] = concept_mask.detach()
-                stage_gates[stage] = concept_mask.detach()
-                stage_multi_masks[stage] = mask_outputs["multi_masks"]
-                stage_multi_mask_gates[stage] = mask_outputs["multi_mask_gates"]
-                stage_visual_concept_maps[stage] = mask_outputs["visual_concept_maps"]
-                stage_visual_concept_weights[stage] = mask_outputs[
-                    "visual_concept_weights"
-                ]
-                stage_mask_modality_labels[stage] = mask_outputs[
-                    "mask_modality_labels"
-                ]
-                if mask_outputs.get("motion_concept_maps") is not None:
-                    stage_motion_concept_maps[stage] = mask_outputs[
-                        "motion_concept_maps"
-                    ]
-                if mask_outputs.get("motion_concept_weights") is not None:
-                    stage_motion_concept_weights[stage] = mask_outputs[
-                        "motion_concept_weights"
-                    ]
                 decoded_stage_volumes[stage] = decoded.detach()
+                priority_mask = mask_outputs.get("priority_mask")
+                if torch.is_tensor(priority_mask):
+                    stage_concept_masks[stage] = priority_mask.detach()
+                    stage_gates[stage] = priority_mask.detach()
+                if "concept_priorities" in mask_outputs:
+                    stage_concept_priorities[stage] = mask_outputs[
+                        "concept_priorities"
+                    ].detach()
+                if "concept_validity" in mask_outputs:
+                    stage_concept_validity[stage] = mask_outputs[
+                        "concept_validity"
+                    ].detach()
+                if "visual_similarity_maps" in mask_outputs:
+                    stage_visual_similarity_maps[stage] = mask_outputs[
+                        "visual_similarity_maps"
+                    ].detach()
+                if "concept_patch_activations" in mask_outputs:
+                    stage_concept_patch_activations[stage] = mask_outputs[
+                        "concept_patch_activations"
+                    ].detach()
+                if "unary_scores" in mask_outputs:
+                    stage_unary_scores[stage] = mask_outputs["unary_scores"].detach()
+                if "pairwise_context" in mask_outputs:
+                    stage_pairwise_context[stage] = mask_outputs[
+                        "pairwise_context"
+                    ].detach()
+                factorized_stats = mask_outputs.get("factorized_comparison_stats")
+                if isinstance(factorized_stats, dict):
+                    stage_factorized_comparison_stats[stage] = {}
+                    for key, value in factorized_stats.items():
+                        if torch.is_tensor(value):
+                            if value.numel() == 1:
+                                stage_factorized_comparison_stats[stage][key] = float(
+                                    value.detach().cpu()
+                                )
+                            elif key == "spatial_frequency_weights":
+                                stage_factorized_comparison_stats[stage][key] = float(
+                                    value.detach().mean().cpu()
+                                )
+                            else:
+                                stage_factorized_comparison_stats[stage][key] = float(
+                                    value.detach().mean().cpu()
+                                )
+                        else:
+                            stage_factorized_comparison_stats[stage][key] = float(value)
                 with torch.no_grad():
-                    multi_masks = mask_outputs["multi_masks"]
-                    multi_mask_gates = mask_outputs["multi_mask_gates"]
-                    mask_strength = float(
-                        (
-                            fusion_blocks[stage].max_strength
-                            * torch.sigmoid(fusion_blocks[stage].raw_strength)
+                    raw_strength = getattr(fusion_blocks[stage], "raw_strength", None)
+                    if torch.is_tensor(priority_mask) and raw_strength is not None:
+                        mask_strength = float(
+                            (
+                                fusion_blocks[stage].max_strength
+                                * torch.sigmoid(raw_strength)
+                            )
+                            .detach()
+                            .cpu()
                         )
-                        .detach()
-                        .cpu()
-                    )
-                    multi_mask_diag = _compute_multi_mask_diagnostics(
-                        multi_masks,
-                        mask_strength=mask_strength,
-                    )
-                    stage_mask_diagnostics[stage] = {
-                        "concept_mask_mean": float(
-                            concept_mask.detach().mean().cpu()
-                        ),
-                        "concept_mask_std": float(
-                            concept_mask.detach().std().cpu()
-                        ),
-                        "concept_mask_min": float(
-                            concept_mask.detach().min().cpu()
-                        ),
-                        "concept_mask_max": float(
-                            concept_mask.detach().max().cpu()
-                        ),
-                        "multi_mask_mean": float(multi_masks.mean().cpu()),
-                        "multi_mask_std": float(multi_masks.std().cpu()),
-                        "multi_mask_gate_mean": float(
-                            multi_mask_gates.mean().cpu()
-                        ),
-                        "multi_mask_gate_std": float(
-                            multi_mask_gates.std().cpu()
-                        ),
-                        "residual_strength": mask_strength,
-                        "num_masks": float(self.num_masks),
-                        **multi_mask_diag,
-                    }
-                if motion_volume is not None:
-                    stage_motion_concept_volumes[stage] = motion_volume.detach()
+                        stage_mask_diagnostics[stage] = {
+                            "patch_priority_mean": float(
+                                priority_mask.detach().mean().cpu()
+                            ),
+                            "patch_priority_std": float(
+                                priority_mask.detach().std().cpu()
+                            ),
+                            "patch_priority_min": float(
+                                priority_mask.detach().min().cpu()
+                            ),
+                            "patch_priority_max": float(
+                                priority_mask.detach().max().cpu()
+                            ),
+                            "residual_strength": mask_strength,
+                        }
 
         if prev_decoder is None:
             raise RuntimeError("Decoder produced no stage outputs")
-
-        mask_diversity_loss, stage_mask_diversity_losses = (
-            compute_stage_mask_diversity_losses(
-                stage_multi_masks_for_loss,
-                reference=prev_decoder,
-            )
-        )
 
         final_feature_2d, temporal_weights = self._aggregate_temporal_features(
             prev_decoder
@@ -1419,24 +1570,22 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             "side_temporal_weights": side_temporal_weights,
             "output_activation": self.output_activation,
             "decoder_temporal_diagnostics": decoder_temporal_diagnostics,
-            "mask_diversity_loss": mask_diversity_loss,
-            "stage_mask_diversity_losses": stage_mask_diversity_losses,
+            "stage_patch_priority_maps": stage_patch_priority_maps,
         }
 
         if return_details:
             out["stage_concept_volumes"] = stage_concept_volumes
             out["stage_feature_volumes"] = stage_feature_volumes
             out["stage_gates"] = stage_gates
-            out["stage_concept_masks"] = stage_concept_masks
+            out["stage_priority_masks"] = stage_concept_masks
             out["stage_mask_diagnostics"] = stage_mask_diagnostics
-            out["stage_multi_masks"] = stage_multi_masks
-            out["stage_multi_mask_gates"] = stage_multi_mask_gates
-            out["stage_visual_concept_maps"] = stage_visual_concept_maps
-            out["stage_visual_concept_weights"] = stage_visual_concept_weights
-            out["stage_motion_concept_maps"] = stage_motion_concept_maps
-            out["stage_motion_concept_weights"] = stage_motion_concept_weights
-            out["stage_mask_modality_labels"] = stage_mask_modality_labels
+            out["stage_concept_priorities"] = stage_concept_priorities
+            out["stage_concept_validity"] = stage_concept_validity
+            out["stage_visual_similarity_maps"] = stage_visual_similarity_maps
+            out["stage_concept_patch_activations"] = stage_concept_patch_activations
+            out["stage_unary_scores"] = stage_unary_scores
+            out["stage_pairwise_context"] = stage_pairwise_context
+            out["stage_factorized_comparison_stats"] = stage_factorized_comparison_stats
             out["decoded_stage_volumes"] = decoded_stage_volumes
-            out["stage_motion_concept_volumes"] = stage_motion_concept_volumes
 
         return out

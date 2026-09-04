@@ -7,7 +7,7 @@ All supervision is computed outside the model from:
   - optional concept regularizers from ConceptCreation
 """
 
-from typing import Any, Dict, Iterator, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import math
 
@@ -1156,86 +1156,56 @@ def compute_temporal_attention_entropy_loss(
     return -normalized_entropy.mean()
 
 
-def compute_mask_diversity_loss(multi_masks: torch.Tensor) -> torch.Tensor:
-    """
-    Differentiable diversity loss over R final cosine-derived masks.
-
-    Args:
-        multi_masks: [B, R, T, H, W]
-
-    Returns:
-        Scalar loss encouraging low pairwise correlation between masks while
-        discouraging spatially constant (collapsed) masks.
-    """
-    if not torch.is_tensor(multi_masks):
-        raise ValueError(
-            f"multi_masks must be a torch.Tensor, got {type(multi_masks)!r}"
-        )
-    if multi_masks.dim() != 5:
-        raise ValueError(
-            f"multi_masks must be [B,R,T,H,W], got {tuple(multi_masks.shape)}"
-        )
-
-    masks_flat = multi_masks.flatten(start_dim=2)
-    centered = masks_flat - masks_flat.mean(dim=-1, keepdim=True)
-    normalized = F.normalize(centered, p=2, dim=-1, eps=1e-6)
-
-    gram = normalized @ normalized.transpose(1, 2)
-    _, num_masks, _ = gram.shape
-    if num_masks <= 1:
-        diversity_loss = gram.sum() * 0.0
-    else:
-        off_diag_mask = ~torch.eye(
-            num_masks,
-            dtype=torch.bool,
-            device=gram.device,
-        )
-        diversity_loss = gram[:, off_diag_mask].pow(2).mean()
-
-    spatial_std = masks_flat.std(dim=-1, unbiased=False)
-    variance_floor_loss = F.relu(0.05 - spatial_std).mean()
-
-    return diversity_loss + 0.1 * variance_floor_loss
-
-
-def compute_stage_mask_diversity_losses(
-    stage_multi_masks: Dict[str, torch.Tensor],
+def compute_patch_priority_map_loss(
+    prediction_out: Dict[str, Any],
+    saliency_maps: torch.Tensor,
     *,
-    reference: Optional[torch.Tensor] = None,
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    stages: Tuple[str, ...] = ("stage3", "stage4"),
+    eps: float = 1e-8,
+) -> Dict[str, torch.Tensor]:
     """
-    Per-stage mask diversity losses and their mean across decoded stages.
+    KL between last-frame patch-priority maps and downsampled saliency GT.
 
-    Args:
-        stage_multi_masks: mapping stage -> differentiable [B,R,T,H,W] masks
-        reference: optional tensor used to derive device/dtype for a zero fallback
-
-    Returns:
-        mask_diversity_loss: mean over stages
-        stage_mask_diversity_losses: per-stage scalar losses
+    Both maps are normalized into spatial probability distributions. The Stage 3
+    and Stage 4 losses are averaged. Pairwise scores are not supervised.
     """
-    if not stage_multi_masks:
-        if reference is not None:
-            zero = reference.sum() * 0.0
-        else:
-            zero = torch.zeros((), device="cpu")
-        return zero, {}
+    zero = _loss_zero_reference(prediction_out)
+    maps = prediction_out.get("stage_patch_priority_maps")
+    out: Dict[str, torch.Tensor] = {
+        "loss_priority_map": zero,
+        "loss_priority_map_stage3": zero,
+        "loss_priority_map_stage4": zero,
+    }
+    if not isinstance(maps, dict) or not maps:
+        return out
 
-    stage_losses: Dict[str, torch.Tensor] = {}
-    for stage, masks in stage_multi_masks.items():
-        if not torch.is_tensor(masks):
+    stage_losses: List[torch.Tensor] = []
+    for stage in stages:
+        priority_map = maps.get(stage)
+        if not torch.is_tensor(priority_map) or priority_map.dim() < 3:
             continue
-        stage_losses[stage] = compute_mask_diversity_loss(masks)
+        last_priority = priority_map[:, -1]
+        if last_priority.dim() == 2:
+            last_priority = last_priority.unsqueeze(1)
+        elif last_priority.dim() == 3:
+            last_priority = last_priority.unsqueeze(1)
+        target = prepare_last_saliency_map(
+            saliency_maps,
+            int(last_priority.shape[-2]),
+            int(last_priority.shape[-1]),
+        )
+        pred_flat = last_priority.reshape(last_priority.shape[0], -1).clamp_min(0.0)
+        pred_prob = pred_flat / pred_flat.sum(dim=1, keepdim=True).clamp_min(eps)
+        target_flat = target.reshape(target.shape[0], -1).clamp_min(0.0)
+        target_prob = target_flat / target_flat.sum(dim=1, keepdim=True).clamp_min(eps)
+        log_pred = (pred_prob + eps).log()
+        stage_loss = F.kl_div(log_pred, target_prob, reduction="batchmean")
+        out[f"loss_priority_map_{stage}"] = stage_loss
+        stage_losses.append(stage_loss)
 
-    if not stage_losses:
-        if reference is not None:
-            zero = reference.sum() * 0.0
-        else:
-            zero = torch.zeros((), device="cpu")
-        return zero, {}
-
-    mask_diversity_loss = torch.stack(list(stage_losses.values())).mean()
-    return mask_diversity_loss, stage_losses
+    if stage_losses:
+        out["loss_priority_map"] = torch.stack(stage_losses).mean()
+    return out
 
 
 def compute_total_loss(
@@ -1267,20 +1237,13 @@ def compute_total_loss(
     patch_from_logits: bool = True,
     enable_side_aux: bool = False,
     side_stage_weights: Optional[Dict[str, float]] = None,
-    mask_diversity_weight: float = 0.01,
+    priority_loss_weight: float = 0.05,
 ) -> Dict[str, Union[torch.Tensor, None]]:
     """
     Total training loss for ExplainableVidSalModel (return_details=True).
 
-    L = L_fid
-      + lambda_cc * L_CC
-      + lambda_nss * L_NSS
-      + lambda_align * L_align
-      + lambda_sparse * L_sparse
-      + lambda_div * L_div
-      + lambda_gate * L_gate
-      + concept regularizers
-      + visual concept regularizers
+    L = existing saliency losses
+      + priority_loss_weight * mean(Stage3, Stage4 patch-priority KL)
     """
     prediction_out = _resolve_prediction_out(model_out)
     concept_out = model_out.get("concept_out")
@@ -1395,10 +1358,9 @@ def compute_total_loss(
         )
         loss_decoder_side_aux = side_loss_out["loss_decoder_side_aux"]
 
-    loss_mask_diversity = prediction_out.get("mask_diversity_loss")
-    if not torch.is_tensor(loss_mask_diversity):
-        loss_mask_diversity = ref.sum() * 0.0
-    loss_mask_diversity_weighted = mask_diversity_weight * loss_mask_diversity
+    priority_out = compute_patch_priority_map_loss(prediction_out, saliency_maps)
+    loss_priority_map = priority_out["loss_priority_map"]
+    loss_priority_map_weighted = priority_loss_weight * loss_priority_map
 
     loss_total_concept = _aggregate_concept_total_loss(concept_out, ref)
 
@@ -1419,7 +1381,7 @@ def compute_total_loss(
         + lambda_temporal_attention_entropy * loss_temporal_attention_entropy
         + loss_decoder_side_aux
         + loss_total_concept
-        + loss_mask_diversity_weighted
+        + loss_priority_map_weighted
     )
 
     result = {
@@ -1445,8 +1407,10 @@ def compute_total_loss(
         "loss_temporal_attention_entropy": loss_temporal_attention_entropy,
         "loss_total_concept": loss_total_concept,
         "loss_decoder_side_aux": loss_decoder_side_aux,
-        "loss_mask_diversity": loss_mask_diversity,
-        "loss_mask_diversity_weighted": loss_mask_diversity_weighted,
+        "loss_priority_map": loss_priority_map,
+        "loss_priority_map_weighted": loss_priority_map_weighted,
+        "loss_priority_map_stage3": priority_out["loss_priority_map_stage3"],
+        "loss_priority_map_stage4": priority_out["loss_priority_map_stage4"],
         "delta_target": fid_out["delta_target"],
         "target_patch_grid": fid_out["target_patch_grid"],
         "source_mixture_grid": fid_out["source_mixture_grid"],

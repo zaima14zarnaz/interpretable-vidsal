@@ -2,8 +2,7 @@
 End-to-end explainable video saliency model.
 
 Pipeline: RGB window -> VideoSwinTransformer -> VisualConceptCreation (raw features)
-         -> optional MotionConceptCreation -> SpatioTemporal3DFeatureInfusion
-         (decoder features) -> SaliencyDecoder.
+         -> SpatioTemporal3DFeatureInfusion (decoder features) -> SaliencyDecoder.
 """
 
 from contextlib import nullcontext
@@ -14,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.backbones.video_swin_custom import VideoSwinTransformer
-from model.concept_creation import MotionConceptCreation, VisualConceptCreation
+from model.concept_creation import VisualConceptCreation
 from model.saliency_prediction import ConceptGatedMultiScaleSaliencyDecoder
 from model.temporal_feature_infusion import SpatioTemporal3DFeatureInfusion
 
@@ -100,18 +99,6 @@ class ExplainableVidSalModel(nn.Module):
         temporal_enhance_last_only: bool = False,
         decoder_temporal_aggregation: str = "learned_all_frames",
         decoder_use_side_logit_fusion: bool = True,
-        motion_concepts_on: bool = True,
-        motion_concept_stage: str = "stage3",
-        motion_concept_stages: Optional[Tuple[str, ...]] = None,
-        num_motion_concepts: int = 32,
-        motion_assignment_mode: str = "straight_through",
-        motion_assignment_temperature: float = 0.07,
-        motion_hidden_dim: Optional[int] = None,
-        motionness_temperature: float = 2.0,
-        motion_lstm_hidden_dim: int = 256,
-        motion_lstm_num_layers: int = 1,
-        motion_lstm_bidirectional: bool = False,
-        motion_lstm_dropout: float = 0.0,
         **_deprecated_saliency_kwargs: Any,
     ):
         super().__init__()
@@ -148,44 +135,6 @@ class ExplainableVidSalModel(nn.Module):
         self.temporal_dim = int(temporal_dim)
         self.decoder_temporal_aggregation = decoder_temporal_aggregation
         self.decoder_use_side_logit_fusion = bool(decoder_use_side_logit_fusion)
-        self.motion_concepts_on = bool(motion_concepts_on)
-        if motion_concept_stages is None:
-            motion_concept_stages = (motion_concept_stage,)
-        else:
-            motion_concept_stages = tuple(motion_concept_stages)
-
-        # Safety: remove stage4 motion concepts.
-        if "stage4" in motion_concept_stages:
-            motion_concept_stages = tuple(
-                stage for stage in motion_concept_stages if stage != "stage4"
-            )
-
-        # Ensure stage3 is the only active motion stage by default.
-        if motion_concepts_on and len(motion_concept_stages) == 0:
-            motion_concept_stages = ("stage3",)
-
-        allowed_motion_stages = {"stage3"}
-        invalid_motion_stages = set(motion_concept_stages) - allowed_motion_stages
-        if invalid_motion_stages:
-            raise ValueError(
-                "Only stage3 motion concepts are currently supported. "
-                f"Got invalid stages: {sorted(invalid_motion_stages)}"
-            )
-
-        self.motion_concept_stages = motion_concept_stages
-        self.motion_concept_stage = (
-            motion_concept_stages[0] if len(motion_concept_stages) > 0 else "stage3"
-        )
-        self.num_motion_concepts = int(num_motion_concepts)
-        if motion_concepts_on:
-            missing_motion_stages = [
-                stage for stage in motion_concept_stages if stage not in backbone_stages
-            ]
-            if missing_motion_stages:
-                raise ValueError(
-                    f"All motion_concept_stages={motion_concept_stages!r} must be included in "
-                    f"backbone_stages={backbone_stages!r} when motion_concepts_on=True."
-                )
         if not self.visual_concept_on and not self.temporal_concepts_on:
             raise ValueError(
                 "At least one concept branch must be enabled: "
@@ -235,29 +184,6 @@ class ExplainableVidSalModel(nn.Module):
                 visual_saliency_align_weight=visual_saliency_align_weight,
             )
 
-        self.motion_concept_creations = nn.ModuleDict()
-        if motion_concepts_on:
-            for stage in self.motion_concept_stages:
-                self.motion_concept_creations[stage] = MotionConceptCreation(
-                    in_channels=self.stage_channels[stage],
-                    concept_dim=concept_dim,
-                    num_motion_concepts=num_motion_concepts,
-                    hidden_dim=motion_hidden_dim or concept_hidden_dim,
-                    top_k=top_k,
-                    assignment_temperature=motion_assignment_temperature,
-                    assignment_mode=motion_assignment_mode,
-                    motionness_temperature=motionness_temperature,
-                    lstm_hidden_dim=motion_lstm_hidden_dim,
-                    lstm_num_layers=motion_lstm_num_layers,
-                    lstm_bidirectional=motion_lstm_bidirectional,
-                    lstm_dropout=motion_lstm_dropout,
-                )
-        self.motion_concept_creation = (
-            self.motion_concept_creations[self.motion_concept_stages[0]]
-            if motion_concepts_on and len(self.motion_concept_stages) > 0
-            else None
-        )
-
         self.temporal_feature_infusers = nn.ModuleDict()
         for stage in self.backbone_stages:
             self.temporal_feature_infusers[stage] = SpatioTemporal3DFeatureInfusion(
@@ -282,7 +208,6 @@ class ExplainableVidSalModel(nn.Module):
             output_activation=output_activation,
             temporal_aggregation=decoder_temporal_aggregation,
             use_side_logit_fusion=decoder_use_side_logit_fusion,
-            motion_concept_stages=self.motion_concept_stages,
         )
 
         if freeze_backbone:
@@ -313,7 +238,6 @@ class ExplainableVidSalModel(nn.Module):
         """Place backbone on one device and all downstream modules on another."""
         self.backbone.to(backbone_device)
         self.concept_creations.to(head_device)
-        self.motion_concept_creations.to(head_device)
         self.temporal_feature_infusers.to(head_device)
         self.saliency_prediction.to(head_device)
         self._backbone_device = torch.device(backbone_device)
@@ -450,7 +374,6 @@ class ExplainableVidSalModel(nn.Module):
         """Parameters for the optimizer (concept + saliency, optionally backbone)."""
         params: List[nn.Parameter] = []
         params.extend(self.concept_creations.parameters())
-        params.extend(self.motion_concept_creations.parameters())
         params.extend(self.temporal_feature_infusers.parameters())
         params.extend(self.saliency_prediction.parameters())
         if not self._backbone_frozen:
@@ -472,32 +395,6 @@ class ExplainableVidSalModel(nn.Module):
             stage: self.temporal_feature_infusers[stage].get_last_diagnostics()
             for stage in self.backbone_stages
         }
-
-    @staticmethod
-    def _merge_motion_into_concept_out(
-        stage_out: Dict[str, Any],
-        motion_out: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Merge motion concept outputs and losses into a visual concept_out dict."""
-        motion_losses = motion_out.get("losses", {})
-        for key, value in motion_out.items():
-            if key != "losses":
-                stage_out[key] = value
-
-        losses = dict(stage_out.get("losses", {}))
-        visual_total = losses.get("loss_total_concept")
-        losses.update(motion_losses)
-        motion_total = motion_losses.get("loss_total_motion_concept")
-
-        if visual_total is not None and motion_total is not None:
-            losses["loss_total_concept"] = visual_total + motion_total
-        elif visual_total is not None:
-            losses["loss_total_concept"] = visual_total
-        elif motion_total is not None:
-            losses["loss_total_concept"] = motion_total
-
-        stage_out["losses"] = losses
-        return stage_out
 
     def forward(
         self,
@@ -585,15 +482,6 @@ class ExplainableVidSalModel(nn.Module):
                     collect_gate_debug=False,
                 )
                 concept_outs[stage] = visual_out
-                if self.motion_concepts_on and stage in self.motion_concept_creations:
-                    motion_out = self.motion_concept_creations[stage](
-                        concept_features,
-                        return_losses=return_concept_losses,
-                    )
-                    concept_outs[stage] = self._merge_motion_into_concept_out(
-                        concept_outs[stage],
-                        motion_out,
-                    )
                 decoder_features_dict[stage] = temporal_feature_infusers[stage](
                     stage_features
                 )
