@@ -34,7 +34,7 @@ torch.backends.cudnn.allow_tf32 = True
 # Edit these directly (no argparse).
 # ---------------------------------------------------------------------------
 CHECKPOINT_PATH = (
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260804_121409/epoch_096.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260910_031402/epoch_179.pth"
 )
 VAL_DATASET_DIR = train_cfg.VAL_DATASET_DIR
 WINDOW_LEN = train_cfg.WINDOW_LEN
@@ -96,6 +96,8 @@ def build_model(
         temporal_concepts_on=train_cfg.TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=train_cfg.VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
+        use_temporal_feature_infusion=True,
+        use_shared_concept_activations=True,
     ).to_split_devices(backbone_device, head_device)
 
 
@@ -215,8 +217,8 @@ def evaluate_checkpoint(
             "  Val metrics   | "
             f"CC: {val_metrics['CC']:.4f} | "
             f"SIM: {val_metrics['SIM']:.4f} | "
-            f"AUC: {val_metrics['AUC']:.4f} | "
-            f"sAUC: {val_metrics['sAUC']:.4f} | "
+            # f"AUC: {val_metrics['AUC']:.4f} | "
+            # f"sAUC: {val_metrics['sAUC']:.4f} | "
             f"NSS: {val_metrics['NSS']:.4f}"
         )
     print(f"  Saved results: {results_path}")

@@ -15,6 +15,7 @@ from model.saliency_prediction import (
     ConceptGatedMultiScaleSaliencyDecoder,
     SpatioTemporalConceptGatedFusionBlock,
     _PRIORITY_EPS,
+    _scatter_last_frame_update,
 )
 
 STAGE_CONFIG: Dict[str, Tuple[int, int, int]] = {
@@ -60,15 +61,19 @@ def _make_concept_out(
     validity: torch.Tensor | None = None,
 ) -> Dict[str, Any]:
     if validity is None:
-        validity = torch.ones(B, K, dtype=torch.bool, device=device)
+        validity = torch.ones(B, 1, H, W, K, dtype=torch.bool, device=device)
     return {
         "visual_concept_representation": torch.randn(
-            B * T * H * W, concept_dim, device=device
+            B * H * W, concept_dim, device=device
         ),
         "visual_metadata": {
-            "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W}
+            "feature_shape": {"B": B, "C": C, "T": 1, "H": H, "W": W},
+            "window_T": T,
+            "assignment_time_index": T - 1,
         },
-        "active_visual_prototypes": torch.randn(B, K, concept_dim, device=device),
+        "active_visual_prototypes": torch.randn(
+            B, 1, H, W, K, concept_dim, device=device
+        ),
         "visual_validity_mask": validity,
     }
 
@@ -81,6 +86,7 @@ def _make_decoder_inputs(
     K: int = 3,
     device: torch.device | None = None,
     validity: torch.Tensor | None = None,
+    invalidate_last_concept: bool = False,
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, torch.Tensor], Dict[str, int]]:
     if device is None:
         device = torch.device("cpu")
@@ -89,6 +95,10 @@ def _make_decoder_inputs(
     stage_channels: Dict[str, int] = {}
     for stage, (H, W, C) in STAGE_CONFIG.items():
         stage_channels[stage] = C
+        stage_validity = validity
+        if invalidate_last_concept:
+            stage_validity = torch.ones(B, 1, H, W, K, dtype=torch.bool, device=device)
+            stage_validity[..., -1] = False
         concept_outs[stage] = _make_concept_out(
             B=B,
             T=T,
@@ -98,7 +108,7 @@ def _make_decoder_inputs(
             concept_dim=concept_dim,
             K=K,
             device=device,
-            validity=None if validity is None else validity.clone(),
+            validity=stage_validity,
         )
         features_dict[stage] = torch.randn(B, C, T, H, W, device=device)
     return concept_outs, features_dict, stage_channels
@@ -121,6 +131,28 @@ def _clone_decoder_inputs(
 
 def _finite(*tensors: torch.Tensor) -> bool:
     return all(torch.isfinite(tensor).all().item() for tensor in tensors)
+
+
+def _expected_guided_features(
+    block: SpatioTemporalConceptGatedFusionBlock,
+    film: torch.Tensor,
+    mask_out: Dict[str, torch.Tensor],
+    prototypes: torch.Tensor,
+) -> torch.Tensor:
+    alpha = block.max_strength * torch.sigmoid(block.raw_strength)
+    film_last = film[:, :, -1:, :, :]
+    _, _, concept_conditioned_update_last = block._build_concept_conditioned_update(
+        film_last,
+        mask_out["concept_priorities"],
+        mask_out["patch_priority_distribution"],
+        prototypes,
+        mask_out["concept_validity"],
+    )
+    concept_conditioned_update = _scatter_last_frame_update(
+        torch.zeros_like(film),
+        concept_conditioned_update_last,
+    )
+    return film + alpha * (mask_out["priority_mask"] * concept_conditioned_update)
 
 
 def _film_features(
@@ -217,7 +249,8 @@ def _priority_inputs_from_block(
     validity: torch.Tensor,
 ) -> Dict[str, torch.Tensor]:
     film = _film_features(block, features, concept_volume)
-    visual_out = block._compute_soft_activations(film, prototypes, validity)
+    film_last = film[:, :, -1:, :, :]
+    visual_out = block._compute_soft_activations(film_last, prototypes, validity)
     part = block._build_activation_tokens(
         visual_out["projected_features"],
         visual_out["projected_prototypes"],
@@ -225,9 +258,7 @@ def _priority_inputs_from_block(
     )
     B, T, N, _ = part["tokens"].shape
     H, W = part["spatial_hw"]
-    candidate_valid = (
-        validity[:, :, None].expand(-1, -1, H * W).reshape(B, N)
-    )
+    candidate_valid = validity.reshape(B, N)
     return {
         "film": film,
         "activations_map": visual_out["activations"],
@@ -257,10 +288,10 @@ def test_fusion_block() -> Dict[str, Any]:
     block.train()
     features = torch.randn(B, C, T, H, W, requires_grad=True)
     concept_volume = torch.randn(B, D, T, H, W, requires_grad=True)
-    prototypes = torch.randn(B, K, D, requires_grad=True)
-    validity = torch.ones(B, K, dtype=torch.bool)
-    validity[:, -1] = False
-    K_valid = int(validity[0].sum().item())
+    prototypes = torch.randn(B, 1, H, W, K, D, requires_grad=True)
+    validity = torch.ones(B, 1, H, W, K, dtype=torch.bool)
+    validity[..., -1] = False
+    K_valid = K - 1
     n_rect = K * H * W
     n_valid = K_valid * H * W
     n_pairs = n_valid * (n_valid - 1)
@@ -283,29 +314,81 @@ def test_fusion_block() -> Dict[str, Any]:
 
     priority_mask = mask_out["priority_mask"]
     priorities = mask_out["concept_priorities"]
+    distribution = mask_out["patch_priority_distribution"]
+    gate = mask_out["patch_priority_gate"]
     patch_map = mask_out["patch_priority_map"]
+    conditional_weights = mask_out["conditional_concept_weights"]
+    concept_context = mask_out["priority_weighted_concept_context"]
     activations = mask_out["concept_patch_activations"]
     film = _film_features(block, features, concept_volume)
+    film_last = film[:, :, -1:, :, :]
     alpha = block.max_strength * torch.sigmoid(block.raw_strength)
-    branched = block.mask_feature_branch(film)
-    expected_guided = film + alpha * (priority_mask * branched)
+    expected_guided = _expected_guided_features(block, film, mask_out, prototypes)
 
+    T_prio = 1
     assert decoded.shape == (B, 16, T, H, W)
     assert priority_mask.shape == (B, 1, T, H, W)
-    assert priorities.shape == (B, T, K, H, W)
-    assert patch_map.shape == (B, T, H, W)
-    assert activations.shape == (B, T, K, H, W)
-    assert _finite(decoded, priority_mask, priorities, patch_map, activations)
-    _assert_close(priorities.sum(dim=(2, 3, 4)), torch.ones(B, T), 1e-5, "priorities sum")
-    _assert_close(priorities[:, :, -1], torch.zeros(B, T, H, W), 1e-6, "padded concept priority")
-    _assert_close(patch_map, priorities.sum(dim=2), 1e-6, "patch map vs concept sum")
+    assert priorities.shape == (B, T_prio, K, H, W)
+    assert distribution.shape == (B, T_prio, H, W)
+    assert gate.shape == (B, T_prio, H, W)
+    assert patch_map.shape == (B, T_prio, H, W)
+    assert conditional_weights.shape == (B, T_prio, K, H, W)
+    assert concept_context.shape == (B, 16, T_prio, H, W)
+    assert activations.shape == (B, T_prio, K, H, W)
+    assert _finite(
+        decoded,
+        priority_mask,
+        priorities,
+        distribution,
+        gate,
+        patch_map,
+        conditional_weights,
+        concept_context,
+        activations,
+    )
+    _assert_close(priorities.sum(dim=(2, 3, 4)), torch.ones(B, T_prio), 1e-5, "priorities sum")
+    _assert_close(priorities[:, :, -1], torch.zeros(B, T_prio, H, W), 1e-6, "padded concept priority")
+    _assert_close(distribution, priorities.sum(dim=2), 1e-6, "distribution vs concept sum")
+    _assert_close(patch_map, distribution, 1e-6, "patch map alias")
+    _assert_close(distribution.sum(dim=(-2, -1)), torch.ones(B, T_prio), 1e-5, "distribution sums to 1")
+    _assert_close(gate.mean(dim=(-2, -1)), torch.ones(B, T_prio), 1e-5, "gate mean is 1")
+    valid = mask_out["concept_validity"].permute(0, 1, 4, 2, 3)
+    _assert_close(
+        (conditional_weights * valid.to(dtype=conditional_weights.dtype)).sum(dim=2),
+        torch.ones(B, T_prio, H, W),
+        1e-5,
+        "conditional weights sum over valid concepts",
+    )
     assert float(priority_mask.detach().min()) >= 0.0
-    assert float(priority_mask.detach().max()) <= 1.0 + 1e-5
     assert torch.all(activations[:, :, -1] == 0)
     assert torch.all(activations.sum(dim=2) <= 1.0 + 1e-5)
-    _assert_close(captured["fused"], expected_guided, 1e-5, "residual FiLM+branch gating")
+    _assert_close(captured["fused"], expected_guided, 1e-5, "residual FiLM+concept branch gating")
     assert not torch.allclose(captured["fused"], priority_mask * film, atol=1e-4)
     assert not torch.allclose(captured["fused"], film + alpha * (priority_mask * film), atol=1e-4)
+
+    mutated_priorities = priorities.clone()
+    swap = mutated_priorities[:, :, 0].clone()
+    mutated_priorities[:, :, 0] = mutated_priorities[:, :, 1]
+    mutated_priorities[:, :, 1] = swap
+    fixed_distribution = distribution.detach()
+    with torch.no_grad():
+        _, context_a, _ = block._build_concept_conditioned_update(
+            film_last,
+            priorities,
+            fixed_distribution,
+            prototypes,
+            mask_out["concept_validity"],
+        )
+        _, context_b, _ = block._build_concept_conditioned_update(
+            film_last,
+            mutated_priorities,
+            fixed_distribution,
+            prototypes,
+            mask_out["concept_validity"],
+        )
+    assert not torch.allclose(context_a, context_b, atol=1e-4), (
+        "concept context must change when concept mix changes at fixed distribution"
+    )
 
     internals = _priority_inputs_from_block(
         block, features, concept_volume, prototypes, validity
@@ -384,56 +467,43 @@ def test_fusion_block() -> Dict[str, Any]:
         "null_prototype": _has_grad(block.null_prototype),
         "film": _has_grad(block.film.weight),
         "mask_feature_branch": _has_grad(block.mask_feature_branch.conv.weight),
+        "priority_application_proto_proj": _has_grad(
+            block.priority_application_proto_proj.weight
+        ),
     }
 
     block.zero_grad(set_to_none=True)
+    block.eval()
     features2 = features.detach().requires_grad_(True)
     concept2 = concept_volume.detach().requires_grad_(True)
     proto2 = prototypes.detach().requires_grad_(True)
-    decoded2, mask2 = block(
+    _, mask2 = block(
         features2,
         concept2,
         active_visual_prototypes=proto2,
         visual_validity_mask=validity,
     )
-    last_frame_map = mask2["patch_priority_map"]
-    last_frame_map.retain_grad()
-    aux = last_frame_map[:, -1].square().mean()
+    aux = mask2["patch_priority_map"].square().mean()
     aux.backward()
+    early_grad = float(features2.grad[:, :, 0].abs().sum())
+    last_grad = float(features2.grad[:, :, -1].abs().sum())
     last_frame_only = (
-        last_frame_map.grad is not None
-        and float(last_frame_map.grad[:, -1].abs().sum()) > 0
-        and float(last_frame_map.grad[:, 0].abs().sum()) == 0.0
+        features2.grad is not None
+        and last_grad > 0
+        and last_grad > early_grad * 3.0
     )
+    block.train()
 
-    tokens = internals["tokens"].detach()
-    acts = internals["activations"].detach()
-    tokens_mut = tokens.clone()
-    acts_mut = acts.clone()
-    tokens_mut[:, 1] = torch.randn_like(tokens_mut[:, 1]) * 3.0
-    acts_mut[:, 1] = torch.rand_like(acts_mut[:, 1])
     with torch.no_grad():
-        context_base, _ = block._factorized_pairwise_context(
-            tokens,
-            acts,
-            internals["candidate_valid"],
-            internals["x_coords"],
-            internals["y_coords"],
-        )
-        context_mut, _ = block._factorized_pairwise_context(
-            tokens_mut,
-            acts_mut,
-            internals["candidate_valid"],
-            internals["x_coords"],
-            internals["y_coords"],
-        )
+        fused_early, fused_late = captured["fused"][:, :, 0], captured["fused"][:, :, -1]
+        film_early, film_late = film[:, :, 0], film[:, :, -1]
     frame_isolated = torch.allclose(
-        context_base[:, 0],
-        context_mut[:, 0],
+        fused_early,
+        film_early,
         atol=1e-5,
     ) and not torch.allclose(
-        context_base[:, 1],
-        context_mut[:, 1],
+        fused_late,
+        film_late,
         atol=1e-4,
     )
 
@@ -481,8 +551,8 @@ def test_stage12_without_priority() -> Dict[str, Any]:
     )
     features = torch.randn(B, C, T, H, W)
     concept_volume = torch.randn(B, D, T, H, W)
-    prototypes = torch.randn(B, K, D)
-    validity = torch.ones(B, K, dtype=torch.bool)
+    prototypes = torch.randn(B, 1, H, W, K, D)
+    validity = torch.ones(B, 1, H, W, K, dtype=torch.bool)
     captured: Dict[str, torch.Tensor] = {}
 
     def _capture(module: nn.Module, inputs: Tuple[torch.Tensor, ...], output: torch.Tensor) -> None:
@@ -502,6 +572,7 @@ def test_stage12_without_priority() -> Dict[str, Any]:
     assert block.unary_priority_mlp is None
     assert block.factor_query is None
     assert block.factor_key is None
+    assert block.priority_application_proto_proj is None
     assert block.raw_spatial_frequency_weights is None
     assert block.raw_spatial_strength is None
     assert block.mask_feature_branch is None
@@ -512,10 +583,12 @@ def test_stage12_without_priority() -> Dict[str, Any]:
 def test_decoder() -> Dict[str, Any]:
     torch.manual_seed(1)
     B, T, K, concept_dim = 1, 2, 3, 16
-    validity = torch.ones(B, K, dtype=torch.bool)
-    validity[:, -1] = False
     concept_outs, features_dict, stage_channels = _make_decoder_inputs(
-        B=B, T=T, concept_dim=concept_dim, K=K, validity=validity
+        B=B,
+        T=T,
+        concept_dim=concept_dim,
+        K=K,
+        invalidate_last_concept=True,
     )
     for tensor in features_dict.values():
         tensor.requires_grad_(True)
@@ -554,6 +627,8 @@ def test_decoder() -> Dict[str, Any]:
 
     gt = torch.rand(B, 1, *OUTPUT_SIZE)
     maps = out["stage_patch_priority_maps"]
+    gates = out["stage_patch_priority_gates"]
+    distributions = out["stage_patch_priority_distributions"]
     for stage, priority_map in maps.items():
         priority_map.retain_grad()
     priority_losses = compute_patch_priority_map_loss(out, gt)
@@ -561,7 +636,7 @@ def test_decoder() -> Dict[str, Any]:
     last_frame_grads = {
         stage: {
             "last": float(maps[stage].grad[:, -1].abs().sum()),
-            "prev": float(maps[stage].grad[:, 0].abs().sum()),
+            "only_frame": int(maps[stage].shape[1]) == 1,
         }
         for stage in ("stage3", "stage4")
         if maps[stage].grad is not None
@@ -606,11 +681,18 @@ def test_decoder() -> Dict[str, Any]:
         if "motion" in name.lower()
     ]
 
+    T_prio = 1
     stage3_p = out["stage_concept_priorities"]["stage3"]
     stage4_p = out["stage_concept_priorities"]["stage4"]
-    _assert_close(stage3_p.sum(dim=(2, 3, 4)), torch.ones(B, T), 1e-4, "stage3 softmax")
-    _assert_close(stage4_p.sum(dim=(2, 3, 4)), torch.ones(B, T), 1e-4, "stage4 softmax")
+    _assert_close(stage3_p.sum(dim=(2, 3, 4)), torch.ones(B, T_prio), 1e-4, "stage3 softmax")
+    _assert_close(stage4_p.sum(dim=(2, 3, 4)), torch.ones(B, T_prio), 1e-4, "stage4 softmax")
     _assert_close(stage3_p[:, :, -1], torch.zeros_like(stage3_p[:, :, -1]), 1e-6, "stage3 padded")
+    for stage in ("stage3", "stage4"):
+        dist = distributions[stage]
+        gate = gates[stage]
+        _assert_close(dist.sum(dim=(-2, -1)), torch.ones(B, T_prio), 1e-4, f"{stage} distribution sum")
+        _assert_close(gate.mean(dim=(-2, -1)), torch.ones(B, T_prio), 1e-4, f"{stage} gate mean")
+        _assert_close(maps[stage], dist, 1e-6, f"{stage} supervised map alias")
     _assert_close(
         maps["stage3"],
         out["stage_concept_priorities"]["stage3"].sum(dim=2),
@@ -655,6 +737,8 @@ def test_decoder() -> Dict[str, Any]:
         "patch_logits_shape": tuple(out["patch_saliency_logits"].shape),
         "side_logit_shapes": side_shapes,
         "priority_map_stages": sorted(maps.keys()),
+        "distribution_stages": sorted(distributions.keys()),
+        "gate_stages": sorted(gates.keys()),
         "priority_stages": sorted(out["stage_concept_priorities"].keys()),
         "stage3_priority_shape": tuple(stage3_p.shape),
         "stage4_priority_shape": tuple(stage4_p.shape),
@@ -698,6 +782,8 @@ def main() -> None:
     assert stage12["mask_outputs"] == {}
     assert decoder["priority_stages"] == ["stage3", "stage4"]
     assert decoder["priority_map_stages"] == ["stage3", "stage4"]
+    assert decoder["distribution_stages"] == ["stage3", "stage4"]
+    assert decoder["gate_stages"] == ["stage3", "stage4"]
     assert decoder["saliency_map_shape"] == (1, 1, *OUTPUT_SIZE)
     assert all(shape == (1, 1, *OUTPUT_SIZE) for shape in decoder["side_logit_shapes"].values())
     assert not decoder["stage1_enabled"] and not decoder["stage2_enabled"]
@@ -710,7 +796,7 @@ def main() -> None:
     assert decoder["unexpected_unused_params"] == [], decoder["unexpected_unused_params"]
     for stage, grads in decoder["last_frame_map_grads"].items():
         assert grads["last"] > 0, stage
-        assert grads["prev"] < 1e-12, (stage, grads)
+        assert grads["only_frame"], (stage, grads)
 
     print("fusion block:")
     for key, value in fusion.items():

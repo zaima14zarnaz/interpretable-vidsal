@@ -368,9 +368,9 @@ def test_prioritization_properties() -> Dict[str, Tuple[int, ...]]:
 
     features = torch.randn(B, C, T, H, W, requires_grad=True)
     concept_volume = torch.randn(B, D, T, H, W, requires_grad=True)
-    prototypes = torch.randn(B, K, D, requires_grad=True)
-    validity = torch.ones(B, K, dtype=torch.bool)
-    validity[:, -1] = False
+    prototypes = torch.randn(B, 1, H, W, K, D, requires_grad=True)
+    validity = torch.ones(B, 1, H, W, K, dtype=torch.bool)
+    validity[..., -1] = False
 
     decoded, mask_out = block(
         features,
@@ -381,16 +381,17 @@ def test_prioritization_properties() -> Dict[str, Tuple[int, ...]]:
     priorities = mask_out["concept_priorities"]
     patch_map = mask_out["patch_priority_map"]
 
+    T_prio = 1
     _assert_close(
         priorities.sum(dim=(2, 3, 4)),
-        torch.ones(B, T),
+        torch.ones(B, T_prio),
         rtol=1e-5,
         atol=1e-5,
         msg="priority softmax",
     )
     _assert_close(
         priorities[:, :, -1],
-        torch.zeros(B, T, H, W),
+        torch.zeros(B, T_prio, H, W),
         rtol=0.0,
         atol=1e-6,
         msg="padded concept priority",

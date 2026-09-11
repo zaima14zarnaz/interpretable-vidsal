@@ -6,13 +6,17 @@ NSS, AUC, and sAUC use binary fixation maps.
 Pseudo-fixation fallback from density maps is debug-only and must be
 explicitly enabled via ``allow_pseudo_fixations=True``.
 
-Pure PyTorch — no sklearn/scipy required.
+OpenCV is used for TMFI-Net-compatible prediction resizing and post-blur.
 """
 
 from typing import Dict, Optional, Tuple
 
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
+
+_TMFI_BLUR_KERNEL_SIZE = 11
 
 
 def _to_float_tensor(x: torch.Tensor) -> torch.Tensor:
@@ -90,15 +94,37 @@ def resize_to_match(
     return pred, target
 
 
+def _tmfi_gaussian_blur(smap: np.ndarray) -> np.ndarray:
+    """Match TMFI-Net ``utils1.blur``: 11x11 Gaussian, sigma derived from kernel."""
+    k_size = _TMFI_BLUR_KERNEL_SIZE
+    return cv2.GaussianBlur(smap, (k_size, k_size), 0)
+
+
+def _tmfi_resize_and_blur_pred(
+    pred_hw: np.ndarray,
+    target_h: int,
+    target_w: int,
+) -> np.ndarray:
+    """
+    Match TMFI-Net validation/test preprocessing on predictions.
+
+    ``cv2.resize`` uses default ``INTER_LINEAR`` bilinear interpolation, then
+    applies the same Gaussian blur as ``TMFI-Net/utils1.blur``.
+    """
+    if pred_hw.shape != (target_h, target_w):
+        pred_hw = cv2.resize(pred_hw, (target_w, target_h))
+    return _tmfi_gaussian_blur(pred_hw)
+
+
 def resize_pred_to_target(
     pred: torch.Tensor,
     target: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    ViNet/MIT-style resize direction:
-    resize prediction map to the target map size.
+    TMFI-Net-style resize direction:
+    resize prediction map to the target map size with ``cv2.resize``, then blur.
 
-    Both outputs are [B,1,H,W].
+    Both outputs are [B,1,H,W]. The target map is left unchanged.
     """
     pred = prepare_prediction_map(pred)
     target = prepare_target_last_map(target)
@@ -108,14 +134,20 @@ def resize_pred_to_target(
             f"Batch mismatch: pred B={pred.shape[0]}, target B={target.shape[0]}"
         )
 
-    if pred.shape[-2:] != target.shape[-2:]:
-        pred = F.interpolate(
-            pred,
-            size=target.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
+    target_h, target_w = int(target.shape[-2]), int(target.shape[-1])
+    device = pred.device
+    dtype = pred.dtype
 
+    resized_preds = []
+    for batch_idx in range(pred.shape[0]):
+        pred_np = pred[batch_idx, 0].detach().cpu().numpy()
+        pred_np = _tmfi_resize_and_blur_pred(pred_np, target_h, target_w)
+        resized_preds.append(torch.from_numpy(pred_np))
+
+    pred = torch.stack(resized_preds, dim=0).unsqueeze(1).to(
+        device=device,
+        dtype=dtype,
+    )
     return pred, target
 
 
@@ -138,37 +170,110 @@ def normalize_sum(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return (flat / s).view_as(x)
 
 
-def _vinet_minmax_sum_normalize(
-    x: torch.Tensor,
-    eps: float = 1e-8,
-) -> torch.Tensor:
+def _to_float_tensor_no_autoscale(x: torch.Tensor) -> torch.Tensor:
+    if not isinstance(x, torch.Tensor):
+        raise ValueError(f"Expected torch.Tensor, got {type(x)}")
+    return x.float()
+
+
+def _prepare_tmfi_gt_density_bhw(x: torch.Tensor) -> torch.Tensor:
     """
-    ViNet-style SIM normalization.
+    TMFI-Net dataloader-equivalent density map layout ``[B, H, W]``.
 
-    If the map contains nonzero values:
-      1. min-max normalize to [0,1]
-      2. normalize so the map sums to 1
-
-    If the map is all zeros, keep it all zeros.
+    Matches ``DHF1KDataset._load_sample``: grayscale float, divided by 255 only
+    when ``max > 1.0``.
     """
-    B = x.shape[0]
-    flat = x.reshape(B, -1)
-    out = torch.zeros_like(flat)
-
-    for i in range(B):
-        m = flat[i]
-        if torch.any(m != 0):
-            mn = m.min()
-            mx = m.max()
-            m = (m - mn) / (mx - mn + eps)
-            s = m.sum()
-            if s > eps:
-                m = m / s
-            out[i] = m
+    x = _to_float_tensor_no_autoscale(x)
+    if x.dim() == 3:
+        pass
+    elif x.dim() == 4:
+        if x.shape[1] == 1:
+            x = x[:, 0]
         else:
-            out[i] = m
+            x = x[:, -1]
+    elif x.dim() == 5:
+        if x.shape[1] == 1:
+            x = x[:, 0, -1]
+        elif x.shape[2] == 1:
+            x = x[:, -1, 0]
+        else:
+            raise ValueError(
+                f"Unsupported 5D target shape {tuple(x.shape)}; "
+                "expected [B,1,T,H,W] or [B,T,1,H,W]"
+            )
+    else:
+        raise ValueError(f"target must be 3D–5D, got shape {tuple(x.shape)}")
 
-    return out.view_as(x)
+    if x.numel() > 0 and float(x.max()) > 1.0:
+        x = x / 255.0
+    return x
+
+
+def _prepare_tmfi_pred_bhw(x: torch.Tensor) -> torch.Tensor:
+    """Prediction layout ``[B, H, W]`` for TMFI-Net metrics (float, no /255)."""
+    x = _to_float_tensor_no_autoscale(x)
+    if x.dim() == 3:
+        return x
+    if x.dim() == 4 and x.shape[1] == 1:
+        return x[:, 0]
+    raise ValueError(
+        f"pred must be [B,H,W] or [B,1,H,W], got shape {tuple(x.shape)}"
+    )
+
+
+def _tmfi_normalize_map(s_map: torch.Tensor) -> torch.Tensor:
+    """Exact port of ``TMFI-Net/loss.py::normalize_map`` for ``[B, H, W]``."""
+    batch_size = s_map.size(0)
+    w = s_map.size(1)
+    h = s_map.size(2)
+
+    min_s_map = torch.min(s_map.view(batch_size, -1), 1)[0].view(
+        batch_size, 1, 1
+    ).expand(batch_size, w, h)
+    max_s_map = torch.max(s_map.view(batch_size, -1), 1)[0].view(
+        batch_size, 1, 1
+    ).expand(batch_size, w, h)
+
+    return (s_map - min_s_map) / (max_s_map - min_s_map * 1.0)
+
+
+def _tmfi_similarity(s_map: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """Exact port of ``TMFI-Net/loss.py::similarity`` for ``[B, H, W]`` maps."""
+    batch_size = s_map.size(0)
+    w = s_map.size(1)
+    h = s_map.size(2)
+
+    s_map = _tmfi_normalize_map(s_map)
+    gt = _tmfi_normalize_map(gt)
+
+    sum_s_map = torch.sum(s_map.view(batch_size, -1), 1)
+    expand_s_map = sum_s_map.view(batch_size, 1, 1).expand(batch_size, w, h)
+
+    sum_gt = torch.sum(gt.view(batch_size, -1), 1)
+    expand_gt = sum_gt.view(batch_size, 1, 1).expand(batch_size, w, h)
+
+    s_map = s_map / (expand_s_map * 1.0)
+    gt = gt / (expand_gt * 1.0)
+
+    s_map = s_map.view(batch_size, -1)
+    gt = gt.view(batch_size, -1)
+    return torch.mean(torch.sum(torch.min(s_map, gt), 1))
+
+
+def _tmfi_resize_blur_pred_bhw(
+    pred_bhw: torch.Tensor,
+    target_h: int,
+    target_w: int,
+) -> torch.Tensor:
+    """Resize/blur prediction to ``[B, H, W]`` using TMFI validate/test preprocessing."""
+    device = pred_bhw.device
+    dtype = pred_bhw.dtype
+    resized_preds = []
+    for batch_idx in range(pred_bhw.shape[0]):
+        pred_np = pred_bhw[batch_idx].detach().cpu().numpy()
+        pred_np = _tmfi_resize_and_blur_pred(pred_np, target_h, target_w)
+        resized_preds.append(torch.from_numpy(pred_np))
+    return torch.stack(resized_preds, dim=0).to(device=device, dtype=dtype)
 
 
 def _looks_binary(x: torch.Tensor, eps: float = 1e-6) -> bool:
@@ -240,11 +345,11 @@ def cc_score(
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """
-    ViNet-style CC.
+    TMFI-Net-style CC.
 
     Uses continuous saliency density maps.
-    Prediction is resized to the target size.
-    Both maps are z-scored per sample, then correlation is computed.
+    Prediction is resized/blurred to the target size via ``resize_pred_to_target``.
+    Both maps are z-scored per sample with population std, then correlation is computed.
     """
     pred, target = resize_pred_to_target(pred, target_density)
 
@@ -255,17 +360,14 @@ def cc_score(
     pred_mean = pred_f.mean(dim=1, keepdim=True)
     target_mean = target_f.mean(dim=1, keepdim=True)
 
-    # Match the baseline implementation: torch.std uses sample standard
-    # deviation (unbiased=True), with no epsilon added during z-scoring.
-    # ``eps`` remains in the signature for backward API compatibility.
+    # Match TMFI-Net ``loss.cc``: population std (unbiased=False), no epsilon.
     del eps
-    pred_std = pred_f.std(dim=1, unbiased=True, keepdim=True)
-    target_std = target_f.std(dim=1, unbiased=True, keepdim=True)
+    pred_std = pred_f.std(dim=1, unbiased=False, keepdim=True)
+    target_std = target_f.std(dim=1, unbiased=False, keepdim=True)
 
     pred_z = (pred_f - pred_mean) / pred_std
     target_z = (target_f - target_mean) / target_std
 
-    # Baseline CC: cosine similarity between the two z-scored maps.
     ab = (pred_z * target_z).sum(dim=1)
     aa = (pred_z * pred_z).sum(dim=1)
     bb = (target_z * target_z).sum(dim=1)
@@ -280,19 +382,25 @@ def sim_score(
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """
-    ViNet-style SIM / similarity.
+    TMFI-Net ``loss.similarity`` (MIT/ViNet histogram intersection).
 
-    Uses continuous saliency density maps.
-    Prediction is resized to the target size.
-    Both maps are min-max normalized, sum-normalized, then histogram intersection is computed.
+    Prediction is resized/blurred to the GT size with OpenCV, then both maps are
+    min-max normalized, sum-normalized, and compared with histogram intersection.
+    Ground truth uses TMFI dataloader scaling: ``/255`` only when ``max > 1``.
     """
-    pred, target = resize_pred_to_target(pred, target_density)
+    del eps
 
-    pred_n = _vinet_minmax_sum_normalize(pred, eps)
-    target_n = _vinet_minmax_sum_normalize(target, eps)
+    gt = _prepare_tmfi_gt_density_bhw(target_density)
+    pred_bhw = _prepare_tmfi_pred_bhw(pred)
 
-    sim = torch.minimum(pred_n, target_n).reshape(pred.shape[0], -1).sum(dim=1)
-    return sim.mean()
+    if pred_bhw.shape[0] != gt.shape[0]:
+        raise ValueError(
+            f"Batch mismatch: pred B={pred_bhw.shape[0]}, target B={gt.shape[0]}"
+        )
+
+    target_h, target_w = int(gt.shape[-2]), int(gt.shape[-1])
+    pred_bhw = _tmfi_resize_blur_pred_bhw(pred_bhw, target_h, target_w)
+    return _tmfi_similarity(pred_bhw, gt)
 
 
 def _is_binary_fixation_map(x: torch.Tensor, eps: float = 1e-6) -> bool:
@@ -611,19 +719,19 @@ def compute_saliency_metrics(
         fix_map = prepare_target_last_map(fixation_target)
         fix_map = (fix_map > 0).float()
 
-        # out["AUC"] = auc_judd_score(
-        #     pred,
-        #     fix_map,
-        #     fixation_threshold=0.5,
-        #     top_percent=None,
-        # )
-        # out["sAUC"] = sauc_score(
-        #     pred,
-        #     fix_map,
-        #     fixation_threshold=0.5,
-        #     top_percent=None,
-        #     other_map=sauc_other_map,
-        # )
+        out["AUC"] = auc_judd_score(
+            pred,
+            fix_map,
+            fixation_threshold=0.5,
+            top_percent=None,
+        )
+        out["sAUC"] = sauc_score(
+            pred,
+            fix_map,
+            fixation_threshold=0.5,
+            top_percent=None,
+            other_map=sauc_other_map,
+        )
         out["NSS"] = nss_score(pred, fix_map)
         return out
 
@@ -643,19 +751,19 @@ def compute_saliency_metrics(
         top_percent=top_percent,
     ).float()
 
-    # out["AUC"] = auc_judd_score(
-    #     pred,
-    #     pseudo_fix,
-    #     fixation_threshold=0.5,
-    #     top_percent=None,
-    # )
-    # out["sAUC"] = sauc_score(
-    #     pred,
-    #     pseudo_fix,
-    #     fixation_threshold=0.5,
-    #     top_percent=None,
-    #     other_map=sauc_other_map,
-    # )
+    out["AUC"] = auc_judd_score(
+        pred,
+        pseudo_fix,
+        fixation_threshold=0.5,
+        top_percent=None,
+    )
+    out["sAUC"] = sauc_score(
+        pred,
+        pseudo_fix,
+        fixation_threshold=0.5,
+        top_percent=None,
+        other_map=sauc_other_map,
+    )
     out["NSS"] = nss_score(pred, pseudo_fix)
     return out
 
@@ -663,8 +771,8 @@ def compute_saliency_metrics(
 class MetricAverager:
     """Running average of saliency metrics over evaluation batches."""
 
-    # METRIC_KEYS = ("CC", "SIM", "AUC", "sAUC", "NSS")
-    METRIC_KEYS = ("CC", "SIM", "NSS")
+    METRIC_KEYS = ("CC", "SIM", "AUC", "sAUC", "NSS")
+    # METRIC_KEYS = ("CC", "SIM", "NSS")
 
     def __init__(self) -> None:
         self.reset()

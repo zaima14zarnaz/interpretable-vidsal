@@ -1,3 +1,4 @@
+import argparse
 import os
 
 # Reduce CUDA fragmentation (must be set before the first CUDA allocation).
@@ -40,24 +41,27 @@ TRAIN_DATASET_DIR = (
 VAL_DATASET_DIR = ( 
     "/data/quantization/zaima/dh1k/testing"
 )
-WINDOW_LEN = 16
+WINDOW_LEN = 32
 
-EPOCHS = 200
+INITIAL_EPOCHS = 200
+FINETUNE_EPOCHS = 100
+RESUME_EPOCHS = 100
 BATCH_SIZE = 4  # effective optimizer batch size
 FREEZE_BACKBONE = False
 # When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
 # gradients so the optimizer still sees BATCH_SIZE samples per step.
-MICRO_BATCH_SIZE = 4
+MICRO_BATCH_SIZE = 2
 # Gradient checkpointing trades recompute for lower activation memory during backbone fine-tuning.
 BACKBONE_GRADIENT_CHECKPOINTING = True
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
 LR = 5e-5
+FINETUNE_LR = 5e-6
 WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 4
 SEED = 42
 OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
-MAP_SAVE_INTERVAL = 500
+MAP_SAVE_INTERVAL = 1000
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
 MAX_SAMPLES = 500
@@ -69,7 +73,8 @@ TEMPORAL_CONCEPTS_ON = False
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
 # Last-frame patch-priority map KL at Stage 3 and Stage 4.
-PRIORITY_LOSS_WEIGHT = 0.05
+PRIORITY_MAP_LOSS_WEIGHT = 0.1
+PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -131,7 +136,8 @@ LOSS_LAMBDA = {
     "lambda_visual_equiv": 0.00,
     "lambda_temporal_attention_entropy": 0.0,
 
-    "priority_loss_weight": PRIORITY_LOSS_WEIGHT,
+    "priority_map_loss_weight": PRIORITY_MAP_LOSS_WEIGHT,
+    "priority_loss_weight": PRIORITY_MAP_LOSS_WEIGHT,
 
     "patch_from_logits": False,
 
@@ -235,6 +241,113 @@ def _return_concept_losses() -> bool:
             "lambda_visual_equiv",
         )
     )
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train ExplainableSaliency model.")
+    parser.add_argument(
+        "--phase",
+        choices=("initial", "finetune", "resume"),
+        required=True,
+        help=(
+            "Training phase: 'initial' trains for 200 epochs from scratch; "
+            "'finetune' loads model weights and trains for 100 epochs with "
+            "finetune hyperparameters; 'resume' loads model weights and trains "
+            "for 100 epochs using the LR and weight decay stored in the checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to a checkpoint file (required when --phase finetune or resume).",
+    )
+    args = parser.parse_args()
+    if args.phase in ("finetune", "resume") and not args.checkpoint:
+        parser.error(
+            f"{args.phase.capitalize()} (--phase {args.phase}) requires --checkpoint <path>."
+        )
+    return args
+
+
+def _read_checkpoint(checkpoint_path: str) -> dict:
+    if not checkpoint_path:
+        raise ValueError("A checkpoint path is required.")
+    if not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to load checkpoint '{checkpoint_path}': {exc}"
+        ) from exc
+
+    if not isinstance(checkpoint, dict) or "model_state_dict" not in checkpoint:
+        raise ValueError(
+            f"Invalid checkpoint '{checkpoint_path}': expected a dict containing "
+            "'model_state_dict'."
+        )
+    return checkpoint
+
+
+def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, checkpoint_path: str) -> None:
+    model.load_state_dict(checkpoint["model_state_dict"])
+    print(f"Loaded model weights from checkpoint: {checkpoint_path}")
+
+
+def _optimizer_hparams_from_checkpoint(checkpoint: dict, checkpoint_path: str) -> Tuple[float, float]:
+    optimizer_state = checkpoint.get("optimizer_state_dict")
+    if not isinstance(optimizer_state, dict):
+        raise ValueError(
+            f"Resume checkpoint '{checkpoint_path}' must contain "
+            "'optimizer_state_dict' with saved LR and weight decay."
+        )
+    param_groups = optimizer_state.get("param_groups")
+    if not param_groups:
+        raise ValueError(
+            f"Resume checkpoint '{checkpoint_path}' has an invalid optimizer_state_dict: "
+            "missing param_groups."
+        )
+    lr = float(param_groups[0]["lr"])
+    weight_decay = float(param_groups[0].get("weight_decay", WEIGHT_DECAY))
+    return lr, weight_decay
+
+
+def _init_saliency_head_prior_bias(model: ExplainableVidSalModel) -> None:
+    """Initialize final saliency logits to the observed dataset prior."""
+    target_prior = 0.0177
+    bias_value = math.log(target_prior / (1.0 - target_prior))
+    initialized = []
+
+    final_head = getattr(model.saliency_prediction, "final_upsample_head", None)
+    if final_head is not None and hasattr(final_head, "head"):
+        final_conv = final_head.head
+        if hasattr(final_conv, "bias") and final_conv.bias is not None:
+            final_conv.bias.fill_(bias_value)
+            initialized.append("final_upsample_head.head")
+
+    patch_head = getattr(model.saliency_prediction, "patch_logit_head", None)
+    if patch_head is not None and hasattr(patch_head, "bias") and patch_head.bias is not None:
+        patch_head.bias.fill_(bias_value)
+        initialized.append("patch_logit_head")
+
+    pred_head = getattr(model.saliency_prediction, "pred_head", None)
+    if pred_head is not None and len(pred_head) > 0:
+        final_conv = pred_head[-1]
+        if hasattr(final_conv, "bias") and final_conv.bias is not None:
+            final_conv.bias.fill_(bias_value)
+            initialized.append("pred_head[-1]")
+
+    if initialized:
+        print(
+            f"Initialized saliency bias to logit({target_prior}) = {bias_value:.4f} "
+            f"for: {', '.join(initialized)}"
+        )
+    else:
+        print(
+            "Skipped saliency bias initialization: no known decoder output bias parameter found."
+        )
 
 
 def set_seed(seed: int) -> None:
@@ -753,7 +866,7 @@ def train_one_epoch(
         loader,
         desc=f"Train epoch {epoch}",
         leave=False,
-        # disable=not SHOW_PROGRESS_BAR,
+        disable=not SHOW_PROGRESS_BAR,
     )
     for batch_idx, (
         video_filenames,
@@ -909,7 +1022,7 @@ def validate_one_epoch(
         loader,
         desc=f"Val epoch {epoch}",
         leave=False,
-        # disable=not SHOW_PROGRESS_BAR,
+        disable=not SHOW_PROGRESS_BAR,
     )
     for batch_idx, (
         video_filenames,
@@ -966,6 +1079,8 @@ def validate_one_epoch(
         metric_averager.update(metric_dict, batch_size=rgb_batch.shape[0])
         pbar.set_postfix(
             loss=f"{batch_loss:.4f}",
+            CC=f"{metric_averager.mean()['CC']:.4f}",
+            SIM=f"{metric_averager.mean()['SIM']:.4f}",
             NSS=f"{metric_averager.mean()['NSS']:.4f}",
         )
 
@@ -976,6 +1091,28 @@ def validate_one_epoch(
 
 
 def main() -> None:
+    args = _parse_args()
+    is_finetune = args.phase == "finetune"
+    is_resume = args.phase == "resume"
+    loads_checkpoint = is_finetune or is_resume
+    train_weight_decay = WEIGHT_DECAY
+
+    if is_finetune:
+        num_epochs = FINETUNE_EPOCHS
+        train_lr = FINETUNE_LR
+        scheduler_t_max = FINETUNE_EPOCHS
+        scheduler_eta_min = 1e-7
+    elif is_resume:
+        num_epochs = RESUME_EPOCHS
+        train_lr = LR
+        scheduler_t_max = RESUME_EPOCHS
+        scheduler_eta_min = 1e-6
+    else:
+        num_epochs = INITIAL_EPOCHS
+        train_lr = LR
+        scheduler_t_max = INITIAL_EPOCHS
+        scheduler_eta_min = 1e-6
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_ckpt_dir = os.path.join(CKPTS_DIR, run_timestamp)
@@ -995,17 +1132,26 @@ def main() -> None:
 
     device = head_device
     print(f"Backbone device: {backbone_device} | Head device: {head_device}")
+    if is_resume:
+        print(f"Training phase: {args.phase} | epochs={num_epochs} | lr/weight_decay=<from checkpoint>")
+    else:
+        print(
+            f"Training phase: {args.phase} | epochs={num_epochs} | "
+            f"lr={train_lr:.1e} | weight_decay={train_weight_decay:.1e}"
+        )
+    if loads_checkpoint:
+        print(f"Checkpoint: {args.checkpoint}")
     print(f"Run checkpoints will be saved to: {run_ckpt_dir}")
     print(
         "Concept branches | "
         f"visual_concept_on={VISUAL_CONCEPT_ON} | "
         f"temporal_concepts_on={TEMPORAL_CONCEPTS_ON} | "
-        f"priority_loss_weight={PRIORITY_LOSS_WEIGHT} | "
+        f"priority_map_loss_weight={PRIORITY_MAP_LOSS_WEIGHT} | "
         f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
     )
 
     train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=1, random_train_sampling=True)
-    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=16, random_train_sampling=False)
+    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=32, random_train_sampling=False)
 
     # g = torch.Generator().manual_seed(SEED)
     # idx = torch.randperm(len(train_dataset), generator=g)[:MAX_SAMPLES].tolist()
@@ -1076,44 +1222,25 @@ def main() -> None:
         temporal_concepts_on=TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
+        use_temporal_feature_infusion=True,
+        use_shared_concept_activations=True,
     ).to_split_devices(backbone_device, head_device)
 
-    with torch.no_grad():
-        # Initialize final saliency logits to the observed dataset prior.
-        target_prior = 0.0177
-        bias_value = math.log(target_prior / (1.0 - target_prior))
-        initialized = []
-
-        # New spatiotemporal decoder: learned upsample head + optional patch head.
-        final_head = getattr(model.saliency_prediction, "final_upsample_head", None)
-        if final_head is not None and hasattr(final_head, "head"):
-            final_conv = final_head.head
-            if hasattr(final_conv, "bias") and final_conv.bias is not None:
-                final_conv.bias.fill_(bias_value)
-                initialized.append("final_upsample_head.head")
-
-        patch_head = getattr(model.saliency_prediction, "patch_logit_head", None)
-        if patch_head is not None and hasattr(patch_head, "bias") and patch_head.bias is not None:
-            patch_head.bias.fill_(bias_value)
-            initialized.append("patch_logit_head")
-
-        # Backward compatibility: legacy decoder had pred_head[-1].
-        pred_head = getattr(model.saliency_prediction, "pred_head", None)
-        if pred_head is not None and len(pred_head) > 0:
-            final_conv = pred_head[-1]
-            if hasattr(final_conv, "bias") and final_conv.bias is not None:
-                final_conv.bias.fill_(bias_value)
-                initialized.append("pred_head[-1]")
-
-    if initialized:
-        print(
-            f"Initialized saliency bias to logit({target_prior}) = {bias_value:.4f} "
-            f"for: {', '.join(initialized)}"
-        )
+    checkpoint = None
+    if loads_checkpoint:
+        checkpoint = _read_checkpoint(args.checkpoint)
+        _load_model_checkpoint(model, checkpoint, args.checkpoint)
+        if is_resume:
+            train_lr, train_weight_decay = _optimizer_hparams_from_checkpoint(
+                checkpoint, args.checkpoint
+            )
+            print(
+                f"Resume optimizer hyperparameters from checkpoint | "
+                f"lr={train_lr:.1e} | weight_decay={train_weight_decay:.1e}"
+            )
     else:
-        print(
-            "Skipped saliency bias initialization: no known decoder output bias parameter found."
-        )
+        with torch.no_grad():
+            _init_saliency_head_prior_bias(model)
 
     if not FREEZE_BACKBONE:
         print(
@@ -1128,13 +1255,18 @@ def main() -> None:
     trainable_params = list(model.get_trainable_parameters())
     optimizer = torch.optim.AdamW(
         trainable_params,
-        lr=LR,
-        weight_decay=WEIGHT_DECAY,
+        lr=train_lr,
+        weight_decay=train_weight_decay,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        T_max=EPOCHS,
-        eta_min=1e-6,
+        T_max=scheduler_t_max,
+        eta_min=scheduler_eta_min,
+    )
+    print(
+        f"Optimizer | lr={optimizer.param_groups[0]['lr']:.1e} | "
+        f"weight_decay={optimizer.param_groups[0]['weight_decay']:.1e} | "
+        f"scheduler T_max={scheduler_t_max} eta_min={scheduler_eta_min:.1e}"
     )
     scaler = GradScaler(device.type, enabled=_amp_enabled(device))
 
@@ -1150,8 +1282,8 @@ def main() -> None:
     val_metrics_history: list = []
     best_val_loss = float("inf")
 
-    for epoch in range(1, EPOCHS + 1):
-        print(f"\nEpoch {epoch}/{EPOCHS}")
+    for epoch in range(1, num_epochs + 1):
+        print(f"\nEpoch {epoch}/{num_epochs}")
 
         # if epoch == 5:
         #     break
@@ -1182,7 +1314,7 @@ def main() -> None:
         val_metrics_history.append(val_metrics)
 
         current_lr = optimizer.param_groups[0]["lr"]
-        print(f"Epoch {epoch}/{EPOCHS}")
+        print(f"Epoch {epoch}/{num_epochs}")
         print(f"  Mean train loss: {train_loss:.6f}")
         print(f"  Mean val loss:   {val_loss:.6f}")
         print(f"  Current LR:      {current_lr:.2e}")
@@ -1190,16 +1322,16 @@ def main() -> None:
             print(
                 f"Train metrics | CC: {train_metrics['CC']:.4f} | "
                 f"SIM: {train_metrics['SIM']:.4f} | "
-                # f"AUC: {train_metrics['AUC']:.4f} | "
-                # f"sAUC: {train_metrics['sAUC']:.4f} | "
+                f"AUC: {train_metrics['AUC']:.4f} | "
+                f"sAUC: {train_metrics['sAUC']:.4f} | "
                 f"NSS: {train_metrics['NSS']:.4f}"
             )
         if val_metrics is not None:
             print(
                 f"Val metrics   | CC: {val_metrics['CC']:.4f} | "
                 f"SIM: {val_metrics['SIM']:.4f} |"
-                # f"AUC: {val_metrics['AUC']:.4f} | "
-                # f"sAUC: {val_metrics['sAUC']:.4f} | "
+                f"AUC: {val_metrics['AUC']:.4f} | "
+                f"sAUC: {val_metrics['sAUC']:.4f} | "
                 f"NSS: {val_metrics['NSS']:.4f}"
             )
 

@@ -21,8 +21,10 @@ class VisualConceptCreation(nn.Module):
     Patch-level visual concept assignment from backbone features.
 
     Expected feature input: [B, C, T, H, W].
-    Each normalized patch feature z_i^t is encoded and matched to a visual
-    concept bank via ``visual_encoder`` and ``visual_concepts``.
+    Patch-concept assignments are computed on the last frame only; earlier
+    frames in the window are retained in metadata via ``window_T`` for the
+    decoder. Each normalized last-frame patch feature is encoded and matched
+    to a visual concept bank via ``visual_encoder`` and ``visual_concepts``.
     """
 
     DEFAULT_LOSS_WEIGHTS = {
@@ -196,36 +198,34 @@ class VisualConceptCreation(nn.Module):
     @staticmethod
     def _extract_active_prototypes(
         activations: torch.Tensor,
-        batch_idx: torch.Tensor,
-        B: int,
         prototypes: torch.Tensor,
         top_k: int,
         *,
+        B: int,
+        T: int,
+        H: int,
+        W: int,
         validity_eps: float = 1e-6,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Select per-sample active concept prototypes by mean patch activation.
+        Select top-K active concept prototypes independently at each patch.
 
         Returns:
-            active_prototypes: [B, K, concept_dim]
-            validity_mask: [B, K] bool
+            active_prototypes: [B, T, H, W, K, concept_dim]
+            validity_mask: [B, T, H, W, K] bool
+            active_indices: [B, T, H, W, K] int64 bank indices per patch
         """
-        device = activations.device
-        dtype = activations.dtype
+        num_patches = B * T * H * W
+        if activations.shape[0] != num_patches:
+            raise ValueError(
+                "activations must be [B*T*H*W, num_concepts], "
+                f"expected {num_patches} rows, got {activations.shape[0]}"
+            )
+
         num_concepts = int(prototypes.shape[0])
         K = min(int(top_k), num_concepts)
 
-        usage = torch.zeros(B, num_concepts, device=device, dtype=dtype)
-        usage.index_add_(0, batch_idx, activations)
-        counts = torch.zeros(B, device=device, dtype=dtype)
-        counts.index_add_(
-            0,
-            batch_idx,
-            torch.ones(batch_idx.shape[0], device=device, dtype=dtype),
-        )
-        usage = usage / counts.unsqueeze(-1).clamp_min(1.0)
-
-        topk_vals, topk_idx = usage.topk(K, dim=-1)
+        topk_vals, topk_idx = activations.topk(K, dim=-1)
         proto_n = F.normalize(prototypes, dim=-1)
         active = proto_n[topk_idx]
         validity = topk_vals > validity_eps
@@ -234,8 +234,13 @@ class VisualConceptCreation(nn.Module):
             pad_k = top_k - K
             active = F.pad(active, (0, 0, 0, pad_k))
             validity = F.pad(validity, (0, pad_k), value=False)
+            topk_idx = F.pad(topk_idx, (0, pad_k), value=0)
 
-        return active, validity
+        active = active.view(B, T, H, W, top_k, -1)
+        validity = validity.view(B, T, H, W, top_k)
+        active_indices = topk_idx.view(B, T, H, W, top_k)
+
+        return active, validity, active_indices
 
     def _compute_visual_assignments(
         self, raw_similarity: torch.Tensor
@@ -467,26 +472,29 @@ class VisualConceptCreation(nn.Module):
         self, features: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Build visual-only concept assignments from individual patch features.
+        Build visual-only concept assignments from the last-frame patch features.
 
         Args:
             features: [B, C, T, H, W]
 
         Returns:
-            visual_patch_embeddings: [B*T*N, concept_dim]
-            visual_concept_logits: [B*T*N, num_visual_concepts]
-            visual_concept_indices: [B*T*N]
-            visual_activations: [B*T*N, num_visual_concepts]
-            visual_concept_representation: [B*T*N, concept_dim]
-            visual_feature_concept_agreement: [B*T*H*W]
-            visual_metadata: dict with batch_idx, time_idx, patch_idx, patch_coords, feature_shape
+            visual_patch_embeddings: [B*N, concept_dim]
+            visual_concept_logits: [B*N, num_visual_concepts]
+            visual_concept_indices: [B*N]
+            visual_activations: [B*N, num_visual_concepts]
+            visual_concept_representation: [B*N, concept_dim]
+            visual_feature_concept_agreement: [B*N]
+            visual_metadata: dict with batch_idx, time_idx, patch_idx, patch_coords,
+                feature_shape (T=1), and window_T (full input temporal length)
         """
-        B, C, T, H, W = features.shape
+        B, C, window_T, H, W = features.shape
         device = features.device
         dtype = features.dtype
         N = H * W
+        features_last = features[:, :, -1:, :, :]
+        T = 1
 
-        z = self._flatten_features(features)
+        z = self._flatten_features(features_last)
         patch_vectors = z.reshape(B * T * N, C)
 
         q_vis = self.visual_encoder(patch_vectors)
@@ -524,18 +532,27 @@ class VisualConceptCreation(nn.Module):
             "patch_idx": patch_idx,
             "patch_coords": visual_patch_coords,
             "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
+            "window_T": window_T,
+            "assignment_time_index": window_T - 1,
         }
 
-        active_visual_prototypes, visual_validity_mask = self._extract_active_prototypes(
+        (
+            active_visual_prototypes,
+            visual_validity_mask,
+            active_visual_prototype_indices,
+        ) = self._extract_active_prototypes(
             visual_activations,
-            visual_metadata["batch_idx"],
-            B,
             self.visual_concepts,
             self.top_k,
+            B=B,
+            T=T,
+            H=H,
+            W=W,
         )
 
         return {
             "active_visual_prototypes": active_visual_prototypes,
+            "active_visual_prototype_indices": active_visual_prototype_indices,
             "visual_validity_mask": visual_validity_mask,
             "visual_patch_embeddings": q_vis,
             "visual_concept_logits": visual_logits,
@@ -631,6 +648,9 @@ class VisualConceptCreation(nn.Module):
             "metadata": None,
             "losses": losses,
             "active_visual_prototypes": visual_out["active_visual_prototypes"],
+            "active_visual_prototype_indices": visual_out[
+                "active_visual_prototype_indices"
+            ],
             "visual_validity_mask": visual_out["visual_validity_mask"],
             "visual_patch_embeddings": visual_out["visual_patch_embeddings"],
             "visual_concept_representation": visual_out["visual_concept_representation"],

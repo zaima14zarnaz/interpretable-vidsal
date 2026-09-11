@@ -58,6 +58,147 @@ def _metadata_feature_shape_repr(metadata: Optional[Dict[str, Any]]) -> Any:
     return metadata.get("feature_shape")
 
 
+def _window_temporal_length(metadata: Dict[str, Any]) -> int:
+    if "window_T" in metadata:
+        return int(metadata["window_T"])
+    return int(_feature_shape_from_metadata(metadata)[2])
+
+
+def _expand_last_frame_volume_to_window(
+    volume: torch.Tensor,
+    window_t: int,
+) -> torch.Tensor:
+    """Broadcast a last-frame [B,D,1,H,W] concept volume across the full window."""
+    if volume.shape[2] == window_t:
+        return volume
+    if volume.shape[2] != 1:
+        raise ValueError(
+            "Expected a single-frame concept volume to expand across the window, "
+            f"got temporal length {volume.shape[2]} for window_t={window_t}"
+        )
+    return volume.expand(-1, -1, window_t, -1, -1).contiguous()
+
+
+def _scatter_last_frame_update(
+    base_volume: torch.Tensor,
+    last_frame_update: torch.Tensor,
+) -> torch.Tensor:
+    """Insert a last-frame [B,C,1,H,W] update into a [B,C,T,H,W] tensor."""
+    if last_frame_update.shape[2] != 1:
+        raise ValueError(
+            "last_frame_update must have temporal length 1, "
+            f"got {tuple(last_frame_update.shape)}"
+        )
+    out = base_volume.clone()
+    out[:, :, -1:] = last_frame_update
+    return out
+
+
+def _scatter_last_frame_mask(
+    batch_size: int,
+    temporal_len: int,
+    last_frame_mask: torch.Tensor,
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Build [B,1,T,H,W] with zeros on earlier frames and mask values on the last frame."""
+    if last_frame_mask.shape[2] != 1:
+        raise ValueError(
+            "last_frame_mask must have temporal length 1, "
+            f"got {tuple(last_frame_mask.shape)}"
+        )
+    _, _, _, height, width = last_frame_mask.shape
+    mask = torch.zeros(
+        batch_size,
+        1,
+        temporal_len,
+        height,
+        width,
+        device=device,
+        dtype=dtype,
+    )
+    mask[:, :, -1:] = last_frame_mask
+    return mask
+
+
+def _gather_active_visual_activations(
+    visual_activations: torch.Tensor,
+    active_indices: torch.Tensor,
+    validity_mask: torch.Tensor,
+    visual_metadata: Dict[str, Any],
+) -> torch.Tensor:
+    """
+    Gather per-patch activations for each patch's active concept indices.
+
+    Returns:
+        [B, T, K, H, W] activations aligned with concept_creation outputs.
+    """
+    B, _, T, H, W = _feature_shape_from_metadata(visual_metadata)
+    num_concepts = int(visual_activations.shape[-1])
+    expected = B * T * H * W
+    if visual_activations.shape[0] != expected:
+        raise ValueError(
+            "visual_activations length mismatch: "
+            f"expected {expected} (=B*T*H*W), got {visual_activations.shape[0]}"
+        )
+
+    activations = visual_activations.view(B, T, H, W, num_concepts)
+    if active_indices.dim() == 5:
+        gathered = torch.gather(activations, dim=-1, index=active_indices)
+        gathered = gathered.permute(0, 1, 4, 2, 3).contiguous()
+        valid = validity_mask.permute(0, 1, 4, 2, 3).to(dtype=gathered.dtype)
+        return gathered * valid
+
+    raise ValueError(
+        "active_indices must be [B, T, H, W, K] for per-patch concept selection, "
+        f"got shape {tuple(active_indices.shape)}"
+    )
+
+
+def _build_shared_visual_modality_from_concept_out(
+    concept_out: Dict[str, Any],
+    *,
+    shared_patch_proj: nn.Linear,
+    concept_proto_proj: nn.Linear,
+) -> Dict[str, torch.Tensor]:
+    """Build decoder prioritization inputs from concept_creation activations."""
+    required = (
+        "visual_activations",
+        "active_visual_prototype_indices",
+        "active_visual_prototypes",
+        "visual_validity_mask",
+        "visual_patch_embeddings",
+        "visual_metadata",
+    )
+    missing = [key for key in required if key not in concept_out]
+    if missing:
+        raise ValueError(
+            "concept_out is missing keys required for shared concept activations: "
+            f"{missing}"
+        )
+
+    visual_metadata = concept_out["visual_metadata"]
+    B, _, T, H, W = _feature_shape_from_metadata(visual_metadata)
+    activations = _gather_active_visual_activations(
+        concept_out["visual_activations"],
+        concept_out["active_visual_prototype_indices"],
+        concept_out["visual_validity_mask"],
+        visual_metadata,
+    )
+    patch_embeddings = concept_out["visual_patch_embeddings"].view(B, T, H, W, -1)
+    projected_prototypes = concept_proto_proj(
+        concept_out["active_visual_prototypes"]
+    )
+    return {
+        "activations": activations,
+        "validity_mask": concept_out["visual_validity_mask"],
+        "projected_features": shared_patch_proj(patch_embeddings),
+        "projected_prototypes": projected_prototypes,
+        "similarity_maps": None,
+    }
+
+
 def _build_visual_concept_volume(
     concept_out: Dict[str, Any],
     *,
@@ -88,11 +229,13 @@ def _build_visual_concept_volume(
         )
 
     concept_dim = visual_repr.shape[-1]
-    return (
+    last_frame_volume = (
         visual_repr.reshape(B, T, H, W, concept_dim)
         .permute(0, 4, 1, 2, 3)
         .contiguous()
     )
+    window_t = _window_temporal_length(visual_metadata)
+    return _expand_last_frame_volume_to_window(last_frame_volume, window_t)
 
 
 def _build_stage_concept_volume(
@@ -523,16 +666,20 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
     Feature-first 3D fusion over [B, C, T, H, W] volumes.
 
     Dense features form the base signal. Concept volumes first modulate dense
-    features through FiLM.     At stages 3 and 4, every valid concept-patch activation is scored with
-    unary terms and a low-rank factorized antisymmetric concept-patch
-    comparison modulated by an explicit learned spatial-relevance kernel.
+    features through FiLM.     At stages 3 and 4, every valid concept-patch activation is scored from a
+    token that encodes normalized patch-prototype interaction, prototype
+    identity, position, and activation strength using unary terms and a
+    low-rank factorized antisymmetric concept-patch comparison modulated by an
+    explicit learned spatial-relevance kernel.
     Each directed pair score combines content antisymmetry with a symmetric
     Fourier spatial kernel; the activation-weighted aggregate is computed
     exactly from augmented global query/key summaries without materializing
     ``N x N`` tensors. A 1x1x1 conv-GroupNorm-ReLU branch then updates the
     FiLM features; the patch-priority map gates that update residually:
 
-    ``guided = film_features + alpha_stage * (priority_mask * branch(film_features))``.
+    ``guided = film_features + alpha_stage * (priority_gate * branch(...))``,
+    where ``priority_gate`` has spatial mean one and the branch input mixes
+    FiLM features with a priority-weighted prototype context.
 
     A coarser previous decoder volume may be upsampled and added afterward.
     """
@@ -549,6 +696,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         priority_temperature: float = 0.1,
         use_null_prototype: bool = True,
         enable_patch_prioritization: bool = False,
+        use_shared_concept_activations: bool = False,
         factorized_rank: int = 32,
         pos_num_frequencies: int = _POS_NUM_FREQUENCIES,
     ):
@@ -581,6 +729,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         self.priority_temperature = float(priority_temperature)
         self.use_null_prototype = bool(use_null_prototype)
         self.enable_patch_prioritization = bool(enable_patch_prioritization)
+        self.use_shared_concept_activations = bool(use_shared_concept_activations)
         self.factorized_rank = int(factorized_rank)
         self.pos_num_frequencies = int(pos_num_frequencies)
         self.pos_dim = 4 * self.pos_num_frequencies
@@ -617,6 +766,10 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
 
         if self.enable_patch_prioritization:
             self.feature_token_proj = nn.Linear(decoder_channels, self.mask_embed_dim)
+            if self.use_shared_concept_activations:
+                self.shared_patch_proj = nn.Linear(concept_dim, self.mask_embed_dim)
+            else:
+                self.shared_patch_proj = None
             self.concept_proto_proj = nn.Linear(concept_dim, self.mask_embed_dim)
             self.unary_priority_mlp = nn.Sequential(
                 nn.Linear(self.token_dim, priority_hidden),
@@ -642,8 +795,13 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             )
             # sigmoid(-2.1972246) ≈ 0.1; begins near content-only comparison.
             self.raw_spatial_strength = nn.Parameter(torch.tensor(-2.1972246))
-            self.mask_feature_branch = Conv3DGNAct(
+            self.priority_application_proto_proj = nn.Linear(
+                concept_dim,
                 decoder_channels,
+                bias=False,
+            )
+            self.mask_feature_branch = Conv3DGNAct(
+                decoder_channels * 3,
                 decoder_channels,
                 kernel_size=1,
                 padding=0,
@@ -651,14 +809,16 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             self.null_prototype = nn.Parameter(torch.randn(self.concept_dim) * 0.02)
             self.raw_pairwise_strength = nn.Parameter(torch.tensor(0.0))
             # sigmoid(-2.197) ≈ 0.1; residual strength for
-            # film + alpha * (priority_mask * branch(film)).
+            # film + alpha * (priority_gate * concept_conditioned_update).
             self.raw_strength = nn.Parameter(torch.tensor(-2.197))
         else:
             self.feature_token_proj = None
+            self.shared_patch_proj = None
             self.concept_proto_proj = None
             self.unary_priority_mlp = None
             self.factor_query = None
             self.factor_key = None
+            self.priority_application_proto_proj = None
             self.mask_feature_branch = None
             self.null_prototype = None
             self.raw_pairwise_strength = None
@@ -701,13 +861,16 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """Soft concept-patch activations ``a_ij`` with a null prototype in assignment."""
         B, _, T, H, W = feature_proj.shape
-        K = int(active_prototypes.shape[1])
         dtype = feature_proj.dtype
         validity = validity_mask.bool()
-        if validity.dim() != 2 or validity.shape[0] != B or validity.shape[1] != K:
+        if active_prototypes.dim() != 6 or validity.dim() != 5:
             raise ValueError(
-                f"validity_mask must be [B, K]=[{B}, {K}], got {tuple(validity.shape)}"
+                "Per-patch concept selection requires "
+                "active_prototypes [B,T,H,W,K,D] and validity_mask [B,T,H,W,K], "
+                f"got prototype shape {tuple(active_prototypes.shape)} and "
+                f"validity shape {tuple(validity.shape)}"
             )
+        K = int(active_prototypes.shape[-2])
 
         projected_features = self.feature_token_proj(
             feature_proj.permute(0, 2, 3, 4, 1)
@@ -715,13 +878,14 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         projected_prototypes = self.concept_proto_proj(active_prototypes)
         feature_tokens = F.normalize(projected_features, dim=-1)
         proto_tokens = F.normalize(projected_prototypes, dim=-1)
-        similarity_maps = torch.einsum(
-            "bke,bthwe->btkhw",
-            proto_tokens,
+        similarity_hwk = torch.einsum(
+            "bthwe,bthwke->bthwk",
             feature_tokens,
+            proto_tokens,
         )
+        similarity_maps = similarity_hwk.permute(0, 1, 4, 2, 3).contiguous()
 
-        valid_spatial = validity[:, None, :, None, None]
+        valid_spatial = validity.permute(0, 1, 4, 2, 3)
         assignment_logits = similarity_maps / self.assignment_temperature
         assignment_logits = assignment_logits.masked_fill(
             ~valid_spatial, _MASKED_LOGIT_FILL
@@ -732,14 +896,16 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
                     self.null_prototype.to(dtype=dtype).view(1, 1, -1)
                 ),
                 dim=-1,
-            ).expand(B, 1, -1)
-            null_similarity = torch.einsum(
-                "bke,bthwe->btkhw",
-                null_tokens,
-                feature_tokens,
+            ).expand(B, T, H, W, -1)
+            null_similarity = (
+                torch.einsum("bthwe,bthwe->bthw", feature_tokens, null_tokens)
+                / self.assignment_temperature
             )
             assignment_logits = torch.cat(
-                [assignment_logits, null_similarity / self.assignment_temperature],
+                [
+                    assignment_logits,
+                    null_similarity.unsqueeze(2),
+                ],
                 dim=2,
             )
             assignment = torch.softmax(assignment_logits, dim=2)
@@ -766,9 +932,22 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         activations: torch.Tensor,
         concept_id_offset: int = 0,
     ) -> Dict[str, torch.Tensor]:
-        """One token per concept-patch pair; coordinates are in ``[0, 1]``."""
+        """One priority token per concept-patch pair.
+
+        Each token bundles a normalized patch-prototype interaction, prototype
+        identity, normalized patch coordinates ``ell_j``, and activation
+        strength ``a_ij``:
+
+        ``z_ij = [bar(v_j) odot bar(c_i), bar(c_i), ell_j, a_ij]``.
+        """
         B, T, H, W, embed_dim = projected_features.shape
-        K = int(projected_prototypes.shape[1])
+        if projected_prototypes.dim() == 6:
+            K = int(projected_prototypes.shape[-2])
+        else:
+            raise ValueError(
+                "projected_prototypes must be [B,T,H,W,K,embed_dim] for per-patch "
+                f"concept selection, got {tuple(projected_prototypes.shape)}"
+            )
         dtype = projected_features.dtype
         device = projected_features.device
         N = K * H * W
@@ -780,30 +959,40 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             grid_x, grid_y, self.pos_num_frequencies
         )
 
-        feat_flat = (
-            projected_features.reshape(B, T, 1, H * W, embed_dim)
-            .expand(-1, -1, K, -1, -1)
+        normalized_features = F.normalize(
+            projected_features, dim=-1, eps=_PRIORITY_EPS
+        )
+        normalized_prototypes = F.normalize(
+            projected_prototypes, dim=-1, eps=_PRIORITY_EPS
+        )
+        normalized_feature_flat = (
+            normalized_features.unsqueeze(-2)
+            .expand(-1, -1, -1, -1, K, -1)
             .reshape(B, T, N, embed_dim)
         )
-        proto_flat = (
-            projected_prototypes[:, None, :, None, :]
-            .expand(-1, T, -1, H * W, -1)
-            .reshape(B, T, N, embed_dim)
-        )
+        normalized_proto_flat = normalized_prototypes.reshape(B, T, N, embed_dim)
+        interaction_flat = normalized_feature_flat * normalized_proto_flat
         pos_flat = (
-            pos_hw.reshape(1, 1, 1, H * W, self.pos_dim)
-            .expand(B, T, K, -1, -1)
+            pos_hw.reshape(1, 1, H * W, self.pos_dim)
+            .unsqueeze(-2)
+            .expand(B, T, -1, K, -1)
             .reshape(B, T, N, self.pos_dim)
         )
-        act_flat = activations.reshape(B, T, N, 1)
-        tokens = torch.cat([feat_flat, proto_flat, pos_flat, act_flat], dim=-1)
-
-        patch_index = torch.arange(H * W, device=device).repeat(K)
-        concept_index = (
-            torch.arange(K, device=device).repeat_interleave(H * W) + concept_id_offset
+        act_flat = (
+            activations.permute(0, 1, 3, 4, 2)
+            .reshape(B, T, N, 1)
         )
-        x_coords = grid_x.reshape(-1).repeat(K)
-        y_coords = grid_y.reshape(-1).repeat(K)
+        tokens = torch.cat(
+            [interaction_flat, normalized_proto_flat, pos_flat, act_flat],
+            dim=-1,
+        )
+
+        patch_index = torch.arange(H * W, device=device).repeat_interleave(K)
+        concept_index = (
+            torch.arange(K, device=device).repeat(H * W) + concept_id_offset
+        )
+        x_coords = grid_x.reshape(-1).repeat_interleave(K)
+        y_coords = grid_y.reshape(-1).repeat_interleave(K)
         return {
             "tokens": tokens,
             "activations": act_flat.squeeze(-1),
@@ -890,7 +1079,10 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         dtype: torch.dtype,
     ) -> Dict[str, torch.Tensor]:
         """Detached diagnostics for low-rank factorized antisymmetric comparison."""
-        valid = candidate_valid.unsqueeze(1).expand_as(context)
+        if candidate_valid.dim() == 2:
+            valid = candidate_valid.unsqueeze(1).expand_as(context)
+        else:
+            valid = candidate_valid
         ctx = context.masked_fill(~valid, float("nan")).reshape(-1)
         finite_ctx = ctx[torch.isfinite(ctx)]
         zero = context.new_zeros(())
@@ -933,7 +1125,10 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         the numerator, so the aggregate is computed exactly from augmented
         global query/key summaries in ``O(B T N R S)`` time and memory.
         """
-        valid = candidate_valid[:, None, :].to(dtype=tokens.dtype)
+        if candidate_valid.dim() == 2:
+            valid = candidate_valid[:, None, :].to(dtype=tokens.dtype)
+        else:
+            valid = candidate_valid.to(dtype=tokens.dtype)
         weights = activations.clamp_min(0.0) * valid
 
         q = self.factor_query(tokens)
@@ -975,7 +1170,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         self,
         modality_outs: List[Dict[str, torch.Tensor]],
     ) -> Dict[str, torch.Tensor]:
-        """Score every valid concept-patch activation independently per frame."""
+        """Score every valid concept-patch activation from interaction tokens."""
         if not modality_outs:
             raise ValueError("at least one concept modality is required")
 
@@ -1000,15 +1195,23 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         activations = torch.cat([part["activations"] for part in token_parts], dim=2)
         x_coords = torch.cat([part["x_coords"] for part in token_parts], dim=0)
         y_coords = torch.cat([part["y_coords"] for part in token_parts], dim=0)
-        validity = torch.cat(validity_masks, dim=1)
         B, T, N, _ = tokens.shape
         H, W = token_parts[0]["spatial_hw"]
         K = N // (H * W)
-        candidate_valid = (
-            validity[:, :, None]
-            .expand(-1, -1, H * W)
-            .reshape(B, N)
-        )
+        validity_parts = []
+        for validity_mask in validity_masks:
+            if validity_mask.dim() == 5:
+                k_local = int(validity_mask.shape[-1])
+                validity_parts.append(
+                    validity_mask.reshape(B, T, H * W * k_local)
+                )
+            else:
+                raise ValueError(
+                    "validity_mask must be [B,T,H,W,K] for per-patch concept "
+                    f"selection, got {tuple(validity_mask.shape)}"
+                )
+        validity = torch.cat(validity_parts, dim=2)
+        candidate_valid = validity
 
         unary = self.unary_priority_mlp(tokens).squeeze(-1)
         context, factorized_stats = self._factorized_pairwise_context(
@@ -1031,32 +1234,97 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         if not bool(validity.any(dim=-1).all().item()):
             raise ValueError(
                 "Priority softmax requires at least one valid concept prototype "
-                "for every batch item."
+                "for every patch."
             )
 
-        concept_priorities = concept_priorities_flat.view(B, T, K, H, W)
-        patch_priority_map = concept_priorities.sum(dim=2)
-        # [B, 1, T, H, W] broadcasts over channels of [B, C, T, H, W] FiLM features.
-        priority_mask = patch_priority_map.unsqueeze(1)
+        concept_priorities = (
+            concept_priorities_flat.view(B, T, H, W, K)
+            .permute(0, 1, 4, 2, 3)
+            .contiguous()
+        )
+        patch_priority_distribution = concept_priorities.sum(dim=2)
+        spatial_mean = patch_priority_distribution.mean(dim=(-2, -1), keepdim=True)
+        patch_priority_gate = (
+            patch_priority_distribution
+            / spatial_mean.clamp_min(_PRIORITY_EPS)
+        )
+        if len(validity_masks) == 1:
+            concept_validity = validity_masks[0]
+        else:
+            concept_validity = torch.cat(validity_masks, dim=-1)
         return {
-            "priority_mask": priority_mask,
+            "priority_mask": patch_priority_gate.unsqueeze(1),
+            "patch_priority_gate": patch_priority_gate,
+            "patch_priority_distribution": patch_priority_distribution,
+            "patch_priority_map": patch_priority_distribution,
             "concept_priorities": concept_priorities,
-            "concept_validity": validity,
-            "patch_priority_map": patch_priority_map,
-            "unary_scores": unary.view(B, T, K, H, W),
-            "pairwise_context": context.view(B, T, K, H, W),
+            "concept_validity": concept_validity,
+            "unary_scores": unary.view(B, T, H, W, K).permute(0, 1, 4, 2, 3).contiguous(),
+            "pairwise_context": context.view(B, T, H, W, K).permute(0, 1, 4, 2, 3).contiguous(),
             "factorized_comparison_stats": factorized_stats,
         }
+
+    def _build_concept_conditioned_update(
+        self,
+        film_features: torch.Tensor,
+        concept_priorities: torch.Tensor,
+        patch_priority_distribution: torch.Tensor,
+        active_prototypes: torch.Tensor,
+        concept_validity: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Priority-weighted prototype mixture and concept-conditioned branch output."""
+        conditional_weights = concept_priorities / patch_priority_distribution.unsqueeze(
+            2
+        ).clamp_min(_PRIORITY_EPS)
+        if concept_validity.dim() != 5:
+            raise ValueError(
+                "concept_validity must be [B,T,H,W,K] for per-patch concept "
+                f"selection, got {tuple(concept_validity.shape)}"
+            )
+        valid = concept_validity.permute(0, 1, 4, 2, 3).to(
+            dtype=conditional_weights.dtype
+        )
+        conditional_weights = conditional_weights * valid
+        if active_prototypes.dim() != 6:
+            raise ValueError(
+                "active_prototypes must be [B,T,H,W,K,D] for per-patch concept "
+                f"selection, got {tuple(active_prototypes.shape)}"
+            )
+        projected_prototypes = F.normalize(
+            self.priority_application_proto_proj(active_prototypes),
+            dim=-1,
+            eps=_PRIORITY_EPS,
+        )
+        concept_context = torch.einsum(
+            "btkhw,bthwkp->btphw",
+            conditional_weights,
+            projected_prototypes,
+        ).permute(0, 2, 1, 3, 4)
+        update_input = torch.cat(
+            [
+                film_features,
+                concept_context,
+                film_features * concept_context,
+            ],
+            dim=1,
+        )
+        concept_conditioned_update = self.mask_feature_branch(update_input)
+        return conditional_weights, concept_context, concept_conditioned_update
 
     def _assert_required_visual_prototypes(
         self,
         visual_validity_mask: torch.Tensor,
     ) -> None:
         validity = visual_validity_mask.bool()
+        if validity.dim() != 5:
+            raise ValueError(
+                "visual_validity_mask must be [B,T,H,W,K] for per-patch concept "
+                f"selection, got {tuple(validity.shape)}"
+            )
         if validity.numel() == 0 or not bool(validity.any(dim=-1).all().item()):
             raise ValueError(
                 "Visual concept activations are required for mask construction, but "
-                "at least one batch item has no valid visual prototypes."
+                "at least one patch has no valid visual prototypes."
             )
 
     def forward(
@@ -1067,6 +1335,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         *,
         active_visual_prototypes: torch.Tensor,
         visual_validity_mask: torch.Tensor,
+        concept_out: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         feature_proj = self.feature_proj(features)
         concept_proj = self.concept_proj(concept_volume)
@@ -1088,37 +1357,84 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         mask_outputs: Dict[str, torch.Tensor] = {}
         if self.enable_patch_prioritization:
             self._assert_required_visual_prototypes(visual_validity_mask)
-            visual_out = self._compute_soft_activations(
-                film_features,
-                active_visual_prototypes,
-                visual_validity_mask,
-            )
+            temporal_len = int(feature_proj.shape[2])
+            film_last = film_features[:, :, -1:, :, :]
+            if self.use_shared_concept_activations:
+                if concept_out is None:
+                    raise ValueError(
+                        "concept_out is required when use_shared_concept_activations=True"
+                    )
+                if self.shared_patch_proj is None:
+                    raise RuntimeError(
+                        "shared_patch_proj is undefined despite shared activations being enabled"
+                    )
+                visual_out = _build_shared_visual_modality_from_concept_out(
+                    concept_out,
+                    shared_patch_proj=self.shared_patch_proj,
+                    concept_proto_proj=self.concept_proto_proj,
+                )
+            else:
+                visual_out = self._compute_soft_activations(
+                    film_last,
+                    active_visual_prototypes,
+                    visual_validity_mask,
+                )
             priority_out = self._prioritize_concept_patch_activations([visual_out])
-            priority_mask = priority_out["priority_mask"]
-            if priority_mask.shape[1] != 1:
+            priority_mask_last = priority_out["priority_mask"]
+            if priority_mask_last.shape[1] != 1 or priority_mask_last.shape[2] != 1:
                 raise ValueError(
-                    "patch-priority mask must have a singleton channel dimension "
-                    f"[B, 1, T, H, W], got {tuple(priority_mask.shape)}"
+                    "Last-frame patch-priority gate must be [B, 1, 1, H, W], "
+                    f"got {tuple(priority_mask_last.shape)}"
                 )
             alpha = self.max_strength * torch.sigmoid(self.raw_strength)
-            branched = self.mask_feature_branch(film_features)
-            feature_proj = film_features + alpha * (priority_mask * branched)
+            (
+                conditional_weights,
+                concept_context,
+                concept_conditioned_update_last,
+            ) = self._build_concept_conditioned_update(
+                film_last,
+                priority_out["concept_priorities"],
+                priority_out["patch_priority_distribution"],
+                active_visual_prototypes,
+                priority_out["concept_validity"],
+            )
+            priority_mask = _scatter_last_frame_mask(
+                feature_proj.shape[0],
+                temporal_len,
+                priority_mask_last,
+                device=feature_proj.device,
+                dtype=feature_proj.dtype,
+            )
+            concept_conditioned_update = _scatter_last_frame_update(
+                torch.zeros_like(film_features),
+                concept_conditioned_update_last,
+            )
+            feature_proj = film_features + alpha * (
+                priority_mask * concept_conditioned_update
+            )
             mask_outputs.update(
                 {
                     "priority_mask": priority_mask,
+                    "patch_priority_gate": priority_out["patch_priority_gate"],
+                    "patch_priority_distribution": priority_out[
+                        "patch_priority_distribution"
+                    ],
                     "concept_priorities": priority_out["concept_priorities"],
                     "concept_validity": priority_out["concept_validity"],
                     "patch_priority_map": priority_out["patch_priority_map"],
+                    "conditional_concept_weights": conditional_weights,
+                    "priority_weighted_concept_context": concept_context,
                     "unary_scores": priority_out["unary_scores"],
                     "pairwise_context": priority_out["pairwise_context"],
                     "factorized_comparison_stats": priority_out[
                         "factorized_comparison_stats"
                     ],
-                    "visual_similarity_maps": visual_out["similarity_maps"],
                     "concept_patch_activations": visual_out["activations"],
                     "residual_strength": alpha.detach(),
                 }
             )
+            if torch.is_tensor(visual_out.get("similarity_maps")):
+                mask_outputs["visual_similarity_maps"] = visual_out["similarity_maps"]
         else:
             feature_proj = film_features
 
@@ -1137,9 +1453,10 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
 
     Stages decode stage4 -> stage1. Each stage fuses full [B, C, T, H, W]
     feature and concept volumes through FiLM. Stages 3 and 4 score every valid
-    concept-patch activation, update FiLM features with a 1x1x1 conv-GN-ReLU
-    branch, and apply the residual patch-priority mask to that update. Temporal
-    aggregation and learned upsampling produce the last-frame saliency map.
+    last-frame concept-patch activation, update last-frame FiLM features with a
+    1x1x1 conv-GN-ReLU branch, and apply the residual patch-priority mask to
+    that update only on the last temporal index. Temporal aggregation and
+    learned upsampling produce the last-frame saliency map.
     """
 
     def __init__(
@@ -1153,6 +1470,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         output_activation: str = "sigmoid",
         temporal_aggregation: str = "learned_all_frames",
         use_side_logit_fusion: bool = True,
+        use_shared_concept_activations: bool = False,
         assignment_temperature: float = 0.07,
         priority_temperature: float = 0.1,
         factorized_rank: int = 32,
@@ -1176,6 +1494,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         self.output_activation = output_activation
         self.temporal_aggregation = temporal_aggregation
         self.use_side_logit_fusion = bool(use_side_logit_fusion)
+        self.use_shared_concept_activations = bool(use_shared_concept_activations)
         self.patch_priority_stages = tuple(
             stage
             for stage in _PATCH_PRIORITY_STAGES
@@ -1195,6 +1514,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     assignment_temperature=assignment_temperature,
                     priority_temperature=priority_temperature,
                     enable_patch_prioritization=stage in self.patch_priority_stages,
+                    use_shared_concept_activations=use_shared_concept_activations,
                     factorized_rank=factorized_rank,
                 )
                 for stage, channels in self.stage_channels.items()
@@ -1382,6 +1702,8 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             {} if return_details else None
         )
         stage_patch_priority_maps: Dict[str, torch.Tensor] = {}
+        stage_patch_priority_distributions: Dict[str, torch.Tensor] = {}
+        stage_patch_priority_gates: Dict[str, torch.Tensor] = {}
         decoded_stage_volumes: Optional[Dict[str, torch.Tensor]] = (
             {} if return_details else None
         )
@@ -1436,9 +1758,23 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 prev_decoder=prev_decoder,
                 active_visual_prototypes=active_visual_prototypes,
                 visual_validity_mask=visual_validity_mask,
+                concept_out=(
+                    stage_concept_out
+                    if self.use_shared_concept_activations
+                    else None
+                ),
             )
-            if "patch_priority_map" in mask_outputs:
+            if "patch_priority_distribution" in mask_outputs:
+                stage_patch_priority_distributions[stage] = mask_outputs[
+                    "patch_priority_distribution"
+                ]
+                stage_patch_priority_maps[stage] = mask_outputs[
+                    "patch_priority_distribution"
+                ]
+            elif "patch_priority_map" in mask_outputs:
                 stage_patch_priority_maps[stage] = mask_outputs["patch_priority_map"]
+            if "patch_priority_gate" in mask_outputs:
+                stage_patch_priority_gates[stage] = mask_outputs["patch_priority_gate"]
             prev_decoder = decoded
 
             side_volume = side_feature_heads[stage](decoded)
@@ -1467,10 +1803,9 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     stage_concept_validity[stage] = mask_outputs[
                         "concept_validity"
                     ].detach()
-                if "visual_similarity_maps" in mask_outputs:
-                    stage_visual_similarity_maps[stage] = mask_outputs[
-                        "visual_similarity_maps"
-                    ].detach()
+                visual_similarity_maps = mask_outputs.get("visual_similarity_maps")
+                if torch.is_tensor(visual_similarity_maps):
+                    stage_visual_similarity_maps[stage] = visual_similarity_maps.detach()
                 if "concept_patch_activations" in mask_outputs:
                     stage_concept_patch_activations[stage] = mask_outputs[
                         "concept_patch_activations"
@@ -1571,6 +1906,8 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             "output_activation": self.output_activation,
             "decoder_temporal_diagnostics": decoder_temporal_diagnostics,
             "stage_patch_priority_maps": stage_patch_priority_maps,
+            "stage_patch_priority_distributions": stage_patch_priority_distributions,
+            "stage_patch_priority_gates": stage_patch_priority_gates,
         }
 
         if return_details:

@@ -3,6 +3,7 @@
 from losses import (
     compute_delta_target,
     compute_fidelity_loss,
+    compute_patch_priority_map_loss,
     compute_total_loss,
     has_temporal_saliency_sequence,
     minmax_per_sample,
@@ -17,6 +18,7 @@ from losses import (
 __all__ = [
     "compute_delta_target",
     "compute_fidelity_loss",
+    "compute_patch_priority_map_loss",
     "compute_total_loss",
     "has_temporal_saliency_sequence",
     "minmax_per_sample",

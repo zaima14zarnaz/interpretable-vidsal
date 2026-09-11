@@ -146,6 +146,7 @@ from tqdm import tqdm
 
 from pre_process.collate import video_saliency_collate_fn
 from pre_process.dataloader import DatasetLoader
+from evaluation import _filter_compatible_state_dict
 from model.model import ExplainableVidSalModel
 
 try:
@@ -335,7 +336,17 @@ def load_saliency_model(checkpoint_path: str, device: torch.device) -> Explainab
     model = build_model(device)
     ckpt = torch.load(resolved_checkpoint, map_location=device)
     state_dict = ckpt.get("model_state_dict", ckpt)
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    compatible, missing, unexpected, shape_mismatch = _filter_compatible_state_dict(
+        model,
+        state_dict,
+    )
+    model.load_state_dict(compatible, strict=False)
+    if shape_mismatch:
+        print(
+            f"WARNING: skipped {len(shape_mismatch)} checkpoint tensors with "
+            "incompatible shapes"
+        )
+        print("  first shape mismatches:", shape_mismatch[:10])
     if missing:
         print(f"WARNING: missing keys while loading checkpoint: {len(missing)}")
         print("  first missing keys:", missing[:10])

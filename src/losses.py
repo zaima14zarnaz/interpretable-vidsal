@@ -1156,6 +1156,19 @@ def compute_temporal_attention_entropy_loss(
     return -normalized_entropy.mean()
 
 
+def _forward_spatial_kl(
+    target_prob: torch.Tensor,
+    pred_prob: torch.Tensor,
+    *,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Forward KL ``sum_j Y_j (log(Y_j+eps) - log(M_j+eps))`` over spatial dims."""
+    return (
+        target_prob
+        * ((target_prob + eps).log() - (pred_prob + eps).log())
+    ).sum(dim=-1)
+
+
 def compute_patch_priority_map_loss(
     prediction_out: Dict[str, Any],
     saliency_maps: torch.Tensor,
@@ -1164,10 +1177,11 @@ def compute_patch_priority_map_loss(
     eps: float = 1e-8,
 ) -> Dict[str, torch.Tensor]:
     """
-    KL between last-frame patch-priority maps and downsampled saliency GT.
+    Forward KL between last-frame patch-priority maps and downsampled saliency GT.
 
-    Both maps are normalized into spatial probability distributions. The Stage 3
-    and Stage 4 losses are averaged. Pairwise scores are not supervised.
+    Both maps are normalized into spatial probability distributions per batch
+    sample. Stage 3 and Stage 4 losses are averaged. Samples whose ground-truth
+    map has zero spatial mass are excluded from the average.
     """
     zero = _loss_zero_reference(prediction_out)
     maps = prediction_out.get("stage_patch_priority_maps")
@@ -1175,6 +1189,7 @@ def compute_patch_priority_map_loss(
         "loss_priority_map": zero,
         "loss_priority_map_stage3": zero,
         "loss_priority_map_stage4": zero,
+        "priority_map_loss": zero,
     }
     if not isinstance(maps, dict) or not maps:
         return out
@@ -1184,27 +1199,36 @@ def compute_patch_priority_map_loss(
         priority_map = maps.get(stage)
         if not torch.is_tensor(priority_map) or priority_map.dim() < 3:
             continue
+
         last_priority = priority_map[:, -1]
         if last_priority.dim() == 2:
             last_priority = last_priority.unsqueeze(1)
-        elif last_priority.dim() == 3:
-            last_priority = last_priority.unsqueeze(1)
+        elif last_priority.dim() == 4 and last_priority.shape[1] == 1:
+            last_priority = last_priority.squeeze(1)
+
         target = prepare_last_saliency_map(
             saliency_maps,
             int(last_priority.shape[-2]),
             int(last_priority.shape[-1]),
         )
+
         pred_flat = last_priority.reshape(last_priority.shape[0], -1).clamp_min(0.0)
         pred_prob = pred_flat / pred_flat.sum(dim=1, keepdim=True).clamp_min(eps)
         target_flat = target.reshape(target.shape[0], -1).clamp_min(0.0)
-        target_prob = target_flat / target_flat.sum(dim=1, keepdim=True).clamp_min(eps)
-        log_pred = (pred_prob + eps).log()
-        stage_loss = F.kl_div(log_pred, target_prob, reduction="batchmean")
+        target_mass = target_flat.sum(dim=1)
+        valid = target_mass > eps
+        if not bool(valid.any().item()):
+            continue
+
+        target_prob = target_flat / target_mass.unsqueeze(-1).clamp_min(eps)
+        kl_per_sample = _forward_spatial_kl(target_prob, pred_prob, eps=eps)
+        stage_loss = kl_per_sample[valid].mean()
         out[f"loss_priority_map_{stage}"] = stage_loss
         stage_losses.append(stage_loss)
 
     if stage_losses:
         out["loss_priority_map"] = torch.stack(stage_losses).mean()
+        out["priority_map_loss"] = out["loss_priority_map"]
     return out
 
 
@@ -1237,14 +1261,17 @@ def compute_total_loss(
     patch_from_logits: bool = True,
     enable_side_aux: bool = False,
     side_stage_weights: Optional[Dict[str, float]] = None,
-    priority_loss_weight: float = 0.05,
+    priority_map_loss_weight: float = 0.05,
+    priority_loss_weight: Optional[float] = None,
 ) -> Dict[str, Union[torch.Tensor, None]]:
     """
     Total training loss for ExplainableVidSalModel (return_details=True).
 
     L = existing saliency losses
-      + priority_loss_weight * mean(Stage3, Stage4 patch-priority KL)
+      + priority_map_loss_weight * mean(Stage3, Stage4 patch-priority KL)
     """
+    if priority_loss_weight is not None:
+        priority_map_loss_weight = float(priority_loss_weight)
     prediction_out = _resolve_prediction_out(model_out)
     concept_out = model_out.get("concept_out")
 
@@ -1358,9 +1385,16 @@ def compute_total_loss(
         )
         loss_decoder_side_aux = side_loss_out["loss_decoder_side_aux"]
 
-    priority_out = compute_patch_priority_map_loss(prediction_out, saliency_maps)
+    priority_out: Dict[str, torch.Tensor] = {
+        "loss_priority_map": zero,
+        "loss_priority_map_stage3": zero,
+        "loss_priority_map_stage4": zero,
+        "priority_map_loss": zero,
+    }
+    if priority_map_loss_weight > 0.0:
+        priority_out = compute_patch_priority_map_loss(prediction_out, saliency_maps)
     loss_priority_map = priority_out["loss_priority_map"]
-    loss_priority_map_weighted = priority_loss_weight * loss_priority_map
+    loss_priority_map_weighted = priority_map_loss_weight * loss_priority_map
 
     loss_total_concept = _aggregate_concept_total_loss(concept_out, ref)
 
@@ -1409,6 +1443,8 @@ def compute_total_loss(
         "loss_decoder_side_aux": loss_decoder_side_aux,
         "loss_priority_map": loss_priority_map,
         "loss_priority_map_weighted": loss_priority_map_weighted,
+        "priority_map_loss": loss_priority_map,
+        "weighted_priority_map_loss": loss_priority_map_weighted,
         "loss_priority_map_stage3": priority_out["loss_priority_map_stage3"],
         "loss_priority_map_stage4": priority_out["loss_priority_map_stage4"],
         "delta_target": fid_out["delta_target"],

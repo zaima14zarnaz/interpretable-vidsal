@@ -99,6 +99,8 @@ class ExplainableVidSalModel(nn.Module):
         temporal_enhance_last_only: bool = False,
         decoder_temporal_aggregation: str = "learned_all_frames",
         decoder_use_side_logit_fusion: bool = True,
+        use_temporal_feature_infusion: bool = True,
+        use_shared_concept_activations: bool = False,
         **_deprecated_saliency_kwargs: Any,
     ):
         super().__init__()
@@ -135,6 +137,8 @@ class ExplainableVidSalModel(nn.Module):
         self.temporal_dim = int(temporal_dim)
         self.decoder_temporal_aggregation = decoder_temporal_aggregation
         self.decoder_use_side_logit_fusion = bool(decoder_use_side_logit_fusion)
+        self.use_temporal_feature_infusion = bool(use_temporal_feature_infusion)
+        self.use_shared_concept_activations = bool(use_shared_concept_activations)
         if not self.visual_concept_on and not self.temporal_concepts_on:
             raise ValueError(
                 "At least one concept branch must be enabled: "
@@ -208,6 +212,7 @@ class ExplainableVidSalModel(nn.Module):
             output_activation=output_activation,
             temporal_aggregation=decoder_temporal_aggregation,
             use_side_logit_fusion=decoder_use_side_logit_fusion,
+            use_shared_concept_activations=use_shared_concept_activations,
         )
 
         if freeze_backbone:
@@ -374,7 +379,8 @@ class ExplainableVidSalModel(nn.Module):
         """Parameters for the optimizer (concept + saliency, optionally backbone)."""
         params: List[nn.Parameter] = []
         params.extend(self.concept_creations.parameters())
-        params.extend(self.temporal_feature_infusers.parameters())
+        if self.use_temporal_feature_infusion:
+            params.extend(self.temporal_feature_infusers.parameters())
         params.extend(self.saliency_prediction.parameters())
         if not self._backbone_frozen:
             params.extend(self.backbone.parameters())
@@ -391,6 +397,8 @@ class ExplainableVidSalModel(nn.Module):
 
     def get_temporal_diagnostics(self) -> Dict[str, Dict[str, float]]:
         """Return last temporal-infusion diagnostics for each backbone stage."""
+        if not self.use_temporal_feature_infusion:
+            return {}
         return {
             stage: self.temporal_feature_infusers[stage].get_last_diagnostics()
             for stage in self.backbone_stages
@@ -482,9 +490,12 @@ class ExplainableVidSalModel(nn.Module):
                     collect_gate_debug=False,
                 )
                 concept_outs[stage] = visual_out
-                decoder_features_dict[stage] = temporal_feature_infusers[stage](
-                    stage_features
-                )
+                if self.use_temporal_feature_infusion:
+                    decoder_features_dict[stage] = temporal_feature_infusers[stage](
+                        stage_features
+                    )
+                else:
+                    decoder_features_dict[stage] = concept_features
 
             # Learned ConvTranspose upsampling uses fixed scale factors tied to the
             # backbone feature resolution, so decoder output_size should match
