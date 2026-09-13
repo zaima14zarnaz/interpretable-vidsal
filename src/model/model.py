@@ -186,6 +186,9 @@ class ExplainableVidSalModel(nn.Module):
                 visual_usage_weight=visual_usage_weight,
                 use_visual_saliency_alignment=use_visual_saliency_alignment,
                 visual_saliency_align_weight=visual_saliency_align_weight,
+                temporal_concepts_on=(
+                    self.temporal_concepts_on and stage == "stage3"
+                ),
             )
 
         self.temporal_feature_infusers = nn.ModuleDict()
@@ -213,6 +216,7 @@ class ExplainableVidSalModel(nn.Module):
             temporal_aggregation=decoder_temporal_aggregation,
             use_side_logit_fusion=decoder_use_side_logit_fusion,
             use_shared_concept_activations=use_shared_concept_activations,
+            temporal_concepts_on=self.temporal_concepts_on,
         )
 
         if freeze_backbone:

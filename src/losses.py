@@ -763,6 +763,38 @@ def _aggregate_concept_losses(
     return totals
 
 
+def _aggregate_temporal_concept_losses(
+    concept_out: Any, reference: torch.Tensor
+) -> Dict[str, torch.Tensor]:
+    """Average stage-level temporal concept losses when present."""
+    zero = reference.sum() * 0.0
+    keys = ["loss_temporal", "loss_temporal_div"]
+    totals = {k: zero for k in keys}
+    count = 0
+
+    for _, stage_out in _iter_stage_concept_outputs(concept_out):
+        losses = stage_out.get("losses", {}) if isinstance(stage_out, dict) else {}
+        if not losses:
+            continue
+        has_temporal = any(
+            torch.is_tensor(losses.get(k)) and losses.get(k) is not None
+            for k in keys
+        )
+        if not has_temporal:
+            continue
+        count += 1
+        for k in keys:
+            value = losses.get(k)
+            if torch.is_tensor(value):
+                totals[k] = totals[k] + value
+
+    if count > 0:
+        for k in keys:
+            totals[k] = totals[k] / count
+
+    return totals
+
+
 def _aggregate_concept_total_loss(
     concept_out: Any, reference: torch.Tensor
 ) -> torch.Tensor:
@@ -1255,6 +1287,8 @@ def compute_total_loss(
     lambda_visual_entropy: float = 0.0,
     lambda_visual_equiv: float = 0.0,
     lambda_visual_usage: float = 0.0,
+    lambda_temporal: float = 0.0,
+    lambda_temporal_div: float = 0.0,
     lambda_temporal_attention_entropy: float = 0.0,
     equiv_model_out: Optional[Dict[str, Any]] = None,
     fixation_maps: Optional[torch.Tensor] = None,
@@ -1357,6 +1391,14 @@ def compute_total_loss(
     else:
         loss_visual_usage = zero
 
+    use_temporal_concept_reg = lambda_temporal > 0.0 or lambda_temporal_div > 0.0
+    if use_temporal_concept_reg:
+        temporal_losses = _aggregate_temporal_concept_losses(concept_out, ref)
+        loss_temporal = temporal_losses["loss_temporal"]
+        loss_temporal_div = temporal_losses["loss_temporal_div"]
+    else:
+        loss_temporal = loss_temporal_div = zero
+
     if lambda_temporal_attention_entropy > 0.0:
         loss_temporal_attention_entropy = compute_temporal_attention_entropy_loss(
             prediction_out
@@ -1412,6 +1454,8 @@ def compute_total_loss(
         + lambda_visual_entropy * loss_visual_entropy
         + lambda_visual_equiv * loss_visual_equiv
         + lambda_visual_usage * loss_visual_usage
+        + lambda_temporal * loss_temporal
+        + lambda_temporal_div * loss_temporal_div
         + lambda_temporal_attention_entropy * loss_temporal_attention_entropy
         + loss_decoder_side_aux
         + loss_total_concept
@@ -1438,6 +1482,8 @@ def compute_total_loss(
         "loss_visual_entropy": loss_visual_entropy,
         "loss_visual_equiv": loss_visual_equiv,
         "loss_visual_usage": loss_visual_usage,
+        "loss_temporal": loss_temporal,
+        "loss_temporal_div": loss_temporal_div,
         "loss_temporal_attention_entropy": loss_temporal_attention_entropy,
         "loss_total_concept": loss_total_concept,
         "loss_decoder_side_aux": loss_decoder_side_aux,

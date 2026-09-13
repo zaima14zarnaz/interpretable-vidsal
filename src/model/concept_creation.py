@@ -1,12 +1,10 @@
 """
-Visual concept creation for explainable video saliency.
+Visual and optional temporal concept creation for explainable video saliency.
 
 ``VisualConceptCreation`` assigns patch-level appearance concepts from
-normalized backbone features.
-
-Temporal transition/persistence concepts are disabled in the visual branch;
-legacy output keys are returned as None for compatibility with older training
-and decoding code.
+normalized backbone features. When ``temporal_concepts_on=True`` (stage 3
+only), per-patch temporal difference embeddings are encoded with a two-layer
+LSTM and matched to a separate temporal concept bank.
 """
 
 from typing import Any, Dict, Optional, Tuple, Union
@@ -30,9 +28,13 @@ class VisualConceptCreation(nn.Module):
     DEFAULT_LOSS_WEIGHTS = {
         "visual": 0.1,
         "visual_div": 0.05,
+        "temporal": 0.1,
+        "temporal_div": 0.05,
     }
 
     DROPOUT_P = 0.2
+    TEMPORAL_LSTM_HIDDEN = 1024
+    TEMPORAL_LSTM_LAYERS = 2
 
     def __init__(
         self,
@@ -67,6 +69,10 @@ class VisualConceptCreation(nn.Module):
         visual_saliency_align_weight: float = 0.05,
         use_target_centric: bool = True,
         last_transition_only: bool = True,
+        temporal_concepts_on: bool = False,
+        num_temporal_concepts: Optional[int] = None,
+        temporal_lstm_hidden: int = TEMPORAL_LSTM_HIDDEN,
+        temporal_concept_residual_weight: float = 0.1,
     ):
         super().__init__()
 
@@ -75,6 +81,14 @@ class VisualConceptCreation(nn.Module):
         self.num_concepts = num_concepts
         self.hidden_dim = hidden_dim
         self.top_k = top_k
+        self.temporal_concepts_on = bool(temporal_concepts_on)
+        self.num_temporal_concepts = (
+            num_temporal_concepts
+            if num_temporal_concepts is not None
+            else num_concepts
+        )
+        self.temporal_lstm_hidden = int(temporal_lstm_hidden)
+        self.temporal_concept_residual_weight = float(temporal_concept_residual_weight)
         self.tau_alpha = tau_alpha
         self.tau_concept = tau_concept
         self.diversity_margin = diversity_margin
@@ -115,6 +129,31 @@ class VisualConceptCreation(nn.Module):
             nn.Linear(hidden_dim // 2, 1),
         )
 
+        if self.temporal_concepts_on:
+            self.temporal_diff_proj = nn.Linear(in_channels, hidden_dim)
+            self.temporal_lstm = nn.LSTM(
+                input_size=hidden_dim,
+                hidden_size=self.temporal_lstm_hidden,
+                num_layers=self.TEMPORAL_LSTM_LAYERS,
+                batch_first=True,
+            )
+            self.temporal_output_proj = nn.Sequential(
+                nn.Linear(self.temporal_lstm_hidden, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(self.DROPOUT_P),
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, concept_dim),
+                nn.LayerNorm(concept_dim),
+            )
+            self.temporal_concepts = nn.Parameter(
+                torch.randn(self.num_temporal_concepts, concept_dim)
+            )
+        else:
+            self.temporal_diff_proj = None
+            self.temporal_lstm = None
+            self.temporal_output_proj = None
+            self.temporal_concepts = None
+
         self._init_concept_parameters()
         self._grid_cache: Dict[Tuple[int, int, torch.device, torch.dtype], torch.Tensor] = {}
         self._visual_meta_cache: Dict[Tuple[int, int, int, torch.device], Dict[str, torch.Tensor]] = {}
@@ -129,6 +168,10 @@ class VisualConceptCreation(nn.Module):
             self.visual_concepts.copy_(
                 F.normalize(self.visual_concepts, dim=-1)
             )
+            if self.temporal_concepts is not None:
+                self.temporal_concepts.copy_(
+                    F.normalize(self.temporal_concepts, dim=-1)
+                )
 
     @staticmethod
     def _build_grid(H: int, W: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -194,6 +237,57 @@ class VisualConceptCreation(nn.Module):
         mask = ~torch.eye(cos.size(0), dtype=torch.bool, device=cos.device)
         off_diag = cos[mask]
         return F.relu(off_diag - self.diversity_margin).pow(2).mean()
+
+    def _temporal_diversity_loss(self) -> torch.Tensor:
+        """Encourage temporal concept bank prototypes to stay diverse."""
+        if self.temporal_concepts is None:
+            raise RuntimeError("temporal_concepts is undefined")
+        bank_n = F.normalize(self.temporal_concepts, dim=-1)
+        cos = bank_n @ bank_n.T
+        mask = ~torch.eye(cos.size(0), dtype=torch.bool, device=cos.device)
+        off_diag = cos[mask]
+        return F.relu(off_diag - self.diversity_margin).pow(2).mean()
+
+    def _temporal_concept_loss(
+        self,
+        temporal_patch_embeddings: torch.Tensor,
+        temporal_activations: torch.Tensor,
+    ) -> torch.Tensor:
+        """Differentiable reconstruction loss for temporal concept assignment."""
+        if self.temporal_concepts is None:
+            raise RuntimeError("temporal_concepts is undefined")
+        c_temp = F.normalize(self.temporal_concepts, dim=-1)
+        recon = temporal_activations @ c_temp
+        return 1.0 - F.cosine_similarity(
+            recon, temporal_patch_embeddings, dim=-1
+        ).mean()
+
+    def _compute_temporal_assignments(
+        self, raw_similarity: torch.Tensor
+    ) -> Dict[str, torch.Tensor]:
+        """Temporal concept assignment mirroring the visual branch."""
+        temperature = max(float(self.visual_assignment_temperature), 1e-8)
+        temporal_logits = raw_similarity / temperature
+        temporal_probs = F.softmax(temporal_logits, dim=-1)
+        temporal_indices = temporal_logits.argmax(dim=-1)
+        hard_one_hot = F.one_hot(
+            temporal_indices,
+            num_classes=self.num_temporal_concepts,
+        ).to(dtype=temporal_probs.dtype)
+
+        if self.visual_assignment_mode == "soft":
+            temporal_activations = temporal_probs
+        elif self.visual_assignment_mode == "hard_eval" or not self.training:
+            temporal_activations = hard_one_hot
+        else:
+            temporal_activations = hard_one_hot - temporal_probs.detach() + temporal_probs
+
+        return {
+            "temporal_logits": temporal_logits,
+            "temporal_probs": temporal_probs,
+            "temporal_activations": temporal_activations,
+            "temporal_indices": temporal_indices,
+        }
 
     @staticmethod
     def _extract_active_prototypes(
@@ -568,6 +662,130 @@ class VisualConceptCreation(nn.Module):
             "visual_metadata": visual_metadata,
         }
 
+    def _empty_temporal_outputs(
+        self,
+        *,
+        device: torch.device,
+        reference: Optional[torch.Tensor] = None,
+    ) -> Dict[str, Any]:
+        zero = reference.sum() * 0.0 if reference is not None else None
+        return {
+            "active_temporal_prototypes": None,
+            "active_temporal_prototype_indices": None,
+            "temporal_validity_mask": None,
+            "temporal_patch_embeddings": None,
+            "temporal_concept_logits": None,
+            "temporal_concept_indices": None,
+            "temporal_activations": None,
+            "temporal_concept_representation": None,
+            "temporal_feature_concept_agreement": None,
+            "temporal_patch_coords": None,
+            "temporal_assignment_probs": None,
+            "temporal_metadata": None,
+            "loss_temporal": zero,
+            "loss_temporal_div": zero,
+        }
+
+    def _build_temporal_concepts_from_patches(
+        self, features: torch.Tensor
+    ) -> Dict[str, Any]:
+        """
+        Build temporal concept assignments from same-location patch differences.
+
+        Difference embeddings are computed between consecutive frames in the
+        input window, encoded with a two-layer LSTM, and matched to the temporal
+        concept bank via cosine similarity. Assignments are made on the last
+        frame patch grid only.
+        """
+        if not self.temporal_concepts_on:
+            raise RuntimeError("_build_temporal_concepts_from_patches requires temporal_concepts_on=True")
+        if self.temporal_concepts is None or self.temporal_lstm is None:
+            raise RuntimeError("Temporal concept modules are undefined")
+
+        B, C, window_T, H, W = features.shape
+        if window_T < 2:
+            return self._empty_temporal_outputs(device=features.device)
+
+        device = features.device
+        dtype = features.dtype
+        N = H * W
+        T = 1
+
+        z = self._flatten_features(features)
+        diffs = z[:, 1:] - z[:, :-1]
+        seq_len = int(diffs.shape[1])
+        seq = diffs.permute(0, 2, 1, 3).reshape(B * N, seq_len, C)
+        projected = self.temporal_diff_proj(seq)
+        _, (h_n, _) = self.temporal_lstm(projected)
+        q_temp = self.temporal_output_proj(h_n[-1])
+        q_temp = F.normalize(q_temp, dim=-1)
+
+        c_temp = F.normalize(self.temporal_concepts, dim=-1)
+        raw_similarity = q_temp @ c_temp.T
+        assignment_out = self._compute_temporal_assignments(raw_similarity)
+        temporal_logits = assignment_out["temporal_logits"]
+        temporal_probs = assignment_out["temporal_probs"]
+        temporal_indices = assignment_out["temporal_indices"]
+        temporal_activations = assignment_out["temporal_activations"]
+
+        temporal_repr = temporal_activations @ c_temp
+        if self.temporal_concept_residual_weight > 0:
+            temporal_repr = temporal_repr + self.temporal_concept_residual_weight * q_temp
+        temporal_repr = F.normalize(temporal_repr, dim=-1)
+
+        temporal_feature_concept_agreement = F.cosine_similarity(
+            q_temp,
+            temporal_repr,
+            dim=-1,
+        )
+
+        grid = self._make_grid(H, W, device, dtype)
+        meta_idx = self._visual_metadata_indices(B, T, N, device)
+        patch_idx = meta_idx["patch_idx"]
+        temporal_patch_coords = grid[patch_idx]
+
+        temporal_metadata: Dict[str, Any] = {
+            "batch_idx": meta_idx["batch_idx"],
+            "time_idx": meta_idx["time_idx"],
+            "patch_idx": patch_idx,
+            "patch_coords": temporal_patch_coords,
+            "feature_shape": {"B": B, "C": C, "T": T, "H": H, "W": W},
+            "window_T": window_T,
+            "assignment_time_index": window_T - 1,
+            "temporal_sequence_length": seq_len,
+        }
+
+        (
+            active_temporal_prototypes,
+            temporal_validity_mask,
+            active_temporal_prototype_indices,
+        ) = self._extract_active_prototypes(
+            temporal_activations,
+            self.temporal_concepts,
+            self.top_k,
+            B=B,
+            T=T,
+            H=H,
+            W=W,
+        )
+
+        return {
+            "active_temporal_prototypes": active_temporal_prototypes,
+            "active_temporal_prototype_indices": active_temporal_prototype_indices,
+            "temporal_validity_mask": temporal_validity_mask,
+            "temporal_patch_embeddings": q_temp,
+            "temporal_concept_logits": temporal_logits,
+            "temporal_concept_indices": temporal_indices,
+            "temporal_activations": temporal_activations,
+            "temporal_concept_representation": temporal_repr,
+            "temporal_feature_concept_agreement": temporal_feature_concept_agreement,
+            "temporal_patch_coords": temporal_patch_coords,
+            "temporal_assignment_probs": temporal_probs,
+            "temporal_metadata": temporal_metadata,
+            "loss_temporal": None,
+            "loss_temporal_div": None,
+        }
+
     def forward(
         self,
         features: torch.Tensor,
@@ -579,11 +797,11 @@ class VisualConceptCreation(nn.Module):
         Args:
             features: [B, C, T, H, W] frozen backbone features.
             saliency_maps: optional GT saliency for training-only auxiliary losses.
-            return_losses: whether to compute visual concept auxiliary losses.
+            return_losses: whether to compute concept auxiliary losses.
             collect_gate_debug: ignored (kept for API compatibility).
 
         Returns:
-            Visual concept outputs plus legacy temporal keys set to None.
+            Visual concept outputs and optional temporal concept outputs.
         """
         del collect_gate_debug
 
@@ -597,6 +815,11 @@ class VisualConceptCreation(nn.Module):
             )
 
         visual_out = self._build_visual_concepts_from_patches(features)
+        temporal_out = (
+            self._build_temporal_concepts_from_patches(features)
+            if self.temporal_concepts_on
+            else self._empty_temporal_outputs(device=features.device)
+        )
 
         align_out: Dict[str, Any] = {
             "loss_visual_saliency_align": None,
@@ -623,19 +846,40 @@ class VisualConceptCreation(nn.Module):
             )
             loss_visual_saliency_align = align_out["loss_visual_saliency_align"]
             w = self.loss_weights
+            loss_total = (
+                w["visual"] * loss_visual
+                + w["visual_div"] * loss_visual_div
+                + self.visual_entropy_weight * entropy
+                + self.visual_usage_weight * loss_usage
+                + self.visual_saliency_align_weight * loss_visual_saliency_align
+            )
+
+            loss_temporal = temporal_out.get("loss_temporal")
+            loss_temporal_div = temporal_out.get("loss_temporal_div")
+            if (
+                self.temporal_concepts_on
+                and temporal_out["temporal_patch_embeddings"] is not None
+            ):
+                loss_temporal = self._temporal_concept_loss(
+                    temporal_out["temporal_patch_embeddings"],
+                    temporal_out["temporal_activations"],
+                )
+                loss_temporal_div = self._temporal_diversity_loss()
+                loss_total = (
+                    loss_total
+                    + w["temporal"] * loss_temporal
+                    + w["temporal_div"] * loss_temporal_div
+                )
+
             losses = {
                 "loss_visual": loss_visual,
                 "loss_visual_div": loss_visual_div,
                 "loss_visual_assignment_entropy": entropy,
                 "loss_visual_assignment_usage": loss_usage,
                 "loss_visual_saliency_align": loss_visual_saliency_align,
-                "loss_total_concept": (
-                    w["visual"] * loss_visual
-                    + w["visual_div"] * loss_visual_div
-                    + self.visual_entropy_weight * entropy
-                    + self.visual_usage_weight * loss_usage
-                    + self.visual_saliency_align_weight * loss_visual_saliency_align
-                ),
+                "loss_temporal": loss_temporal,
+                "loss_temporal_div": loss_temporal_div,
+                "loss_total_concept": loss_total,
             }
 
         return {
@@ -669,6 +913,24 @@ class VisualConceptCreation(nn.Module):
                 "visual_saliency_align_valid_frac"
             ],
             "visual_metadata": visual_out["visual_metadata"],
+            "active_temporal_prototypes": temporal_out["active_temporal_prototypes"],
+            "active_temporal_prototype_indices": temporal_out[
+                "active_temporal_prototype_indices"
+            ],
+            "temporal_validity_mask": temporal_out["temporal_validity_mask"],
+            "temporal_patch_embeddings": temporal_out["temporal_patch_embeddings"],
+            "temporal_concept_representation": temporal_out[
+                "temporal_concept_representation"
+            ],
+            "temporal_feature_concept_agreement": temporal_out[
+                "temporal_feature_concept_agreement"
+            ],
+            "temporal_activations": temporal_out["temporal_activations"],
+            "temporal_concept_logits": temporal_out["temporal_concept_logits"],
+            "temporal_concept_indices": temporal_out["temporal_concept_indices"],
+            "temporal_assignment_probs": temporal_out["temporal_assignment_probs"],
+            "temporal_patch_coords": temporal_out["temporal_patch_coords"],
+            "temporal_metadata": temporal_out["temporal_metadata"],
         }
 
     @torch.no_grad()

@@ -696,6 +696,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         priority_temperature: float = 0.1,
         use_null_prototype: bool = True,
         enable_patch_prioritization: bool = False,
+        enable_temporal_mask: bool = False,
         use_shared_concept_activations: bool = False,
         factorized_rank: int = 32,
         pos_num_frequencies: int = _POS_NUM_FREQUENCIES,
@@ -729,6 +730,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         self.priority_temperature = float(priority_temperature)
         self.use_null_prototype = bool(use_null_prototype)
         self.enable_patch_prioritization = bool(enable_patch_prioritization)
+        self.enable_temporal_mask = bool(enable_temporal_mask)
         self.use_shared_concept_activations = bool(use_shared_concept_activations)
         self.factorized_rank = int(factorized_rank)
         self.pos_num_frequencies = int(pos_num_frequencies)
@@ -825,6 +827,11 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             self.raw_strength = None
             self.raw_spatial_frequency_weights = None
             self.raw_spatial_strength = None
+
+        if self.enable_temporal_mask:
+            self.temporal_mask_proj = nn.Linear(concept_dim, 1)
+        else:
+            self.temporal_mask_proj = None
 
     @property
     def spatial_strength(self) -> torch.Tensor:
@@ -1311,6 +1318,49 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         concept_conditioned_update = self.mask_feature_branch(update_input)
         return conditional_weights, concept_context, concept_conditioned_update
 
+    def _build_temporal_mask_from_concept_out(
+        self,
+        concept_out: Dict[str, Any],
+        *,
+        batch_size: int,
+        temporal_len: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[torch.Tensor]:
+        """Project last-frame temporal concept activations into a spatial mask."""
+        if self.temporal_mask_proj is None:
+            return None
+
+        temporal_repr = concept_out.get("temporal_concept_representation")
+        temporal_metadata = concept_out.get("temporal_metadata")
+        if not torch.is_tensor(temporal_repr) or not isinstance(temporal_metadata, dict):
+            return None
+        if "feature_shape" not in temporal_metadata:
+            return None
+
+        B, _, T, H, W = _feature_shape_from_metadata(temporal_metadata)
+        if B != batch_size:
+            raise ValueError(
+                f"Temporal concept batch size {B} does not match features {batch_size}"
+            )
+        expected = B * T * H * W
+        if temporal_repr.shape[0] != expected:
+            raise ValueError(
+                "temporal_concept_representation length mismatch: "
+                f"expected {expected}, got {temporal_repr.shape[0]}"
+            )
+
+        repr_hw = temporal_repr.view(B, T, H, W, -1)
+        mask_logits = self.temporal_mask_proj(repr_hw).squeeze(-1)
+        temporal_mask_last = torch.sigmoid(mask_logits).unsqueeze(1)
+        return _scatter_last_frame_mask(
+            batch_size,
+            temporal_len,
+            temporal_mask_last,
+            device=device,
+            dtype=dtype,
+        )
+
     def _assert_required_visual_prototypes(
         self,
         visual_validity_mask: torch.Tensor,
@@ -1438,6 +1488,19 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         else:
             feature_proj = film_features
 
+        if self.enable_temporal_mask and concept_out is not None:
+            temporal_mask = self._build_temporal_mask_from_concept_out(
+                concept_out,
+                batch_size=int(feature_proj.shape[0]),
+                temporal_len=int(feature_proj.shape[2]),
+                device=feature_proj.device,
+                dtype=feature_proj.dtype,
+            )
+            if temporal_mask is not None:
+                feature_proj = feature_proj * temporal_mask
+                mask_outputs["temporal_mask"] = temporal_mask
+                mask_outputs["temporal_mask_last"] = temporal_mask[:, :, -1:]
+
         fused = feature_proj
         if prev_up is not None:
             fused = fused + self.prev_scale * prev_up
@@ -1471,6 +1534,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         temporal_aggregation: str = "learned_all_frames",
         use_side_logit_fusion: bool = True,
         use_shared_concept_activations: bool = False,
+        temporal_concepts_on: bool = False,
         assignment_temperature: float = 0.07,
         priority_temperature: float = 0.1,
         factorized_rank: int = 32,
@@ -1478,6 +1542,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
     ):
         super().__init__()
         del feature_residual_scale, tau_pi, distance_gate_range
+        self.temporal_concepts_on = bool(temporal_concepts_on)
 
         if output_activation not in ("sigmoid", "none"):
             raise ValueError("output_activation must be 'sigmoid' or 'none'")
@@ -1514,6 +1579,9 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     assignment_temperature=assignment_temperature,
                     priority_temperature=priority_temperature,
                     enable_patch_prioritization=stage in self.patch_priority_stages,
+                    enable_temporal_mask=(
+                        temporal_concepts_on and stage == "stage3"
+                    ),
                     use_shared_concept_activations=use_shared_concept_activations,
                     factorized_rank=factorized_rank,
                 )
@@ -1752,17 +1820,17 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     f"and visual_validity_mask"
                 )
 
+            pass_concept_out = (
+                self.use_shared_concept_activations
+                or (self.temporal_concepts_on and stage == "stage3")
+            )
             decoded, mask_outputs = fusion_blocks[stage](
                 features_5d,
                 concept_volume,
                 prev_decoder=prev_decoder,
                 active_visual_prototypes=active_visual_prototypes,
                 visual_validity_mask=visual_validity_mask,
-                concept_out=(
-                    stage_concept_out
-                    if self.use_shared_concept_activations
-                    else None
-                ),
+                concept_out=stage_concept_out if pass_concept_out else None,
             )
             if "patch_priority_distribution" in mask_outputs:
                 stage_patch_priority_distributions[stage] = mask_outputs[

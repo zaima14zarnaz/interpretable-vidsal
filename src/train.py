@@ -69,7 +69,7 @@ USE_AMP = True
 
 # Concept-branch switches. Set a branch to False for ablations.
 VISUAL_CONCEPT_ON = True
-TEMPORAL_CONCEPTS_ON = False
+TEMPORAL_CONCEPTS_ON = True
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
 # Last-frame patch-priority map KL at Stage 3 and Stage 4.
@@ -124,11 +124,15 @@ LOSS_LAMBDA = {
     "lambda_concept_dense": 0.0,
     "lambda_concept_kl": 0.0,
 
-    # Temporarily weaken concept regularizers until maps stop collapsing
+    # Legacy temporal-concept regularizers (unused by the new temporal branch)
     "lambda_align": 0.00,
     "lambda_sparse": 0.00,
     "lambda_div": 0.00,
     "lambda_gate": 0.0,
+
+    # Stage-3 temporal concept bank losses (enabled when TEMPORAL_CONCEPTS_ON)
+    "lambda_temporal": 0.1,
+    "lambda_temporal_div": 0.05,
 
     # Temporarily reduce visual regularizers
     "lambda_visual_entropy": 0.005,
@@ -210,7 +214,14 @@ def _effective_loss_lambda(epoch: Optional[int] = None) -> dict:
     """Disable branch-specific auxiliary losses when a branch is ablated."""
     loss_lambda = dict(LOSS_LAMBDA)
     if not TEMPORAL_CONCEPTS_ON:
-        for key in ("lambda_align", "lambda_sparse", "lambda_div", "lambda_gate"):
+        for key in (
+            "lambda_align",
+            "lambda_sparse",
+            "lambda_div",
+            "lambda_gate",
+            "lambda_temporal",
+            "lambda_temporal_div",
+        ):
             loss_lambda[key] = 0.0
     if not VISUAL_CONCEPT_ON:
         for key in (
@@ -234,6 +245,8 @@ def _return_concept_losses() -> bool:
             "lambda_sparse",
             "lambda_div",
             "lambda_gate",
+            "lambda_temporal",
+            "lambda_temporal_div",
             "lambda_visual",
             "lambda_visual_div",
             "lambda_visual_entropy",
@@ -1322,16 +1335,16 @@ def main() -> None:
             print(
                 f"Train metrics | CC: {train_metrics['CC']:.4f} | "
                 f"SIM: {train_metrics['SIM']:.4f} | "
-                f"AUC: {train_metrics['AUC']:.4f} | "
-                f"sAUC: {train_metrics['sAUC']:.4f} | "
+                # f"AUC: {train_metrics['AUC']:.4f} | "
+                # f"sAUC: {train_metrics['sAUC']:.4f} | "
                 f"NSS: {train_metrics['NSS']:.4f}"
             )
         if val_metrics is not None:
             print(
                 f"Val metrics   | CC: {val_metrics['CC']:.4f} | "
                 f"SIM: {val_metrics['SIM']:.4f} |"
-                f"AUC: {val_metrics['AUC']:.4f} | "
-                f"sAUC: {val_metrics['sAUC']:.4f} | "
+                # f"AUC: {val_metrics['AUC']:.4f} | "
+                # f"sAUC: {val_metrics['sAUC']:.4f} | "
                 f"NSS: {val_metrics['NSS']:.4f}"
             )
 
