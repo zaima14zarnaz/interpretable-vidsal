@@ -24,7 +24,11 @@ from tqdm import tqdm
 
 from pre_process.collate import video_saliency_collate_fn
 from model.losses import compute_total_loss
-from model.metrics import MetricAverager, compute_saliency_metrics
+from model.metrics import (
+    MetricAverager,
+    compute_saliency_metrics,
+    compute_saliency_metrics_excluding_empty_fixations,
+)
 from metrics import prepare_target_last_map
 from model.model import ExplainableVidSalModel
 from pre_process.dataloader import DatasetLoader
@@ -36,36 +40,42 @@ torch.backends.cudnn.allow_tf32 = True
 SHOW_PROGRESS_BAR = sys.stdout.isatty()
 
 TRAIN_DATASET_DIR = (
-    "/data/quantization/zaima/dh1k/training"
+    "/data/quantization/zaima/videosal_datasets/hollywood2/videos/training"
+    # "/data/quantization/zaima/dhf1k/train"
 )
 VAL_DATASET_DIR = ( 
-    "/data/quantization/zaima/dh1k/testing"
+    "/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing"
+    # "/data/quantization/zaima/dhf1k/val"
 )
 WINDOW_LEN = 32
 
 INITIAL_EPOCHS = 200
-FINETUNE_EPOCHS = 100
+FINETUNE_EPOCHS = 200
 RESUME_EPOCHS = 100
 BATCH_SIZE = 4  # effective optimizer batch size
 FREEZE_BACKBONE = False
 # When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
 # gradients so the optimizer still sees BATCH_SIZE samples per step.
-MICRO_BATCH_SIZE = 2
+MICRO_BATCH_SIZE = 1
 # Gradient checkpointing trades recompute for lower activation memory during backbone fine-tuning.
 BACKBONE_GRADIENT_CHECKPOINTING = True
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
 LR = 5e-5
-FINETUNE_LR = 5e-6
+FINETUNE_LR = 5e-5
 WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 4
 SEED = 42
 OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
 MAP_SAVE_INTERVAL = 1000
+VAL_EVERY_N_EPOCHS = 10
+VAL_METRICS_CSV_COLUMNS = ("Epoch_no", "Val Loss", "CC", "SIM", "NSS")
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
 MAX_SAMPLES = 500
 USE_AMP = True
+# Default GPU index when --gpu is not provided (backbone + head on same device).
+DEFAULT_GPU_ID = 1
 
 # Concept-branch switches. Set a branch to False for ablations.
 VISUAL_CONCEPT_ON = True
@@ -114,7 +124,7 @@ LOSS_LAMBDA = {
     "lambda_kl": 1.0,
     "lambda_cc": 1.0,
     "lambda_nss": 0.1,
-    "lambda_similarity": 1.0,
+    "lambda_similarity": 0.1,
 
     # Disable explicit background suppression for now
     "topk_percent": 0.000,
@@ -149,6 +159,20 @@ LOSS_LAMBDA = {
         "stage4": 0.05,
     },
 }
+
+def _resolve_devices(gpu_id: int = DEFAULT_GPU_ID) -> Tuple[torch.device, torch.device]:
+    """Place backbone and head on the same GPU."""
+    if torch.cuda.is_available():
+        if gpu_id >= torch.cuda.device_count():
+            raise ValueError(
+                f"GPU_ID={gpu_id} is unavailable; "
+                f"found {torch.cuda.device_count()} CUDA device(s)."
+            )
+        device = torch.device(f"cuda:{gpu_id}")
+        return device, device
+    device = torch.device("cpu")
+    return device, device
+
 
 def _amp_dtype(device: torch.device) -> torch.dtype:
     if device.type == "cuda" and torch.cuda.is_bf16_supported():
@@ -261,6 +285,15 @@ def _parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Path to a checkpoint file (required when --phase finetune or resume).",
+    )
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        default=DEFAULT_GPU_ID,
+        help=(
+            "CUDA device index for the full model (backbone + head). "
+            f"Default: {DEFAULT_GPU_ID}."
+        ),
     )
     args = parser.parse_args()
     if args.phase in ("finetune", "resume") and not args.checkpoint:
@@ -841,6 +874,24 @@ def _compute_batch_metrics(
         fixation_threshold=0.5,
         top_percent=None,
         allow_pseudo_fixations=False,
+        dh1k_exact=True,
+    )
+
+
+def _compute_batch_metrics_excluding_empty_fixations(
+    model_out: dict,
+    sal_batch: torch.Tensor,
+    fix_batch: torch.Tensor,
+) -> Tuple[Optional[Dict[str, torch.Tensor]], int]:
+    """Compute CC/SIM/NSS on samples with non-empty fixation maps only."""
+    return compute_saliency_metrics_excluding_empty_fixations(
+        model_out["saliency_map"],
+        sal_batch,
+        fix_batch,
+        fixation_threshold=0.5,
+        top_percent=None,
+        allow_pseudo_fixations=False,
+        dh1k_exact=True,
     )
 
 
@@ -1005,6 +1056,28 @@ def train_one_epoch(
         return mean_loss, None
 
 
+def _format_val_metrics_csv_row(
+    epoch: int,
+    val_loss: Optional[float],
+    val_metrics: Optional[Dict[str, float]],
+) -> Dict[str, object]:
+    row: Dict[str, object] = {"Epoch_no": epoch}
+    if val_loss is None or val_loss != val_loss:
+        row["Val Loss"] = "-"
+    else:
+        row["Val Loss"] = val_loss
+
+    if val_metrics is not None:
+        row["CC"] = val_metrics["CC"]
+        row["SIM"] = val_metrics["SIM"]
+        row["NSS"] = val_metrics["NSS"]
+    else:
+        row["CC"] = "-"
+        row["SIM"] = "-"
+        row["NSS"] = "-"
+    return row
+
+
 @torch.no_grad()
 def validate_one_epoch(
     model: ExplainableVidSalModel,
@@ -1012,7 +1085,7 @@ def validate_one_epoch(
     device: torch.device,
     epoch: int,
     output_dir: str,
-) -> Tuple[float, Optional[Dict[str, float]]]:
+) -> Tuple[float, Dict[str, float], None]:
     model.eval()
     running_loss = 0.0
     num_batches = 0
@@ -1075,19 +1148,27 @@ def validate_one_epoch(
         running_loss += batch_loss
         num_batches += 1
 
-        metric_dict = _compute_batch_metrics(model_out, sal_batch, fix_batch)
-        metric_averager.update(metric_dict, batch_size=rgb_batch.shape[0])
-        pbar.set_postfix(
-            loss=f"{batch_loss:.4f}",
-            CC=f"{metric_averager.mean()['CC']:.4f}",
-            SIM=f"{metric_averager.mean()['SIM']:.4f}",
-            NSS=f"{metric_averager.mean()['NSS']:.4f}",
+        metric_dict, valid_count = _compute_batch_metrics_excluding_empty_fixations(
+            model_out,
+            sal_batch,
+            fix_batch,
         )
+        if metric_dict is not None:
+            metric_averager.update(metric_dict, batch_size=valid_count)
+        running_means = metric_averager.mean()
+        postfix = {"loss": f"{batch_loss:.4f}"}
+        if metric_dict is not None:
+            postfix.update(
+                CC=f"{running_means['CC']:.4f}",
+                SIM=f"{running_means['SIM']:.4f}",
+                NSS=f"{running_means['NSS']:.4f}",
+            )
+        pbar.set_postfix(postfix)
 
         del model_out, loss_dict, rgb_batch, sal_batch, fix_batch
 
     mean_loss = running_loss / max(num_batches, 1)
-    return mean_loss, metric_averager.mean()
+    return mean_loss, metric_averager.mean(), None
 
 
 def main() -> None:
@@ -1121,17 +1202,9 @@ def main() -> None:
     last_ckpt_path = os.path.join(run_ckpt_dir, "last_checkpoint.pth")
     set_seed(SEED)
 
-    if torch.cuda.is_available():
-        backbone_device = torch.device("cuda:1")
-        head_device = torch.device(
-            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:1"
-        )
-    else:
-        backbone_device = torch.device("cpu")
-        head_device = torch.device("cpu")
-
+    backbone_device, head_device = _resolve_devices(args.gpu)
     device = head_device
-    print(f"Backbone device: {backbone_device} | Head device: {head_device}")
+    print(f"Using single device: {device} (gpu={args.gpu})")
     if is_resume:
         print(f"Training phase: {args.phase} | epochs={num_epochs} | lr/weight_decay=<from checkpoint>")
     else:
@@ -1150,8 +1223,8 @@ def main() -> None:
         f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
     )
 
-    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=1, random_train_sampling=True)
-    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=32, random_train_sampling=False)
+    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=128, random_train_sampling=True)
+    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=128, random_train_sampling=False)
 
     # g = torch.Generator().manual_seed(SEED)
     # idx = torch.randperm(len(train_dataset), generator=g)[:MAX_SAMPLES].tolist()
@@ -1178,7 +1251,7 @@ def main() -> None:
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=_dataloader_batch_size(),
+        batch_size=8, # _dataloader_batch_size(),
         shuffle=False,
         **loader_kwargs,
     )
@@ -1285,8 +1358,9 @@ def main() -> None:
     for epoch in range(1, num_epochs + 1):
         print(f"\nEpoch {epoch}/{num_epochs}")
 
-        # if epoch == 5:
-        #     break
+        val_every_n_epochs = VAL_EVERY_N_EPOCHS
+        if epoch >= 48:
+            val_every_n_epochs = 1
 
         train_loss, train_metrics = train_one_epoch(
             model,
@@ -1299,39 +1373,50 @@ def main() -> None:
             calculate_metrics=False,
             scaler=scaler,
         )
-        val_loss, val_metrics = validate_one_epoch(
-            model, val_loader, device, epoch, OUTPUT_DIR
-        )
-        # if epoch == 3:
-            # val_loss, val_metrics = validate_one_epoch(model, val_loader, device, epoch)
-        # else:
-            # val_loss, val_metrics = 0, None
+        run_validation = epoch % val_every_n_epochs == 0
+        if run_validation:
+            val_loss, val_metrics, _ = validate_one_epoch(
+                model,
+                val_loader,
+                device,
+                epoch,
+                OUTPUT_DIR,
+            )
+        else:
+            val_loss = None
+            val_metrics = None
         scheduler.step()
 
         train_losses.append(train_loss)
-        val_losses.append(val_loss)
+        val_losses.append(val_loss if val_loss is not None else float("nan"))
         train_metrics_history.append(train_metrics)
-        val_metrics_history.append(val_metrics)
+        val_metrics_history.append(
+            _format_val_metrics_csv_row(epoch, val_loss, val_metrics)
+        )
 
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch}/{num_epochs}")
         print(f"  Mean train loss: {train_loss:.6f}")
-        print(f"  Mean val loss:   {val_loss:.6f}")
+        if run_validation:
+            print(f"  Mean val loss:   {val_loss:.6f}")
+        else:
+            print(
+                f"  Validation:    skipped "
+                f"(runs every {val_every_n_epochs} epochs)"
+            )
         print(f"  Current LR:      {current_lr:.2e}")
         if train_metrics is not None:
             print(
                 f"Train metrics | CC: {train_metrics['CC']:.4f} | "
                 f"SIM: {train_metrics['SIM']:.4f} | "
-                f"AUC: {train_metrics['AUC']:.4f} | "
-                f"sAUC: {train_metrics['sAUC']:.4f} | "
+                # f"AUC: {train_metrics['AUC']:.4f} | "
+                # f"sAUC: {train_metrics['sAUC']:.4f} | "
                 f"NSS: {train_metrics['NSS']:.4f}"
             )
         if val_metrics is not None:
             print(
                 f"Val metrics   | CC: {val_metrics['CC']:.4f} | "
-                f"SIM: {val_metrics['SIM']:.4f} |"
-                f"AUC: {val_metrics['AUC']:.4f} | "
-                f"sAUC: {val_metrics['sAUC']:.4f} | "
+                f"SIM: {val_metrics['SIM']:.4f} | "
                 f"NSS: {val_metrics['NSS']:.4f}"
             )
 
@@ -1352,14 +1437,19 @@ def main() -> None:
         torch.save(checkpoint, last_ckpt_path)
         print(f"  Saved checkpoint: {epoch_ckpt_path}")
 
-        if val_loss < best_val_loss:
+        if run_validation and val_loss is not None and val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(checkpoint, best_ckpt_path)
             print(f"  New best val loss: {best_val_loss:.6f} (saved {best_ckpt_path})")
         
-        # Write code to save the val metrics to a csv file
-        val_metrics_df = pd.DataFrame(val_metrics_history)
-        val_metrics_df.to_csv(os.path.join(OUTPUT_DIR, "val_metrics.csv"), index=False)
+        val_metrics_df = pd.DataFrame(
+            val_metrics_history,
+            columns=list(VAL_METRICS_CSV_COLUMNS),
+        )
+        val_metrics_df.to_csv(
+            os.path.join(OUTPUT_DIR, "val_metrics_hw2.csv"),
+            index=False,
+        )
 
     print(f"\nTraining complete. Outputs saved to {OUTPUT_DIR}/")
     print(f"Run checkpoints: {run_ckpt_dir}")

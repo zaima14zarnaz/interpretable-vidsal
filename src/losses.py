@@ -405,6 +405,41 @@ def spatial_nss_loss(
     return -nss
 
 
+def spatial_similarity_loss(
+    pred: torch.Tensor,
+    saliency_maps: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    SIM loss for dense saliency maps.
+
+    Uses TMFI-Net-style histogram intersection: min-max normalize prediction
+    and target, sum-normalize both maps, then compute sum(min(p, t)).
+    Returns ``1 - SIM`` so minimizing this maximizes similarity.
+    """
+    if pred.dim() != 4 or pred.shape[1] != 1:
+        raise ValueError(f"pred must be [B,1,H,W], got {tuple(pred.shape)}")
+
+    target_h, target_w = int(pred.shape[-2]), int(pred.shape[-1])
+    target = prepare_last_saliency_map(saliency_maps, target_h, target_w)
+    if target.shape != pred.shape:
+        raise ValueError(
+            f"pred and target must have the same shape, got "
+            f"{tuple(pred.shape)} and {tuple(target.shape)}"
+        )
+
+    pred_norm = minmax_per_sample(pred)
+    target_norm = minmax_per_sample(target)
+
+    pred_flat = pred_norm.reshape(pred.shape[0], -1)
+    target_flat = target_norm.reshape(target.shape[0], -1)
+    pred_prob = pred_flat / pred_flat.sum(dim=1, keepdim=True).clamp(min=eps)
+    target_prob = target_flat / target_flat.sum(dim=1, keepdim=True).clamp(min=eps)
+
+    sim = torch.minimum(pred_prob, target_prob).sum(dim=1).mean()
+    return 1.0 - sim
+
+
 def compute_dense_metric_losses(
     prediction_out: Dict[str, Any],
     saliency_maps: torch.Tensor,
@@ -416,7 +451,7 @@ def compute_dense_metric_losses(
     """
     Optional dense saliency metric losses.
 
-    CC uses smoothed saliency_maps.
+    CC and SIM use smoothed saliency_maps.
     NSS uses binary fixation_maps.
     """
     pred_dense = _resolve_final_saliency_map(prediction_out)
@@ -1301,6 +1336,7 @@ def compute_total_loss(
         fixation_maps=fixation_maps,
         lambda_cc=lambda_cc,
         lambda_nss=lambda_nss,
+        lambda_similarity=lambda_similarity,
     )
 
     loss_cc = metric_out["loss_cc"]
@@ -1429,6 +1465,7 @@ def compute_total_loss(
         "loss_delta": fid_out["loss_delta"],
         "loss_cc": loss_cc,
         "loss_nss": loss_nss,
+        "loss_sim": loss_similarity,
         "loss_concept_dense": loss_concept_dense,
         "loss_concept_kl": loss_concept_kl,
         "loss_align": loss_align,

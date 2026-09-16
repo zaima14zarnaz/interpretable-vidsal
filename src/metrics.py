@@ -3,13 +3,14 @@ Evaluation metrics for video saliency prediction (last-frame GT).
 
 CC and SIM use continuous saliency density maps.
 NSS, AUC, and sAUC use binary fixation maps.
+AUC follows DHF1K ``code_for_Metrics/AUC_Judd.m``.
 Pseudo-fixation fallback from density maps is debug-only and must be
 explicitly enabled via ``allow_pseudo_fixations=True``.
 
 OpenCV is used for TMFI-Net-compatible prediction resizing and post-blur.
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -339,18 +340,130 @@ def _zscore_per_sample(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return ((flat - mean) / std).view_as(x)
 
 
+def _prepare_dh1k_map_bhw(x: torch.Tensor) -> torch.Tensor:
+    """Layout ``[B, H, W]`` with MATLAB ``im2double``-style scaling."""
+    x = _to_float_tensor_no_autoscale(x)
+    if x.dim() == 3:
+        pass
+    elif x.dim() == 4:
+        if x.shape[1] == 1:
+            x = x[:, 0]
+        else:
+            x = x[:, -1]
+    elif x.dim() == 5:
+        if x.shape[1] == 1:
+            x = x[:, 0, -1]
+        elif x.shape[2] == 1:
+            x = x[:, -1, 0]
+        else:
+            raise ValueError(
+                f"Unsupported 5D target shape {tuple(x.shape)}; "
+                "expected [B,1,T,H,W] or [B,T,1,H,W]"
+            )
+    else:
+        raise ValueError(f"map must be 3D–5D, got shape {tuple(x.shape)}")
+
+    if x.numel() > 0 and float(x.max()) > 1.0:
+        x = x / 255.0
+    return x
+
+
+def _dh1k_resize_pred_bhw(
+    pred_bhw: torch.Tensor,
+    target_h: int,
+    target_w: int,
+) -> torch.Tensor:
+    """Resize prediction to GT size without post-blur (DHF1K ``imresize`` path)."""
+    device = pred_bhw.device
+    dtype = pred_bhw.dtype
+    resized_preds = []
+    for batch_idx in range(pred_bhw.shape[0]):
+        pred_np = pred_bhw[batch_idx].detach().cpu().numpy()
+        if pred_np.shape != (target_h, target_w):
+            pred_np = cv2.resize(pred_np, (target_w, target_h))
+        resized_preds.append(torch.from_numpy(pred_np))
+    return torch.stack(resized_preds, dim=0).to(device=device, dtype=dtype)
+
+
+def _dh1k_cc_batch(pred_bhw: torch.Tensor, gt_bhw: torch.Tensor) -> torch.Tensor:
+    """
+    CC matching DHF1K ``code_for_Metrics/CC.m``:
+    imresize(pred), im2double both maps, z-score with MATLAB ``std``, ``corr2``.
+    """
+    B = pred_bhw.shape[0]
+    pred_f = pred_bhw.reshape(B, -1)
+    gt_f = gt_bhw.reshape(B, -1)
+
+    pred_mean = pred_f.mean(dim=1, keepdim=True)
+    gt_mean = gt_f.mean(dim=1, keepdim=True)
+
+    # MATLAB std() uses N-1 normalization (sample std).
+    pred_std = pred_f.std(dim=1, unbiased=True, keepdim=True)
+    gt_std = gt_f.std(dim=1, unbiased=True, keepdim=True)
+
+    pred_z = (pred_f - pred_mean) / pred_std
+    gt_z = (gt_f - gt_mean) / gt_std
+
+    ab = (gt_z * pred_z).sum(dim=1)
+    aa = (pred_z * pred_z).sum(dim=1)
+    bb = (gt_z * gt_z).sum(dim=1)
+    return ab / torch.sqrt(aa * bb)
+
+
+def _dh1k_normalize_similarity_map(single_map: torch.Tensor) -> torch.Tensor:
+    """Min-max and sum-normalize one map, skipping all-zero maps like ``similarity.m``."""
+    out = single_map
+    if out.numel() > 0 and bool(out.any().item()):
+        out = (out - out.min()) / (out.max() - out.min())
+        out = out / out.sum()
+    return out
+
+
+def _dh1k_similarity_pair(pred_map: torch.Tensor, gt_map: torch.Tensor) -> torch.Tensor:
+    """Histogram intersection for one pair (DHF1K ``similarity.m``)."""
+    map1 = _dh1k_normalize_similarity_map(pred_map)
+    map2 = _dh1k_normalize_similarity_map(gt_map)
+
+    if torch.isnan(map1).all() or torch.isnan(map2).all():
+        return pred_map.new_tensor(float("nan"))
+    return torch.min(map1, map2).sum()
+
+
+def _dh1k_similarity_batch(pred_bhw: torch.Tensor, gt_bhw: torch.Tensor) -> torch.Tensor:
+    scores = [
+        _dh1k_similarity_pair(pred_bhw[i], gt_bhw[i])
+        for i in range(pred_bhw.shape[0])
+    ]
+    return torch.stack(scores).mean()
+
+
 def cc_score(
     pred: torch.Tensor,
     target_density: torch.Tensor,
     eps: float = 1e-8,
+    dh1k_exact: bool = False,
 ) -> torch.Tensor:
     """
-    TMFI-Net-style CC.
+    Pearson CC between predicted and GT saliency density maps.
 
-    Uses continuous saliency density maps.
-    Prediction is resized/blurred to the target size via ``resize_pred_to_target``.
-    Both maps are z-scored per sample with population std, then correlation is computed.
+    Default (``dh1k_exact=False``): TMFI-Net-style CC with OpenCV resize, Gaussian
+    blur on predictions, and population std.
+
+    With ``dh1k_exact=True``: matches DHF1K ``code_for_Metrics/CC.m`` — resize
+    prediction to GT size without blur, ``im2double`` scaling, MATLAB ``std``,
+    and ``corr2``-equivalent correlation.
     """
+    if dh1k_exact:
+        gt = _prepare_dh1k_map_bhw(target_density)
+        pred_bhw = _prepare_dh1k_map_bhw(pred)
+        if pred_bhw.shape[0] != gt.shape[0]:
+            raise ValueError(
+                f"Batch mismatch: pred B={pred_bhw.shape[0]}, target B={gt.shape[0]}"
+            )
+        target_h, target_w = int(gt.shape[-2]), int(gt.shape[-1])
+        pred_bhw = _dh1k_resize_pred_bhw(pred_bhw, target_h, target_w)
+        return _dh1k_cc_batch(pred_bhw, gt).mean()
+
     pred, target = resize_pred_to_target(pred, target_density)
 
     B = pred.shape[0]
@@ -380,15 +493,30 @@ def sim_score(
     pred: torch.Tensor,
     target_density: torch.Tensor,
     eps: float = 1e-8,
+    dh1k_exact: bool = False,
 ) -> torch.Tensor:
     """
-    TMFI-Net ``loss.similarity`` (MIT/ViNet histogram intersection).
+    Histogram-intersection similarity between predicted and GT density maps.
 
-    Prediction is resized/blurred to the GT size with OpenCV, then both maps are
-    min-max normalized, sum-normalized, and compared with histogram intersection.
-    Ground truth uses TMFI dataloader scaling: ``/255`` only when ``max > 1``.
+    Default (``dh1k_exact=False``): TMFI-Net path with OpenCV resize, Gaussian
+    blur on predictions, and batch-averaged histogram intersection.
+
+    With ``dh1k_exact=True``: matches DHF1K ``code_for_Metrics/similarity.m`` —
+    resize without blur, ``im2double`` scaling, min-max + sum normalization with
+    all-zero map skipping, and ``sum(min(map1, map2))``.
     """
     del eps
+
+    if dh1k_exact:
+        gt = _prepare_dh1k_map_bhw(target_density)
+        pred_bhw = _prepare_dh1k_map_bhw(pred)
+        if pred_bhw.shape[0] != gt.shape[0]:
+            raise ValueError(
+                f"Batch mismatch: pred B={pred_bhw.shape[0]}, target B={gt.shape[0]}"
+            )
+        target_h, target_w = int(gt.shape[-2]), int(gt.shape[-1])
+        pred_bhw = _dh1k_resize_pred_bhw(pred_bhw, target_h, target_w)
+        return _dh1k_similarity_batch(pred_bhw, gt)
 
     gt = _prepare_tmfi_gt_density_bhw(target_density)
     pred_bhw = _prepare_tmfi_pred_bhw(pred)
@@ -471,59 +599,64 @@ def nss_score(
     return torch.stack(scores).mean()
 
 
-def _evenly_subsample(x: torch.Tensor, max_count: int) -> torch.Tensor:
-    """Deterministic subsample (evenly spaced indices)."""
-    n = x.numel()
-    if n <= max_count:
-        return x.reshape(-1)
-    idx = torch.linspace(0, n - 1, steps=max_count, device=x.device).long()
-    return x.reshape(-1)[idx]
-
-
-def _rank_auc(
-    pos_scores: torch.Tensor,
-    neg_scores: torch.Tensor,
-    max_count: int = 4096,
+def _dh1k_auc_judd_single(
+    saliency_hw: torch.Tensor,
+    fixation_hw: torch.Tensor,
+    jitter: bool = True,
 ) -> torch.Tensor:
     """
-    Deterministic rank-based AUC with tie handling.
+    Single-sample AUC-Judd matching DHF1K ``code_for_Metrics/AUC_Judd.m``.
 
-    AUC = probability that a positive score is greater than a negative score.
-    Ranks are computed in ascending order so higher scores receive larger ranks.
-
-    AUC = (sum_pos_ranks - n_pos*(n_pos+1)/2) / (n_pos*n_neg), ranks 1-indexed.
+    Builds an ROC by sweeping thresholds equal to saliency values at fixation
+    locations and returns ``trapz(fp, tp)``.
     """
-    if pos_scores.numel() == 0 or neg_scores.numel() == 0:
-        return pos_scores.new_zeros(())
+    fixation_bool = fixation_hw.reshape(-1) > 0
+    if not fixation_bool.any():
+        return saliency_hw.new_tensor(float("nan"))
 
-    pos = _evenly_subsample(pos_scores, max_count)
-    neg = _evenly_subsample(neg_scores, max_count)
-    n_pos = pos.numel()
-    n_neg = neg.numel()
+    saliency = saliency_hw.reshape(-1).float()
+    if jitter:
+        saliency = saliency + torch.rand_like(saliency) / 1e7
 
-    all_scores = torch.cat([pos, neg])
-    is_pos = torch.zeros(all_scores.numel(), dtype=torch.bool, device=all_scores.device)
-    is_pos[:n_pos] = True
+    smin = saliency.min()
+    smax = saliency.max()
+    denom = smax - smin
+    if denom.item() == 0.0 or bool(torch.isnan(saliency).all().item()):
+        return saliency_hw.new_tensor(float("nan"))
 
-    order = torch.argsort(all_scores, descending=False)
-    sorted_scores = all_scores[order]
-    ranks = torch.empty_like(all_scores, dtype=torch.float32)
+    saliency = (saliency - smin) / denom
+    if bool(torch.isnan(saliency).all().item()):
+        return saliency_hw.new_tensor(float("nan"))
 
-    rank = 1
-    i = 0
-    n = all_scores.numel()
-    while i < n:
-        j = i
-        while j + 1 < n and sorted_scores[j + 1] == sorted_scores[i]:
-            j += 1
-        avg_rank = (rank + rank + (j - i)) / 2.0
-        ranks[order[i : j + 1]] = avg_rank
-        rank += j - i + 1
-        i = j + 1
+    fixation_values = saliency[fixation_bool]
+    n_fixations = int(fixation_values.numel())
+    n_pixels = int(saliency.numel())
+    n_non_fixations = n_pixels - n_fixations
+    if n_non_fixations <= 0:
+        return saliency_hw.new_tensor(float("nan"))
 
-    sum_pos_ranks = ranks[is_pos].sum()
-    auc = (sum_pos_ranks - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
-    return auc.clamp(0.0, 1.0)
+    thresholds, _ = torch.sort(fixation_values, descending=True)
+
+    tp = torch.zeros(n_fixations + 2, dtype=torch.float64, device=saliency.device)
+    fp = torch.zeros(n_fixations + 2, dtype=torch.float64, device=saliency.device)
+    tp[0] = 0.0
+    tp[-1] = 1.0
+    fp[0] = 0.0
+    fp[-1] = 1.0
+
+    for idx in range(n_fixations):
+        thresh = thresholds[idx]
+        above_thresh = int((saliency >= thresh).sum().item())
+        tp[idx + 1] = float(idx + 1) / n_fixations
+        fp[idx + 1] = float(above_thresh - (idx + 1)) / n_non_fixations
+
+    score = float(
+        np.trapz(
+            tp.detach().cpu().numpy(),
+            fp.detach().cpu().numpy(),
+        )
+    )
+    return saliency_hw.new_tensor(score)
 
 
 def auc_judd_score(
@@ -532,25 +665,35 @@ def auc_judd_score(
     fixation_threshold: float = 0.5,
     top_percent: Optional[float] = None,
     eps: float = 1e-8,
+    jitter: bool = True,
 ) -> torch.Tensor:
-    pred = prepare_prediction_map(pred)
-    fixation_map = prepare_target_last_map(fixation_map)
-    pred, fixation_map = resize_to_match(pred, fixation_map)
-    pred = normalize_minmax(pred, eps)
+    """
+    AUC-Judd matching DHF1K ``code_for_Metrics/AUC_Judd.m``.
 
-    fix = make_fixation_binary(
-        fixation_map, fixation_threshold, top_percent, eps
-    )
+    Resizes the prediction to the fixation-map size (no blur), optionally
+    jitters saliency values, min-max normalizes, sweeps fixation-derived
+    thresholds, and returns ``trapz(fp, tp)``.
 
-    B = pred.shape[0]
-    aucs = []
-    for i in range(B):
-        p = pred[i, 0].reshape(-1)
-        f = fix[i, 0].reshape(-1)
-        pos = p[f]
-        neg = p[~f]
-        aucs.append(_rank_auc(pos, neg))
-    return torch.stack(aucs).mean()
+    ``fixation_threshold`` and ``top_percent`` are kept for API compatibility
+    but ignored; fixations are taken wherever ``fixation_map > 0``.
+    """
+    del fixation_threshold, top_percent, eps
+
+    pred_bhw = _prepare_dh1k_map_bhw(pred)
+    fix_bhw = _prepare_dh1k_map_bhw(fixation_map)
+    if pred_bhw.shape[0] != fix_bhw.shape[0]:
+        raise ValueError(
+            f"Batch mismatch: pred B={pred_bhw.shape[0]}, fixation B={fix_bhw.shape[0]}"
+        )
+
+    target_h, target_w = int(fix_bhw.shape[-2]), int(fix_bhw.shape[-1])
+    pred_bhw = _dh1k_resize_pred_bhw(pred_bhw, target_h, target_w)
+
+    aucs = [
+        _dh1k_auc_judd_single(pred_bhw[i], fix_bhw[i], jitter=jitter)
+        for i in range(pred_bhw.shape[0])
+    ]
+    return torch.stack(aucs).nanmean()
 
 
 def sauc_score(
@@ -692,6 +835,39 @@ def sauc_score(
     return torch.stack(valid_aucs).mean()
 
 
+def nonempty_fixation_mask(fixation_map: torch.Tensor) -> torch.Tensor:
+    """Return a [B] mask that is True when a sample has at least one fixation pixel."""
+    fix = prepare_target_last_map(fixation_map)
+    return fix.reshape(fix.shape[0], -1).sum(dim=1) > 0
+
+
+def compute_saliency_metrics_excluding_empty_fixations(
+    pred: torch.Tensor,
+    target_density: torch.Tensor,
+    fixation_target: torch.Tensor,
+    **metric_kwargs: Any,
+) -> Tuple[Optional[Dict[str, torch.Tensor]], int]:
+    """
+    Compute saliency metrics only for samples with non-empty fixation maps.
+
+    Samples with empty fixation maps are omitted entirely from the returned
+    batch mean (they are not counted as zero). Returns ``(metrics, valid_count)``;
+    ``metrics`` is ``None`` when no valid samples exist in the batch.
+    """
+    valid = nonempty_fixation_mask(fixation_target)
+    valid_count = int(valid.sum().item())
+    if valid_count == 0:
+        return None, 0
+
+    metrics = compute_saliency_metrics(
+        pred[valid],
+        target_density[valid],
+        fixation_target=fixation_target[valid],
+        **metric_kwargs,
+    )
+    return metrics, valid_count
+
+
 def compute_saliency_metrics(
     pred: torch.Tensor,
     target_density: torch.Tensor,
@@ -700,6 +876,7 @@ def compute_saliency_metrics(
     top_percent: Optional[float] = None,
     allow_pseudo_fixations: bool = False,
     sauc_other_map: Optional[torch.Tensor] = None,
+    dh1k_exact: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """
     Compute saliency metrics.
@@ -709,29 +886,33 @@ def compute_saliency_metrics(
     NSS, AUC, and sAUC should use true binary fixation maps.
     If fixation_target is missing, these metrics are returned as NaN unless
     allow_pseudo_fixations=True.
+
+    Set ``dh1k_exact=True`` to evaluate CC/SIM with DHF1K MATLAB-compatible
+    preprocessing (no prediction blur). AUC always follows
+    ``code_for_Metrics/AUC_Judd.m``.
     """
     out = {
-        "CC": cc_score(pred, target_density),
-        "SIM": sim_score(pred, target_density),
+        "CC": cc_score(pred, target_density, dh1k_exact=dh1k_exact),
+        "SIM": sim_score(pred, target_density, dh1k_exact=dh1k_exact),
     }
 
     if fixation_target is not None:
         fix_map = prepare_target_last_map(fixation_target)
         fix_map = (fix_map > 0).float()
 
-        out["AUC"] = auc_judd_score(
-            pred,
-            fix_map,
-            fixation_threshold=0.5,
-            top_percent=None,
-        )
-        out["sAUC"] = sauc_score(
-            pred,
-            fix_map,
-            fixation_threshold=0.5,
-            top_percent=None,
-            other_map=sauc_other_map,
-        )
+        # out["AUC"] = auc_judd_score(
+        #     pred,
+        #     fix_map,
+        #     fixation_threshold=0.5,
+        #     top_percent=None,
+        # )
+        # out["sAUC"] = sauc_score(
+        #     pred,
+        #     fix_map,
+        #     fixation_threshold=0.5,
+        #     top_percent=None,
+        #     other_map=sauc_other_map,
+        # )
         out["NSS"] = nss_score(pred, fix_map)
         return out
 
@@ -751,19 +932,19 @@ def compute_saliency_metrics(
         top_percent=top_percent,
     ).float()
 
-    out["AUC"] = auc_judd_score(
-        pred,
-        pseudo_fix,
-        fixation_threshold=0.5,
-        top_percent=None,
-    )
-    out["sAUC"] = sauc_score(
-        pred,
-        pseudo_fix,
-        fixation_threshold=0.5,
-        top_percent=None,
-        other_map=sauc_other_map,
-    )
+    # out["AUC"] = auc_judd_score(
+    #     pred,
+    #     pseudo_fix,
+    #     fixation_threshold=0.5,
+    #     top_percent=None,
+    # )
+    # out["sAUC"] = sauc_score(
+    #     pred,
+    #     pseudo_fix,
+    #     fixation_threshold=0.5,
+    #     top_percent=None,
+    #     other_map=sauc_other_map,
+    # )
     out["NSS"] = nss_score(pred, pseudo_fix)
     return out
 
@@ -771,8 +952,8 @@ def compute_saliency_metrics(
 class MetricAverager:
     """Running average of saliency metrics over evaluation batches."""
 
-    METRIC_KEYS = ("CC", "SIM", "AUC", "sAUC", "NSS")
-    # METRIC_KEYS = ("CC", "SIM", "NSS")
+    # METRIC_KEYS = ("CC", "SIM", "AUC", "sAUC", "NSS")
+    METRIC_KEYS = ("CC", "SIM", "NSS")
 
     def __init__(self) -> None:
         self.reset()

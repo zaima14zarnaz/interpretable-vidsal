@@ -1,0 +1,170 @@
+Traceback (most recent call last):
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 29, in <module>
+    from model.model import ExplainableVidSalModel
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/model/model.py", line 15, in <module>
+    from model.backbones.video_swin_custom import VideoSwinTransformer
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/model/backbones/video_swin_custom.py", line 15, in <module>
+    from .video_swin_hsfi import SwinTransformer3D
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/model/backbones/video_swin_hsfi.py", line 6, in <module>
+    from timm.models.layers import DropPath, trunc_normal_
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/__init__.py", line 2, in <module>
+    from .layers import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/layers/__init__.py", line 1, in <module>
+    from ._fx import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/layers/_fx.py", line 8, in <module>
+    from torchvision.models.feature_extraction import create_feature_extractor as _create_feature_extractor
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torchvision/__init__.py", line 8, in <module>
+    from torchvision import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torchvision/models/__init__.py", line 2, in <module>
+    from .convnext import *
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torchvision/models/convnext.py", line 9, in <module>
+    from ..ops.misc import Conv2dNormActivation, Permute
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torchvision/ops/__init__.py", line 23, in <module>
+    from .poolers import MultiScaleRoIAlign
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torchvision/ops/poolers.py", line 10, in <module>
+    from .roi_align import roi_align
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torchvision/ops/roi_align.py", line 7, in <module>
+    from torch._dynamo.utils import is_compile_supported
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/__init__.py", line 13, in <module>
+    from . import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/aot_compile.py", line 17, in <module>
+    from torch._dynamo.convert_frame import GraphRuntimeEnv
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py", line 62, in <module>
+    from torch._dynamo.symbolic_convert import TensorifyState
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py", line 60, in <module>
+    from . import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/trace_rules.py", line 60, in <module>
+    from .variables import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/variables/__init__.py", line 19, in <module>
+    from .base import VariableTracker
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/variables/base.py", line 1203, in <module>
+    from . import builder
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/variables/builder.py", line 113, in <module>
+    from ..side_effects import SideEffects
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/side_effects.py", line 38, in <module>
+    from torch._dynamo.variables.misc import AutogradFunctionContextVariable
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/variables/misc.py", line 40, in <module>
+    from torch._dynamo.variables.lists import TupleVariable
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/variables/lists.py", line 50, in <module>
+    from .functions import UserFunctionVariable
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/variables/functions.py", line 94, in <module>
+    from torch.distributed.fsdp._fully_shard import _fsdp_param_group
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/distributed/fsdp/__init__.py", line 13, in <module>
+    from .fully_sharded_data_parallel import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/distributed/fsdp/fully_sharded_data_parallel.py", line 32, in <module>
+    from torch.distributed.fsdp._init_utils import (
+  File "/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/distributed/fsdp/_init_utils.py", line 46, in <module>
+    from torch.distributed.tensor.parallel.fsdp import DTensorExtensions
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 879, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 975, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1074, in get_data
+KeyboardInterrupt
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 1263
+    batch_size= 8 # _dataloader_batch_size(),
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/functional.py:505: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4382.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+Using single device: cuda:1 (gpu=1)
+Training phase: finetune | epochs=200 | lr=5.0e-05 | weight_decay=1.0e-04
+Checkpoint: /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth
+Run checkpoints will be saved to: training_outputs/ckpts/20260915_192624
+Concept branches | visual_concept_on=True | temporal_concepts_on=False | priority_map_loss_weight=0.1 | visual_concept_logit_scale=1.0
+Train: 823 windows (/data/quantization/zaima/videosal_datasets/hollywood2/videos/training) | Val: 4045 windows (/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing) | window_len=32
+load model from: /data/quantization/zaima/videoswin/swin_small_patch244_window877_kinetics400_1k.pth
+Loaded model weights from checkpoint: /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth
+Backbone fine-tuning enabled | effective_batch_size=4 | micro_batch_size=2 | grad_accum_steps=2 | gradient_checkpointing=True | visual_equiv=off
+Optimizer | lr=5.0e-05 | weight_decay=1.0e-04 | scheduler T_max=200 eta_min=1.0e-07
+
+Epoch 1/200
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py:1298: UserWarning: torch.utils.checkpoint: the use_reentrant parameter should be passed explicitly. Starting in PyTorch 2.9, calling checkpoint without use_reentrant will raise an exception. use_reentrant=False is recommended, but if you need to preserve the current default behavior, you can pass use_reentrant=True. Refer to docs for more details on the differences between the two variants.
+  return fn(*args, **kwargs)
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9219 max=29.2500 mean=-3.2881 std=2.7310
+sal_batch: shape=(2, 1, 288, 656) min=0.0000 max=1.0000 mean=0.0248 std=0.1009
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0212/0.0000/38.4689 | patch_priority_alpha=0.1006
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9567/0.0000/25.8501 | patch_priority_alpha=0.0998
+DEBUG factorized comparison [stage3] | query_norm_mean=0.7112 | key_norm_mean=0.5201 | context_mean=0.0000 | context_std=0.0504 | context_min=-0.1187 | context_max=0.1455 | total_candidate_weight=336.0000 | spatial_strength=0.0993 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6941 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.5547 | key_norm_mean=0.5041 | context_mean=-0.0000 | context_std=0.0318 | context_min=-0.0666 | context_max=0.0900 | total_candidate_weight=84.0000 | spatial_strength=0.0995 | spatial_freq_entropy=2.7724 | spatial_freq_weight_mean=0.6978 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.021228 | min=0.000000 | max=38.468872 | alpha=0.100578
+patch-priority map [stage4] | mean=0.062500 | std=0.956744 | min=0.000000 | max=25.850094 | alpha=0.099785
+DEBUG visual concept usage [stage1] top 10:
+  concept 343: 121 patches (1.13%)
+  concept 308: 118 patches (1.10%)
+  concept 65: 117 patches (1.09%)
+  concept 105: 110 patches (1.02%)
+  concept 37: 104 patches (0.97%)
+  concept 410: 96 patches (0.89%)
+  concept 4: 88 patches (0.82%)
+  concept 357: 88 patches (0.82%)
+  concept 117: 82 patches (0.76%)
+  concept 9: 81 patches (0.75%)
+  normalized usage entropy: 0.8590
+DEBUG visual concept usage [stage2] top 10:
+  concept 259: 1133 patches (42.15%)
+  concept 394: 553 patches (20.57%)
+  concept 414: 307 patches (11.42%)
+  concept 276: 229 patches (8.52%)
+  concept 363: 227 patches (8.44%)
+  concept 327: 165 patches (6.14%)
+  concept 289: 74 patches (2.75%)
+  normalized usage entropy: 0.7945
+DEBUG visual concept usage [stage3] top 10:
+  concept 462: 183 patches (27.23%)
+  concept 78: 110 patches (16.37%)
+  concept 204: 88 patches (13.10%)
+  concept 383: 62 patches (9.23%)
+  concept 65: 52 patches (7.74%)
+  concept 102: 33 patches (4.91%)
+  concept 258: 25 patches (3.72%)
+  concept 122: 23 patches (3.42%)
+  concept 505: 21 patches (3.12%)
+  concept 5: 18 patches (2.68%)
+  normalized usage entropy: 0.7721
+DEBUG visual concept usage [stage4] top 10:
+  concept 133: 24 patches (14.29%)
+  concept 351: 16 patches (9.52%)
+  concept 37: 15 patches (8.93%)
+  concept 105: 14 patches (8.33%)
+  concept 55: 13 patches (7.74%)
+  concept 39: 8 patches (4.76%)
+  concept 53: 7 patches (4.17%)
+  concept 130: 7 patches (4.17%)
+  concept 117: 6 patches (3.57%)
+  concept 148: 6 patches (3.57%)
+  normalized usage entropy: 0.7333
+DEBUG pred min/max/mean/std: -3.921875 29.25 -3.28125 2.734375
+DEBUG target min/max/mean/std: 0.0 1.0 0.02484496682882309 0.10092771798372269
+DEBUG fixation pixels per sample: [4.0, 5.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 2.381859849265311e-05 0.0048803784884512424
+DEBUG losses: {'loss_total': -0.3670206665992737, 'loss_fid': 24.186227798461914, 'loss_patch_fid': 3.4991843700408936, 'loss_dense_fid': 3.9063844680786133, 'loss_dense_bce': -0.0, 'loss_dense_kl': 16.780658721923828, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.15296447277069092, 'loss_nss': -4.789658546447754, 'loss_sim': -0.0, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5596160888671875, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.2102855145931244, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.04202169179916382, 'loss_decoder_side_aux': -0.16182340681552887, 'loss_priority_map': 0.5495579242706299, 'loss_priority_map_weighted': 0.05495579168200493, 'priority_map_loss': 0.5495579242706299, 'weighted_priority_map_loss': 0.05495579168200493, 'loss_priority_map_stage3': 0.6009727716445923, 'loss_priority_map_stage4': 0.49814310669898987, 'loss_side_stage4': -0.3054851293563843, 'loss_side_stage3': -0.3316628336906433, 'loss_side_stage2': -0.32710713148117065, 'loss_side_stage1': -0.32158395648002625}
+Traceback (most recent call last):
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 1520, in <module>
+    main()
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 1373, in main
+    train_loss, train_metrics = train_one_epoch(
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 992, in train_one_epoch
+    loss_dict = _compute_batch_loss(
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 577, in _compute_batch_loss
+    return compute_total_loss(
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/losses.py", line 1320, in compute_total_loss
+    fid_out = compute_fidelity_loss(
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/losses.py", line 600, in compute_fidelity_loss
+    target_patch_grid = prepare_patch_target_from_last_frame(
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/losses.py", line 122, in prepare_patch_target_from_last_frame
+    return prepare_last_saliency_map(saliency_maps, target_h, target_w)
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/losses.py", line 90, in prepare_last_saliency_map
+    x = prepare_saliency_sequence(saliency_maps)
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/losses.py", line 37, in prepare_saliency_sequence
+    x = _to_float_tensor(saliency_maps)
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/losses.py", line 23, in _to_float_tensor
+    if x.numel() > 0 and x.max() > 2.0:
+KeyboardInterrupt

@@ -34,9 +34,9 @@ torch.backends.cudnn.allow_tf32 = True
 # Edit these directly (no argparse).
 # ---------------------------------------------------------------------------
 CHECKPOINT_PATH = (
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260910_031402/epoch_179.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260915_204758/epoch_047.pth"
 )
-VAL_DATASET_DIR = train_cfg.VAL_DATASET_DIR
+VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing"
 WINDOW_LEN = train_cfg.WINDOW_LEN
 BATCH_SIZE = train_cfg._dataloader_batch_size()
 NUM_WORKERS = train_cfg.NUM_WORKERS
@@ -51,7 +51,7 @@ def _resolve_devices() -> Tuple[torch.device, torch.device]:
     if torch.cuda.is_available():
         backbone_device = torch.device("cuda:0")
         head_device = torch.device(
-            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:0"
+            "cuda:0" if torch.cuda.device_count() > 1 else "cuda:0"
         )
     else:
         backbone_device = torch.device("cpu")
@@ -177,11 +177,12 @@ def evaluate_checkpoint(
         f"window_len={WINDOW_LEN} | batch_size={BATCH_SIZE}"
     )
 
-    # Reuse the validation loop from train.py.
+    # Reuse train.py validation: CC/SIM/NSS with empty fixation maps excluded
+    # from metric averaging (sum / valid_count, not sum / batch_size).
     original_map_interval = train_cfg.MAP_SAVE_INTERVAL
     train_cfg.MAP_SAVE_INTERVAL = MAP_SAVE_INTERVAL
     try:
-        val_loss, val_metrics = train_cfg.validate_one_epoch(
+        val_loss, val_metrics, _ = train_cfg.validate_one_epoch(
             model,
             val_loader,
             device,

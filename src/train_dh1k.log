@@ -1,0 +1,85 @@
+nohup: ignoring input
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/functional.py:505: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4382.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+Using single device: cuda:0 (gpu=0)
+Training phase: initial | epochs=200 | lr=5.0e-05 | weight_decay=1.0e-04
+Run checkpoints will be saved to: training_outputs/ckpts/20260915_173004
+Concept branches | visual_concept_on=True | temporal_concepts_on=False | priority_map_loss_weight=0.1 | visual_concept_logit_scale=1.0
+Train: 600 windows (/data/quantization/zaima/dhf1k/train) | Val: 1834 windows (/data/quantization/zaima/dhf1k/val) | window_len=32
+load model from: /data/quantization/zaima/videoswin/swin_small_patch244_window877_kinetics400_1k.pth
+Initialized saliency bias to logit(0.0177) = -4.0163 for: final_upsample_head.head, patch_logit_head
+Backbone fine-tuning enabled | effective_batch_size=4 | micro_batch_size=2 | grad_accum_steps=2 | gradient_checkpointing=True | visual_equiv=off
+Optimizer | lr=5.0e-05 | weight_decay=1.0e-04 | scheduler T_max=200 eta_min=1.0e-06
+
+Epoch 1/200
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py:1298: UserWarning: torch.utils.checkpoint: the use_reentrant parameter should be passed explicitly. Starting in PyTorch 2.9, calling checkpoint without use_reentrant will raise an exception. use_reentrant=False is recommended, but if you need to preserve the current default behavior, you can pass use_reentrant=True. Refer to docs for more details on the differences between the two variants.
+  return fn(*args, **kwargs)
+pred_saliency: shape=(2, 1, 224, 384) min=-5.0312 max=-1.7891 mean=-3.6246 std=0.4113
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0165 std=0.0779
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.2839/0.0000/4.0076 | patch_priority_alpha=0.1000
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.2736/0.0000/2.8855 | patch_priority_alpha=0.1000
+DEBUG factorized comparison [stage3] | query_norm_mean=0.0090 | key_norm_mean=0.0118 | context_mean=0.0000 | context_std=0.0000 | context_min=-0.0000 | context_max=0.0000 | total_candidate_weight=336.0000 | spatial_strength=0.1000 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.0116 | key_norm_mean=0.0116 | context_mean=-0.0000 | context_std=0.0000 | context_min=-0.0000 | context_max=0.0000 | total_candidate_weight=84.0000 | spatial_strength=0.1000 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.283909 | min=0.000000 | max=4.007637 | alpha=0.100020
+patch-priority map [stage4] | mean=0.062500 | std=0.273597 | min=0.000000 | max=2.885541 | alpha=0.100020
+DEBUG visual concept usage [stage1] top 10:
+  concept 271: 2011 patches (18.70%)
+  concept 23: 1370 patches (12.74%)
+  concept 274: 1351 patches (12.57%)
+  concept 225: 639 patches (5.94%)
+  concept 488: 632 patches (5.88%)
+  concept 107: 508 patches (4.72%)
+  concept 349: 462 patches (4.30%)
+  concept 195: 389 patches (3.62%)
+  concept 229: 317 patches (2.95%)
+  concept 86: 274 patches (2.55%)
+  normalized usage entropy: 0.9206
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 492 patches (18.30%)
+  concept 5: 435 patches (16.18%)
+  concept 66: 349 patches (12.98%)
+  concept 91: 114 patches (4.24%)
+  concept 58: 113 patches (4.20%)
+  concept 408: 101 patches (3.76%)
+  concept 329: 82 patches (3.05%)
+  concept 97: 80 patches (2.98%)
+  concept 451: 67 patches (2.49%)
+  concept 10: 66 patches (2.46%)
+  normalized usage entropy: 0.9178
+DEBUG visual concept usage [stage3] top 10:
+  concept 327: 173 patches (25.74%)
+  concept 110: 123 patches (18.30%)
+  concept 157: 84 patches (12.50%)
+  concept 25: 67 patches (9.97%)
+  concept 173: 26 patches (3.87%)
+  concept 330: 20 patches (2.98%)
+  concept 391: 17 patches (2.53%)
+  concept 109: 16 patches (2.38%)
+  concept 176: 16 patches (2.38%)
+  concept 346: 16 patches (2.38%)
+  normalized usage entropy: 0.9217
+DEBUG visual concept usage [stage4] top 10:
+  concept 154: 11 patches (6.55%)
+  concept 334: 10 patches (5.95%)
+  concept 152: 9 patches (5.36%)
+  concept 435: 9 patches (5.36%)
+  concept 460: 7 patches (4.17%)
+  concept 40: 6 patches (3.57%)
+  concept 202: 6 patches (3.57%)
+  concept 395: 6 patches (3.57%)
+  concept 406: 6 patches (3.57%)
+  concept 419: 6 patches (3.57%)
+  normalized usage entropy: 0.9450
+DEBUG pred min/max/mean/std: -5.03125 -1.7890625 -3.625 0.412109375
+DEBUG target min/max/mean/std: 0.0 1.0 0.016522154211997986 0.0779205858707428
+DEBUG fixation pixels per sample: [280.0, 192.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0010243055876344442 0.03198841214179993
+DEBUG losses: {'loss_total': 2.8629508018493652, 'loss_fid': 10.568696975708008, 'loss_patch_fid': 4.091984748840332, 'loss_dense_fid': 3.6411068439483643, 'loss_dense_bce': -0.0, 'loss_dense_kl': 2.8356056213378906, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.9682908058166504, 'loss_nss': -0.19042205810546875, 'loss_sim': 0.8911664485931396, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.8749080896377563, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.07370178401470184, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.1642909049987793, 'loss_decoder_side_aux': 0.5318195819854736, 'loss_priority_map': 3.1468045711517334, 'loss_priority_map_weighted': 0.31468045711517334, 'priority_map_loss': 3.1468045711517334, 'weighted_priority_map_loss': 0.31468045711517334, 'loss_priority_map_stage3': 3.184796094894409, 'loss_priority_map_stage4': 3.1088130474090576, 'loss_side_stage4': 1.061514973640442, 'loss_side_stage3': 1.0480937957763672, 'loss_side_stage2': 1.0484663248062134, 'loss_side_stage1': 1.083322525024414}
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/utils/checkpoint.py:238: UserWarning: None of the inputs have requires_grad=True. Gradients will be None
+  check_backward_validity(args)

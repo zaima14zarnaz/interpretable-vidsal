@@ -249,7 +249,7 @@ def run_validation(
     original_map_interval = train_cfg.MAP_SAVE_INTERVAL
     train_cfg.MAP_SAVE_INTERVAL = MAP_SAVE_INTERVAL
     try:
-        val_loss, val_metrics = train_cfg.validate_one_epoch(
+        val_loss, val_metrics, _ = train_cfg.validate_one_epoch(
             model,
             val_loader,
             device,
