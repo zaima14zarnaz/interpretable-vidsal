@@ -1,5 +1,0 @@
-nohup: ignoring input
-/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
-  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
-/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/functional.py:505: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4382.)
-  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]

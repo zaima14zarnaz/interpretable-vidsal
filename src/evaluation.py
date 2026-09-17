@@ -34,9 +34,11 @@ torch.backends.cudnn.allow_tf32 = True
 # Edit these directly (no argparse).
 # ---------------------------------------------------------------------------
 CHECKPOINT_PATH = (
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260915_204758/epoch_047.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth"
+    # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
+    # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
 )
-VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing"
+VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val"
 WINDOW_LEN = train_cfg.WINDOW_LEN
 BATCH_SIZE = train_cfg._dataloader_batch_size()
 NUM_WORKERS = train_cfg.NUM_WORKERS

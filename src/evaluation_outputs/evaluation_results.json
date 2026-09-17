@@ -1,20 +1,18 @@
 {
-  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260914_162719/epoch_049.pth",
-  "val_dir": "/data/quantization/zaima/videosal_datasets/ucfsports/testing",
-  "num_samples": 1526,
-  "num_windows": 1526,
+  "checkpoint": "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth",
+  "val_dir": "/data/quantization/zaima/videosal_datasets/dhf1k/val",
+  "num_samples": 57173,
+  "num_windows": 57173,
   "window_len": 32,
-  "batch_size": 2,
+  "batch_size": 1,
   "backbone_device": "cuda:0",
-  "head_device": "cuda:1",
-  "mean_loss": 0.03238096927948111,
+  "head_device": "cuda:0",
+  "mean_loss": 0.41132634587950423,
   "metrics": {
-    "CC": 0.7120673657879526,
-    "SIM": 0.5622383364638605,
-    "AUC": 0.9292075734775939,
-    "sAUC": 0.8121922011066077,
-    "NSS": 4.190876105983362
+    "CC": 0.5417220394259873,
+    "SIM": 0.4193879189489287,
+    "NSS": 3.1825103199557847
   },
-  "checkpoint_epoch": 49,
-  "evaluated_at": "2026-09-14T22:01:02"
+  "checkpoint_epoch": 179,
+  "evaluated_at": "2026-09-17T14:42:15"
 }
