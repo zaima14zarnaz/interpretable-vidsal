@@ -40,12 +40,12 @@ torch.backends.cudnn.allow_tf32 = True
 SHOW_PROGRESS_BAR = sys.stdout.isatty()
 
 TRAIN_DATASET_DIR = (
-    "/data/quantization/zaima/videosal_datasets/hollywood2/videos/training"
-    # "/data/quantization/zaima/dhf1k/train"
+    # "/data/quantization/zaima/videosal_datasets/hollywood2/videos/training"
+    "/data/quantization/zaima/videosal_datasets/dhf1k/train"
 )
 VAL_DATASET_DIR = ( 
-    "/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing"
-    # "/data/quantization/zaima/dhf1k/val"
+    # "/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing"
+    "/data/quantization/zaima/videosal_datasets/dhf1k/val"
 )
 WINDOW_LEN = 32
 
@@ -56,7 +56,7 @@ BATCH_SIZE = 4  # effective optimizer batch size
 FREEZE_BACKBONE = False
 # When fine-tuning the backbone, use a smaller per-forward micro-batch and accumulate
 # gradients so the optimizer still sees BATCH_SIZE samples per step.
-MICRO_BATCH_SIZE = 1
+MICRO_BATCH_SIZE = 2
 # Gradient checkpointing trades recompute for lower activation memory during backbone fine-tuning.
 BACKBONE_GRADIENT_CHECKPOINTING = True
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
@@ -68,7 +68,7 @@ SEED = 42
 OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
 MAP_SAVE_INTERVAL = 1000
-VAL_EVERY_N_EPOCHS = 10
+VAL_EVERY_N_EPOCHS = 1
 VAL_METRICS_CSV_COLUMNS = ("Epoch_no", "Val Loss", "CC", "SIM", "NSS")
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
@@ -1223,8 +1223,8 @@ def main() -> None:
         f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
     )
 
-    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=128, random_train_sampling=True)
-    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=128, random_train_sampling=False)
+    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=1, random_train_sampling=True)
+    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=32, random_train_sampling=False)
 
     # g = torch.Generator().manual_seed(SEED)
     # idx = torch.randperm(len(train_dataset), generator=g)[:MAX_SAMPLES].tolist()
@@ -1251,7 +1251,7 @@ def main() -> None:
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=8, # _dataloader_batch_size(),
+        batch_size=_dataloader_batch_size(),
         shuffle=False,
         **loader_kwargs,
     )

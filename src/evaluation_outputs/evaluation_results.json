@@ -1,18 +1,18 @@
 {
-  "checkpoint": "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth",
+  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth",
   "val_dir": "/data/quantization/zaima/videosal_datasets/dhf1k/val",
-  "num_samples": 57173,
-  "num_windows": 57173,
+  "num_samples": 1834,
+  "num_windows": 1834,
   "window_len": 32,
-  "batch_size": 1,
-  "backbone_device": "cuda:0",
-  "head_device": "cuda:0",
-  "mean_loss": 0.41132634587950423,
+  "batch_size": 2,
+  "backbone_device": "cuda:1",
+  "head_device": "cuda:1",
+  "mean_loss": 0.533847335925084,
   "metrics": {
-    "CC": 0.5417220394259873,
-    "SIM": 0.4193879189489287,
-    "NSS": 3.1825103199557847
+    "CC": 0.5325384138613094,
+    "SIM": 0.4008497385157835,
+    "NSS": 3.040127429436799
   },
-  "checkpoint_epoch": 179,
-  "evaluated_at": "2026-09-17T14:42:15"
+  "checkpoint_epoch": 21,
+  "evaluated_at": "2026-09-17T18:40:46"
 }

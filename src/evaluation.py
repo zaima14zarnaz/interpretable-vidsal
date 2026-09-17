@@ -37,6 +37,7 @@ CHECKPOINT_PATH = (
     "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth"
     # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
+    # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260917_155406/epoch_021.pth"
 )
 VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val"
 WINDOW_LEN = train_cfg.WINDOW_LEN
@@ -51,9 +52,9 @@ MAP_SAVE_INTERVAL = train_cfg.MAP_SAVE_INTERVAL if SAVE_VAL_MAPS else 10**9
 def _resolve_devices() -> Tuple[torch.device, torch.device]:
     """Match the backbone/head split used in train.py."""
     if torch.cuda.is_available():
-        backbone_device = torch.device("cuda:0")
+        backbone_device = torch.device("cuda:1")
         head_device = torch.device(
-            "cuda:0" if torch.cuda.device_count() > 1 else "cuda:0"
+            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:1"
         )
     else:
         backbone_device = torch.device("cpu")
@@ -137,7 +138,7 @@ def build_val_loader() -> Tuple[DataLoader, DatasetLoader]:
     val_dataset = DatasetLoader(
         VAL_DATASET_DIR,
         window_len=WINDOW_LEN,
-        stride=1,
+        stride=32,
     )
 
     loader_kwargs = {

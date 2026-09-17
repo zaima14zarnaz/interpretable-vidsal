@@ -1,0 +1,1817 @@
+nohup: ignoring input
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/functional.py:505: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4382.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+Using single device: cuda:0 (gpu=0)
+Training phase: initial | epochs=200 | lr=5.0e-05 | weight_decay=1.0e-04
+Run checkpoints will be saved to: training_outputs/ckpts/20260917_155406
+Concept branches | visual_concept_on=True | temporal_concepts_on=False | priority_map_loss_weight=0.1 | visual_concept_logit_scale=1.0
+Train: 600 windows (/data/quantization/zaima/videosal_datasets/dhf1k/train) | Val: 1834 windows (/data/quantization/zaima/videosal_datasets/dhf1k/val) | window_len=32
+load model from: /data/quantization/zaima/videoswin/swin_small_patch244_window877_kinetics400_1k.pth
+Initialized saliency bias to logit(0.0177) = -4.0163 for: final_upsample_head.head, patch_logit_head
+Backbone fine-tuning enabled | effective_batch_size=4 | micro_batch_size=2 | grad_accum_steps=2 | gradient_checkpointing=True | visual_equiv=off
+Optimizer | lr=5.0e-05 | weight_decay=1.0e-04 | scheduler T_max=200 eta_min=1.0e-06
+
+Epoch 1/200
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/_dynamo/eval_frame.py:1298: UserWarning: torch.utils.checkpoint: the use_reentrant parameter should be passed explicitly. Starting in PyTorch 2.9, calling checkpoint without use_reentrant will raise an exception. use_reentrant=False is recommended, but if you need to preserve the current default behavior, you can pass use_reentrant=True. Refer to docs for more details on the differences between the two variants.
+  return fn(*args, **kwargs)
+pred_saliency: shape=(2, 1, 224, 384) min=-5.0938 max=-1.5234 mean=-3.6264 std=0.4131
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0165 std=0.0779
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.2839/0.0000/4.0076 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.2736/0.0000/2.8855 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=0.0090 | key_norm_mean=0.0118 | context_mean=0.0000 | context_std=0.0000 | context_min=-0.0000 | context_max=0.0000 | total_candidate_weight=336.0000 | spatial_strength=0.1000 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.0116 | key_norm_mean=0.0116 | context_mean=-0.0000 | context_std=0.0000 | context_min=-0.0000 | context_max=0.0000 | total_candidate_weight=84.0000 | spatial_strength=0.1000 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.283909 | min=0.000000 | max=4.007637 | alpha=0.993307
+patch-priority map [stage4] | mean=0.062500 | std=0.273597 | min=0.000000 | max=2.885541 | alpha=0.993307
+DEBUG visual concept usage [stage1] top 10:
+  concept 271: 2011 patches (18.70%)
+  concept 23: 1370 patches (12.74%)
+  concept 274: 1351 patches (12.57%)
+  concept 225: 639 patches (5.94%)
+  concept 488: 632 patches (5.88%)
+  concept 107: 508 patches (4.72%)
+  concept 349: 462 patches (4.30%)
+  concept 195: 389 patches (3.62%)
+  concept 229: 317 patches (2.95%)
+  concept 86: 274 patches (2.55%)
+  normalized usage entropy: 0.9206
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 492 patches (18.30%)
+  concept 5: 435 patches (16.18%)
+  concept 66: 349 patches (12.98%)
+  concept 91: 114 patches (4.24%)
+  concept 58: 113 patches (4.20%)
+  concept 408: 101 patches (3.76%)
+  concept 329: 82 patches (3.05%)
+  concept 97: 80 patches (2.98%)
+  concept 451: 67 patches (2.49%)
+  concept 10: 66 patches (2.46%)
+  normalized usage entropy: 0.9178
+DEBUG visual concept usage [stage3] top 10:
+  concept 327: 173 patches (25.74%)
+  concept 110: 123 patches (18.30%)
+  concept 157: 84 patches (12.50%)
+  concept 25: 67 patches (9.97%)
+  concept 173: 26 patches (3.87%)
+  concept 330: 20 patches (2.98%)
+  concept 391: 17 patches (2.53%)
+  concept 109: 16 patches (2.38%)
+  concept 176: 16 patches (2.38%)
+  concept 346: 16 patches (2.38%)
+  normalized usage entropy: 0.9217
+DEBUG visual concept usage [stage4] top 10:
+  concept 154: 11 patches (6.55%)
+  concept 334: 10 patches (5.95%)
+  concept 152: 9 patches (5.36%)
+  concept 435: 9 patches (5.36%)
+  concept 460: 7 patches (4.17%)
+  concept 40: 6 patches (3.57%)
+  concept 202: 6 patches (3.57%)
+  concept 395: 6 patches (3.57%)
+  concept 406: 6 patches (3.57%)
+  concept 419: 6 patches (3.57%)
+  normalized usage entropy: 0.9450
+DEBUG pred min/max/mean/std: -5.09375 -1.5234375 -3.625 0.4140625
+DEBUG target min/max/mean/std: 0.0 1.0 0.016522154211997986 0.0779205858707428
+DEBUG fixation pixels per sample: [280.0, 192.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0010243055876344442 0.03198841214179993
+DEBUG losses: {'loss_total': 2.0625386238098145, 'loss_fid': 10.64632797241211, 'loss_patch_fid': 4.160730838775635, 'loss_dense_fid': 3.642951011657715, 'loss_dense_bce': -0.0, 'loss_dense_kl': 2.8426456451416016, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.9714968204498291, 'loss_nss': -0.1616322249174118, 'loss_sim': 0.891457200050354, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.8749080896377563, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.07370178401470184, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.1642909049987793, 'loss_decoder_side_aux': 0.5273430347442627, 'loss_priority_map': 3.1468045711517334, 'loss_priority_map_weighted': 0.31468045711517334, 'priority_map_loss': 3.1468045711517334, 'weighted_priority_map_loss': 0.31468045711517334, 'loss_priority_map_stage3': 3.184796094894409, 'loss_priority_map_stage4': 3.1088130474090576, 'loss_side_stage4': 1.0663926601409912, 'loss_side_stage3': 1.0292173624038696, 'loss_side_stage2': 1.038393259048462, 'loss_side_stage1': 1.07671320438385}
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/torch/utils/checkpoint.py:238: UserWarning: None of the inputs have requires_grad=True. Gradients will be None
+  check_backward_validity(args)
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5411/0.0000/13.9173 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.3133/0.0000/5.4498 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.1188 | key_norm_mean=0.8687 | context_mean=0.0000 | context_std=0.0644 | context_min=-0.1425 | context_max=0.1754 | total_candidate_weight=336.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.3331 | key_norm_mean=0.1985 | context_mean=-0.0000 | context_std=0.0052 | context_min=-0.0080 | context_max=0.0153 | total_candidate_weight=84.0000 | spatial_strength=0.0996 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.541126 | min=0.000000 | max=13.917266 | alpha=0.993302
+patch-priority map [stage4] | mean=0.062500 | std=0.313250 | min=0.000000 | max=5.449753 | alpha=0.993313
+Epoch 1/200
+  Mean train loss: 1.076189
+  Mean val loss:   0.753841
+  Current LR:      5.00e-05
+Val metrics   | CC: 0.4381 | SIM: 0.3468 | NSS: 2.4290
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_001.pth
+  New best val loss: 0.753841 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 2/200
+pred_saliency: shape=(2, 1, 224, 384) min=-4.0312 max=16.3750 mean=-3.1292 std=2.1761
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0167 std=0.0818
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.4829/0.0000/12.8959 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.3088/0.0000/5.4033 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.1153 | key_norm_mean=0.8704 | context_mean=0.0000 | context_std=0.0645 | context_min=-0.1455 | context_max=0.1858 | total_candidate_weight=336.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.3328 | key_norm_mean=0.1988 | context_mean=-0.0000 | context_std=0.0052 | context_min=-0.0082 | context_max=0.0154 | total_candidate_weight=84.0000 | spatial_strength=0.0996 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.482895 | min=0.000000 | max=12.895911 | alpha=0.993302
+patch-priority map [stage4] | mean=0.062500 | std=0.308788 | min=0.000000 | max=5.403322 | alpha=0.993313
+DEBUG visual concept usage [stage1] top 10:
+  concept 349: 4139 patches (38.50%)
+  concept 271: 2304 patches (21.43%)
+  concept 120: 1420 patches (13.21%)
+  concept 114: 1291 patches (12.01%)
+  concept 274: 1052 patches (9.78%)
+  concept 107: 290 patches (2.70%)
+  concept 358: 215 patches (2.00%)
+  concept 363: 39 patches (0.36%)
+  concept 67: 1 patches (0.01%)
+  concept 488: 1 patches (0.01%)
+  normalized usage entropy: 0.6032
+DEBUG visual concept usage [stage2] top 10:
+  concept 66: 934 patches (34.75%)
+  concept 97: 773 patches (28.76%)
+  concept 363: 564 patches (20.98%)
+  concept 5: 414 patches (15.40%)
+  concept 11: 3 patches (0.11%)
+  normalized usage entropy: 0.4775
+DEBUG visual concept usage [stage3] top 10:
+  concept 113: 203 patches (30.21%)
+  concept 330: 186 patches (27.68%)
+  concept 327: 165 patches (24.55%)
+  concept 174: 62 patches (9.23%)
+  concept 261: 15 patches (2.23%)
+  concept 157: 14 patches (2.08%)
+  concept 451: 14 patches (2.08%)
+  concept 110: 8 patches (1.19%)
+  concept 429: 2 patches (0.30%)
+  concept 68: 1 patches (0.15%)
+  normalized usage entropy: 0.7661
+DEBUG visual concept usage [stage4] top 10:
+  concept 435: 65 patches (38.69%)
+  concept 312: 21 patches (12.50%)
+  concept 506: 18 patches (10.71%)
+  concept 152: 11 patches (6.55%)
+  concept 27: 4 patches (2.38%)
+  concept 154: 4 patches (2.38%)
+  concept 450: 4 patches (2.38%)
+  concept 195: 3 patches (1.79%)
+  concept 334: 3 patches (1.79%)
+  concept 406: 3 patches (1.79%)
+  normalized usage entropy: 0.8730
+DEBUG pred min/max/mean/std: -4.03125 16.375 -3.125 2.171875
+DEBUG target min/max/mean/std: 0.0 1.0 0.01673547364771366 0.08179392665624619
+DEBUG fixation pixels per sample: [108.0, 177.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0006184895755723119 0.024861784651875496
+DEBUG losses: {'loss_total': 1.3542041778564453, 'loss_fid': 17.21365737915039, 'loss_patch_fid': 4.38712739944458, 'loss_dense_fid': 3.6608924865722656, 'loss_dense_bce': -0.0, 'loss_dense_kl': 9.16563892364502, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.7134432196617126, 'loss_nss': -1.1904929876327515, 'loss_sim': 0.7616862058639526, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.604744553565979, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.32005736231803894, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.12011340260505676, 'loss_decoder_side_aux': 0.29394087195396423, 'loss_priority_map': 2.3455803394317627, 'loss_priority_map_weighted': 0.23455803096294403, 'priority_map_loss': 2.3455803394317627, 'weighted_priority_map_loss': 0.23455803096294403, 'loss_priority_map_stage3': 2.2283101081848145, 'loss_priority_map_stage4': 2.462850570678711, 'loss_side_stage4': 0.5235841870307922, 'loss_side_stage3': 0.5443264245986938, 'loss_side_stage2': 0.6278185844421387, 'loss_side_stage1': 0.5957810878753662}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6068/0.0000/13.8612 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.3583/0.0000/6.2489 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6960 | key_norm_mean=1.1895 | context_mean=0.0000 | context_std=0.1175 | context_min=-0.2537 | context_max=0.2910 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6915 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.4949 | key_norm_mean=0.2890 | context_mean=-0.0000 | context_std=0.0119 | context_min=-0.0201 | context_max=0.0333 | total_candidate_weight=84.0000 | spatial_strength=0.0995 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6926 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.606835 | min=0.000000 | max=13.861219 | alpha=0.993306
+patch-priority map [stage4] | mean=0.062500 | std=0.358260 | min=0.000000 | max=6.248926 | alpha=0.993307
+Epoch 2/200
+  Mean train loss: 0.818277
+  Mean val loss:   0.661995
+  Current LR:      5.00e-05
+Val metrics   | CC: 0.4718 | SIM: 0.3899 | NSS: 2.6914
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_002.pth
+  New best val loss: 0.661995 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 3/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=31.5000 mean=-3.2919 std=2.6765
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0141 std=0.0794
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.2499/0.0000/111.6149 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.3418/0.0000/5.4541 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6824 | key_norm_mean=1.1887 | context_mean=0.0000 | context_std=0.1185 | context_min=-0.2612 | context_max=0.4269 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6915 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.4969 | key_norm_mean=0.2885 | context_mean=-0.0000 | context_std=0.0120 | context_min=-0.0216 | context_max=0.0339 | total_candidate_weight=84.0000 | spatial_strength=0.0995 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6926 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.249888 | min=0.000000 | max=111.614868 | alpha=0.993306
+patch-priority map [stage4] | mean=0.062500 | std=0.341750 | min=0.000000 | max=5.454147 | alpha=0.993307
+DEBUG visual concept usage [stage1] top 10:
+  concept 120: 2645 patches (24.60%)
+  concept 363: 2395 patches (22.27%)
+  concept 358: 1925 patches (17.90%)
+  concept 271: 1278 patches (11.89%)
+  concept 349: 1165 patches (10.84%)
+  concept 274: 1142 patches (10.62%)
+  concept 114: 149 patches (1.39%)
+  concept 107: 53 patches (0.49%)
+  normalized usage entropy: 0.5269
+DEBUG visual concept usage [stage2] top 10:
+  concept 97: 837 patches (31.14%)
+  concept 66: 824 patches (30.65%)
+  concept 5: 511 patches (19.01%)
+  concept 363: 497 patches (18.49%)
+  concept 11: 19 patches (0.71%)
+  normalized usage entropy: 0.3997
+DEBUG visual concept usage [stage3] top 10:
+  concept 451: 312 patches (46.43%)
+  concept 113: 128 patches (19.05%)
+  concept 330: 91 patches (13.54%)
+  concept 174: 53 patches (7.89%)
+  concept 261: 38 patches (5.65%)
+  concept 157: 18 patches (2.68%)
+  concept 70: 7 patches (1.04%)
+  concept 327: 6 patches (0.89%)
+  concept 95: 4 patches (0.60%)
+  concept 429: 4 patches (0.60%)
+  normalized usage entropy: 0.7175
+DEBUG visual concept usage [stage4] top 10:
+  concept 435: 76 patches (45.24%)
+  concept 104: 10 patches (5.95%)
+  concept 262: 9 patches (5.36%)
+  concept 100: 7 patches (4.17%)
+  concept 152: 6 patches (3.57%)
+  concept 450: 6 patches (3.57%)
+  concept 506: 5 patches (2.98%)
+  concept 195: 4 patches (2.38%)
+  concept 202: 4 patches (2.38%)
+  concept 221: 4 patches (2.38%)
+  normalized usage entropy: 0.7635
+DEBUG pred min/max/mean/std: -3.984375 31.5 -3.296875 2.671875
+DEBUG target min/max/mean/std: 0.0 1.0 0.014082074165344238 0.07941858470439911
+DEBUG fixation pixels per sample: [182.0, 133.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0006835937383584678 0.026136716827750206
+DEBUG losses: {'loss_total': 0.8090726137161255, 'loss_fid': 26.612964630126953, 'loss_patch_fid': 4.520400524139404, 'loss_dense_fid': 3.905714511871338, 'loss_dense_bce': -0.0, 'loss_dense_kl': 18.18684959411621, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.5578871965408325, 'loss_nss': -2.6988940238952637, 'loss_sim': 0.6276116371154785, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5226268768310547, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.39809757471084595, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.09967071563005447, 'loss_decoder_side_aux': 0.13862621784210205, 'loss_priority_map': 1.7759389877319336, 'loss_priority_map_weighted': 0.1775939017534256, 'priority_map_loss': 1.7759389877319336, 'weighted_priority_map_loss': 0.1775939017534256, 'loss_priority_map_stage3': 1.823886513710022, 'loss_priority_map_stage4': 1.7279913425445557, 'loss_side_stage4': 0.15657034516334534, 'loss_side_stage3': 0.31146374344825745, 'loss_side_stage2': 0.28673794865608215, 'loss_side_stage1': 0.2832031846046448}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6274/0.0000/35.8616 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.4727/0.0000/9.3605 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6024 | key_norm_mean=1.1548 | context_mean=0.0000 | context_std=0.1120 | context_min=-0.2507 | context_max=0.3224 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6917 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.6328 | key_norm_mean=0.3901 | context_mean=-0.0000 | context_std=0.0223 | context_min=-0.0405 | context_max=0.0606 | total_candidate_weight=84.0000 | spatial_strength=0.0994 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6926 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.627361 | min=0.000000 | max=35.861561 | alpha=0.993306
+patch-priority map [stage4] | mean=0.062500 | std=0.472653 | min=0.000000 | max=9.360460 | alpha=0.993301
+Epoch 3/200
+  Mean train loss: 0.734956
+  Mean val loss:   0.626615
+  Current LR:      5.00e-05
+Val metrics   | CC: 0.4811 | SIM: 0.3854 | NSS: 2.7278
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_003.pth
+  New best val loss: 0.626615 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 4/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=22.1250 mean=-3.0897 std=2.6197
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0148 std=0.0803
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.4621/0.0000/16.8566 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.4433/0.0000/8.3559 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5909 | key_norm_mean=1.1469 | context_mean=0.0000 | context_std=0.1088 | context_min=-0.2552 | context_max=0.2866 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6917 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.6340 | key_norm_mean=0.3883 | context_mean=-0.0000 | context_std=0.0224 | context_min=-0.0416 | context_max=0.0595 | total_candidate_weight=84.0000 | spatial_strength=0.0994 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6926 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.462073 | min=0.000000 | max=16.856592 | alpha=0.993306
+patch-priority map [stage4] | mean=0.062500 | std=0.443330 | min=0.000000 | max=8.355858 | alpha=0.993301
+DEBUG visual concept usage [stage1] top 10:
+  concept 120: 2222 patches (20.67%)
+  concept 363: 1817 patches (16.90%)
+  concept 358: 1448 patches (13.47%)
+  concept 271: 1298 patches (12.07%)
+  concept 349: 1181 patches (10.98%)
+  concept 107: 1135 patches (10.56%)
+  concept 274: 851 patches (7.91%)
+  concept 114: 800 patches (7.44%)
+  normalized usage entropy: 0.5291
+DEBUG visual concept usage [stage2] top 10:
+  concept 5: 751 patches (27.94%)
+  concept 66: 710 patches (26.41%)
+  concept 363: 602 patches (22.40%)
+  concept 97: 379 patches (14.10%)
+  concept 11: 246 patches (9.15%)
+  normalized usage entropy: 0.3773
+DEBUG visual concept usage [stage3] top 10:
+  concept 451: 438 patches (65.18%)
+  concept 113: 123 patches (18.30%)
+  concept 95: 46 patches (6.85%)
+  concept 435: 42 patches (6.25%)
+  concept 70: 10 patches (1.49%)
+  concept 330: 6 patches (0.89%)
+  concept 335: 3 patches (0.45%)
+  concept 261: 2 patches (0.30%)
+  concept 167: 1 patches (0.15%)
+  concept 441: 1 patches (0.15%)
+  normalized usage entropy: 0.6468
+DEBUG visual concept usage [stage4] top 10:
+  concept 262: 51 patches (30.36%)
+  concept 435: 28 patches (16.67%)
+  concept 104: 8 patches (4.76%)
+  concept 370: 7 patches (4.17%)
+  concept 147: 6 patches (3.57%)
+  concept 181: 6 patches (3.57%)
+  concept 450: 6 patches (3.57%)
+  concept 301: 5 patches (2.98%)
+  concept 221: 4 patches (2.38%)
+  concept 273: 4 patches (2.38%)
+  normalized usage entropy: 0.8684
+DEBUG pred min/max/mean/std: -3.984375 22.125 -3.09375 2.625
+DEBUG target min/max/mean/std: 0.0 1.0 0.01482004951685667 0.08034159243106842
+DEBUG fixation pixels per sample: [180.0, 125.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0006618923507630825 0.025718780234456062
+DEBUG losses: {'loss_total': 0.1557084321975708, 'loss_fid': 14.597627639770508, 'loss_patch_fid': 4.392592906951904, 'loss_dense_fid': 3.8029167652130127, 'loss_dense_bce': -0.0, 'loss_dense_kl': 6.40211820602417, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.28713715076446533, 'loss_nss': -4.276116847991943, 'loss_sim': 0.5319773554801941, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.525633692741394, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.39459311962127686, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.08841000497341156, 'loss_decoder_side_aux': -0.057928428053855896, 'loss_priority_map': 1.7041616439819336, 'loss_priority_map_weighted': 0.17041616141796112, 'priority_map_loss': 1.7041616439819336, 'weighted_priority_map_loss': 0.17041616141796112, 'loss_priority_map_stage3': 1.6555598974227905, 'loss_priority_map_stage4': 1.7527635097503662, 'loss_side_stage4': 0.0036398470401763916, 'loss_side_stage3': -0.11157885193824768, 'loss_side_stage2': -0.1343916952610016, 'loss_side_stage1': -0.13396891951560974}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6876/0.0000/20.7837 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.5455/0.0000/12.4986 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6769 | key_norm_mean=1.1899 | context_mean=0.0001 | context_std=0.1266 | context_min=-0.2716 | context_max=0.3224 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6916 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.7278 | key_norm_mean=0.4563 | context_mean=0.0000 | context_std=0.0307 | context_min=-0.0531 | context_max=0.0862 | total_candidate_weight=84.0000 | spatial_strength=0.0993 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6926 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.687635 | min=0.000000 | max=20.783726 | alpha=0.993310
+patch-priority map [stage4] | mean=0.062500 | std=0.545516 | min=0.000000 | max=12.498582 | alpha=0.993293
+Epoch 4/200
+  Mean train loss: 0.653467
+  Mean val loss:   0.598164
+  Current LR:      5.00e-05
+Val metrics   | CC: 0.4859 | SIM: 0.3893 | NSS: 2.7896
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_004.pth
+  New best val loss: 0.598164 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 5/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=24.8750 mean=-3.1890 std=2.7386
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0198 std=0.0871
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5750/0.0000/12.7614 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.4519/0.0000/9.0319 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6527 | key_norm_mean=1.1773 | context_mean=0.0001 | context_std=0.1273 | context_min=-0.2687 | context_max=0.3119 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6916 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.7242 | key_norm_mean=0.4556 | context_mean=0.0000 | context_std=0.0299 | context_min=-0.0527 | context_max=0.0783 | total_candidate_weight=84.0000 | spatial_strength=0.0993 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6926 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.574959 | min=0.000000 | max=12.761422 | alpha=0.993310
+patch-priority map [stage4] | mean=0.062500 | std=0.451912 | min=0.000000 | max=9.031931 | alpha=0.993293
+DEBUG visual concept usage [stage1] top 10:
+  concept 274: 1723 patches (16.02%)
+  concept 363: 1568 patches (14.58%)
+  concept 120: 1527 patches (14.20%)
+  concept 217: 1358 patches (12.63%)
+  concept 271: 1282 patches (11.92%)
+  concept 114: 1104 patches (10.27%)
+  concept 358: 895 patches (8.32%)
+  concept 107: 756 patches (7.03%)
+  concept 349: 539 patches (5.01%)
+  normalized usage entropy: 0.5586
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 1003 patches (37.31%)
+  concept 5: 665 patches (24.74%)
+  concept 66: 507 patches (18.86%)
+  concept 11: 369 patches (13.73%)
+  concept 97: 144 patches (5.36%)
+  normalized usage entropy: 0.4037
+DEBUG visual concept usage [stage3] top 10:
+  concept 451: 136 patches (20.24%)
+  concept 262: 133 patches (19.79%)
+  concept 167: 97 patches (14.43%)
+  concept 435: 87 patches (12.95%)
+  concept 274: 69 patches (10.27%)
+  concept 113: 65 patches (9.67%)
+  concept 349: 49 patches (7.29%)
+  concept 95: 15 patches (2.23%)
+  concept 335: 11 patches (1.64%)
+  concept 261: 4 patches (0.60%)
+  normalized usage entropy: 0.6527
+DEBUG visual concept usage [stage4] top 10:
+  concept 262: 63 patches (37.50%)
+  concept 143: 44 patches (26.19%)
+  concept 78: 14 patches (8.33%)
+  concept 221: 14 patches (8.33%)
+  concept 246: 8 patches (4.76%)
+  concept 127: 6 patches (3.57%)
+  concept 147: 6 patches (3.57%)
+  concept 273: 5 patches (2.98%)
+  concept 119: 3 patches (1.79%)
+  concept 202: 2 patches (1.19%)
+  normalized usage entropy: 0.8047
+DEBUG pred min/max/mean/std: -3.984375 24.875 -3.1875 2.734375
+DEBUG target min/max/mean/std: 0.0 1.0 0.019836703315377235 0.08707164973020554
+DEBUG fixation pixels per sample: [146.0, 243.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0008441840764135122 0.02904260903596878
+DEBUG losses: {'loss_total': 0.25935494899749756, 'loss_fid': 21.198049545288086, 'loss_patch_fid': 4.48480224609375, 'loss_dense_fid': 3.8702735900878906, 'loss_dense_bce': -0.0, 'loss_dense_kl': 12.842973709106445, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.33865511417388916, 'loss_nss': -3.541043281555176, 'loss_sim': 0.4564715623855591, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5255574584007263, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3950750231742859, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.08146210014820099, 'loss_decoder_side_aux': -0.009340617805719376, 'loss_priority_map': 1.1490024328231812, 'loss_priority_map_weighted': 0.11490024626255035, 'priority_map_loss': 1.1490024328231812, 'weighted_priority_map_loss': 0.11490024626255035, 'loss_priority_map_stage3': 1.0693092346191406, 'loss_priority_map_stage4': 1.2286956310272217, 'loss_side_stage4': -0.05614778399467468, 'loss_side_stage3': -0.023212939500808716, 'loss_side_stage2': -0.013318151235580444, 'loss_side_stage1': -0.011071056127548218}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8738/0.0000/46.4958 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6097/0.0000/12.9373 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6794 | key_norm_mean=1.1792 | context_mean=0.0001 | context_std=0.1210 | context_min=-0.2597 | context_max=0.3463 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6917 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.8428 | key_norm_mean=0.5544 | context_mean=-0.0000 | context_std=0.0419 | context_min=-0.0783 | context_max=0.1122 | total_candidate_weight=84.0000 | spatial_strength=0.0992 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6925 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.873791 | min=0.000000 | max=46.495838 | alpha=0.993312
+patch-priority map [stage4] | mean=0.062500 | std=0.609740 | min=0.000000 | max=12.937311 | alpha=0.993290
+Epoch 5/200
+  Mean train loss: 0.618642
+  Mean val loss:   0.570201
+  Current LR:      4.99e-05
+Val metrics   | CC: 0.5025 | SIM: 0.3839 | NSS: 2.8226
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_005.pth
+  New best val loss: 0.570201 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 6/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=24.2500 mean=-3.1585 std=2.5837
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0126 std=0.0702
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5331/0.0000/24.7367 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.5254/0.0000/14.7400 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6751 | key_norm_mean=1.1721 | context_mean=0.0001 | context_std=0.1167 | context_min=-0.2582 | context_max=0.2672 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6917 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.8358 | key_norm_mean=0.5524 | context_mean=-0.0000 | context_std=0.0390 | context_min=-0.0768 | context_max=0.1114 | total_candidate_weight=84.0000 | spatial_strength=0.0992 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6925 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.533148 | min=0.000000 | max=24.736694 | alpha=0.993312
+patch-priority map [stage4] | mean=0.062500 | std=0.525370 | min=0.000000 | max=14.740012 | alpha=0.993290
+DEBUG visual concept usage [stage1] top 10:
+  concept 358: 2507 patches (23.32%)
+  concept 363: 1887 patches (17.55%)
+  concept 217: 1763 patches (16.40%)
+  concept 274: 1230 patches (11.44%)
+  concept 271: 1203 patches (11.19%)
+  concept 107: 735 patches (6.84%)
+  concept 120: 732 patches (6.81%)
+  concept 114: 440 patches (4.09%)
+  concept 349: 254 patches (2.36%)
+  concept 469: 1 patches (0.01%)
+  normalized usage entropy: 0.6107
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 1395 patches (51.90%)
+  concept 97: 408 patches (15.18%)
+  concept 363: 371 patches (13.80%)
+  concept 66: 321 patches (11.94%)
+  concept 5: 193 patches (7.18%)
+  normalized usage entropy: 0.4838
+DEBUG visual concept usage [stage3] top 10:
+  concept 349: 188 patches (27.98%)
+  concept 262: 177 patches (26.34%)
+  concept 274: 114 patches (16.96%)
+  concept 167: 105 patches (15.62%)
+  concept 335: 45 patches (6.70%)
+  concept 451: 14 patches (2.08%)
+  concept 131: 11 patches (1.64%)
+  concept 2: 6 patches (0.89%)
+  concept 435: 6 patches (0.89%)
+  concept 113: 4 patches (0.60%)
+  normalized usage entropy: 0.6090
+DEBUG visual concept usage [stage4] top 10:
+  concept 78: 58 patches (34.52%)
+  concept 119: 57 patches (33.93%)
+  concept 143: 16 patches (9.52%)
+  concept 262: 13 patches (7.74%)
+  concept 357: 6 patches (3.57%)
+  concept 221: 5 patches (2.98%)
+  concept 273: 5 patches (2.98%)
+  concept 104: 2 patches (1.19%)
+  concept 133: 2 patches (1.19%)
+  concept 147: 1 patches (0.60%)
+  normalized usage entropy: 0.7839
+DEBUG pred min/max/mean/std: -3.984375 24.25 -3.15625 2.578125
+DEBUG target min/max/mean/std: 0.0 1.0 0.012598440982401371 0.07024415582418442
+DEBUG fixation pixels per sample: [161.0, 114.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0005967881879769266 0.02442198246717453
+DEBUG losses: {'loss_total': 0.024538099765777588, 'loss_fid': 16.234556198120117, 'loss_patch_fid': 4.4457173347473145, 'loss_dense_fid': 3.8034400939941406, 'loss_dense_bce': -0.0, 'loss_dense_kl': 7.985398769378662, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.24871957302093506, 'loss_nss': -4.5385260581970215, 'loss_sim': 0.5125131607055664, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5425153970718384, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3781723082065582, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.07556954771280289, 'loss_decoder_side_aux': -0.0990121066570282, 'loss_priority_map': 1.6133257150650024, 'loss_priority_map_weighted': 0.16133257746696472, 'priority_map_loss': 1.6133257150650024, 'weighted_priority_map_loss': 0.16133257746696472, 'loss_priority_map_stage3': 1.730858564376831, 'loss_priority_map_stage4': 1.4957928657531738, 'loss_side_stage4': -0.07253903150558472, 'loss_side_stage3': -0.22088024020195007, 'loss_side_stage2': -0.2149754762649536, 'loss_side_stage1': -0.20525404810905457}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8788/0.0000/58.3859 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.7497/0.0000/24.9260 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6882 | key_norm_mean=1.1734 | context_mean=0.0001 | context_std=0.1228 | context_min=-0.2493 | context_max=0.3806 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6917 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9029 | key_norm_mean=0.5924 | context_mean=-0.0000 | context_std=0.0452 | context_min=-0.0836 | context_max=0.1363 | total_candidate_weight=84.0000 | spatial_strength=0.0992 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6925 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.878827 | min=0.000000 | max=58.385887 | alpha=0.993316
+patch-priority map [stage4] | mean=0.062500 | std=0.749714 | min=0.000000 | max=24.926048 | alpha=0.993284
+Epoch 6/200
+  Mean train loss: 0.596711
+  Mean val loss:   0.559826
+  Current LR:      4.99e-05
+Val metrics   | CC: 0.4994 | SIM: 0.4110 | NSS: 2.8645
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_006.pth
+  New best val loss: 0.559826 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 7/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=34.5000 mean=-3.2206 std=2.7440
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0194 std=0.0862
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0093/0.0000/79.8917 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.4697/0.0000/9.4580 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6858 | key_norm_mean=1.1699 | context_mean=0.0001 | context_std=0.1211 | context_min=-0.2582 | context_max=0.3851 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6917 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.8988 | key_norm_mean=0.5874 | context_mean=0.0000 | context_std=0.0440 | context_min=-0.0836 | context_max=0.1107 | total_candidate_weight=84.0000 | spatial_strength=0.0992 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6925 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.009328 | min=0.000000 | max=79.891739 | alpha=0.993316
+patch-priority map [stage4] | mean=0.062500 | std=0.469723 | min=0.000000 | max=9.457971 | alpha=0.993284
+DEBUG visual concept usage [stage1] top 10:
+  concept 363: 2200 patches (20.46%)
+  concept 358: 2144 patches (19.94%)
+  concept 217: 2028 patches (18.86%)
+  concept 271: 1983 patches (18.44%)
+  concept 274: 1231 patches (11.45%)
+  concept 120: 313 patches (2.91%)
+  concept 349: 306 patches (2.85%)
+  concept 114: 286 patches (2.66%)
+  concept 107: 210 patches (1.95%)
+  concept 356: 25 patches (0.23%)
+  normalized usage entropy: 0.6323
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 1159 patches (43.12%)
+  concept 363: 1134 patches (42.19%)
+  concept 66: 201 patches (7.48%)
+  concept 97: 189 patches (7.03%)
+  concept 5: 5 patches (0.19%)
+  normalized usage entropy: 0.5826
+DEBUG visual concept usage [stage3] top 10:
+  concept 262: 228 patches (33.93%)
+  concept 167: 110 patches (16.37%)
+  concept 349: 106 patches (15.77%)
+  concept 274: 89 patches (13.24%)
+  concept 335: 84 patches (12.50%)
+  concept 2: 18 patches (2.68%)
+  concept 131: 12 patches (1.79%)
+  concept 189: 12 patches (1.79%)
+  concept 497: 7 patches (1.04%)
+  concept 327: 2 patches (0.30%)
+  normalized usage entropy: 0.6018
+DEBUG visual concept usage [stage4] top 10:
+  concept 119: 62 patches (36.90%)
+  concept 133: 30 patches (17.86%)
+  concept 262: 30 patches (17.86%)
+  concept 78: 19 patches (11.31%)
+  concept 72: 12 patches (7.14%)
+  concept 147: 5 patches (2.98%)
+  concept 273: 5 patches (2.98%)
+  concept 143: 2 patches (1.19%)
+  concept 175: 1 patches (0.60%)
+  concept 181: 1 patches (0.60%)
+  normalized usage entropy: 0.7528
+DEBUG pred min/max/mean/std: -3.984375 34.5 -3.21875 2.75
+DEBUG target min/max/mean/std: 0.0 1.0 0.019391534850001335 0.08616974949836731
+DEBUG fixation pixels per sample: [162.0, 199.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.000783420167863369 0.02797870710492134
+DEBUG losses: {'loss_total': 1.3202459812164307, 'loss_fid': 27.976482391357422, 'loss_patch_fid': 4.276151657104492, 'loss_dense_fid': 3.866024971008301, 'loss_dense_bce': -0.0, 'loss_dense_kl': 19.834306716918945, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.7119021415710449, 'loss_nss': -1.3427375555038452, 'loss_sim': 0.7619680166244507, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5622161626815796, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3576524555683136, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.07354509085416794, 'loss_decoder_side_aux': 0.29262828826904297, 'loss_priority_map': 2.616711378097534, 'loss_priority_map_weighted': 0.26167115569114685, 'priority_map_loss': 2.616711378097534, 'weighted_priority_map_loss': 0.26167115569114685, 'loss_priority_map_stage3': 2.631361961364746, 'loss_priority_map_stage4': 2.6020607948303223, 'loss_side_stage4': 0.6336319446563721, 'loss_side_stage3': 0.6040910482406616, 'loss_side_stage2': 0.5769105553627014, 'loss_side_stage1': 0.5700050592422485}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8260/0.0000/29.1572 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8039/0.0000/21.5433 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6259 | key_norm_mean=1.1529 | context_mean=0.0001 | context_std=0.1238 | context_min=-0.2612 | context_max=0.3418 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0100 | key_norm_mean=0.6734 | context_mean=0.0000 | context_std=0.0607 | context_min=-0.1190 | context_max=0.1642 | total_candidate_weight=84.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6925 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.825975 | min=0.000000 | max=29.157219 | alpha=0.993314
+patch-priority map [stage4] | mean=0.062500 | std=0.803858 | min=0.000000 | max=21.543333 | alpha=0.993283
+Epoch 7/200
+  Mean train loss: 0.555143
+  Mean val loss:   0.554613
+  Current LR:      4.99e-05
+Val metrics   | CC: 0.4978 | SIM: 0.3965 | NSS: 2.8388
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_007.pth
+  New best val loss: 0.554613 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 8/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=21.2500 mean=-3.0282 std=2.7658
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0161 std=0.0765
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5706/0.0000/18.1434 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.4803/0.0000/7.7550 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6342 | key_norm_mean=1.1650 | context_mean=0.0000 | context_std=0.1252 | context_min=-0.2746 | context_max=0.3328 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0061 | key_norm_mean=0.6698 | context_mean=0.0001 | context_std=0.0580 | context_min=-0.1197 | context_max=0.1280 | total_candidate_weight=84.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6925 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.570635 | min=0.000000 | max=18.143373 | alpha=0.993314
+patch-priority map [stage4] | mean=0.062500 | std=0.480262 | min=0.000000 | max=7.755040 | alpha=0.993283
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 4153 patches (38.63%)
+  concept 271: 2363 patches (21.98%)
+  concept 363: 1490 patches (13.86%)
+  concept 358: 1168 patches (10.86%)
+  concept 114: 957 patches (8.90%)
+  concept 120: 316 patches (2.94%)
+  concept 189: 100 patches (0.93%)
+  concept 349: 70 patches (0.65%)
+  concept 356: 61 patches (0.57%)
+  concept 107: 40 patches (0.37%)
+  normalized usage entropy: 0.6594
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 1313 patches (48.85%)
+  concept 11: 1185 patches (44.08%)
+  concept 97: 190 patches (7.07%)
+  normalized usage entropy: 0.6389
+DEBUG visual concept usage [stage3] top 10:
+  concept 262: 232 patches (34.52%)
+  concept 349: 162 patches (24.11%)
+  concept 274: 75 patches (11.16%)
+  concept 189: 49 patches (7.29%)
+  concept 167: 39 patches (5.80%)
+  concept 131: 28 patches (4.17%)
+  concept 335: 28 patches (4.17%)
+  concept 2: 21 patches (3.12%)
+  concept 497: 19 patches (2.83%)
+  concept 379: 17 patches (2.53%)
+  normalized usage entropy: 0.5746
+DEBUG visual concept usage [stage4] top 10:
+  concept 119: 78 patches (46.43%)
+  concept 273: 22 patches (13.10%)
+  concept 262: 21 patches (12.50%)
+  concept 133: 18 patches (10.71%)
+  concept 72: 11 patches (6.55%)
+  concept 78: 10 patches (5.95%)
+  concept 104: 2 patches (1.19%)
+  concept 143: 2 patches (1.19%)
+  concept 347: 2 patches (1.19%)
+  concept 147: 1 patches (0.60%)
+  normalized usage entropy: 0.6777
+DEBUG pred min/max/mean/std: -3.984375 21.25 -3.03125 2.765625
+DEBUG target min/max/mean/std: 0.0 1.0 0.016084926202893257 0.07651370763778687
+DEBUG fixation pixels per sample: [164.0, 227.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0008485243306495249 0.02911711111664772
+DEBUG losses: {'loss_total': 0.5120377540588379, 'loss_fid': 17.531137466430664, 'loss_patch_fid': 4.531780242919922, 'loss_dense_fid': 3.7925894260406494, 'loss_dense_bce': -0.0, 'loss_dense_kl': 9.206768035888672, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.45834434032440186, 'loss_nss': -3.5492000579833984, 'loss_sim': 0.6077123880386353, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5542712211608887, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3623473644256592, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.06779344379901886, 'loss_decoder_side_aux': 0.06774435192346573, 'loss_priority_map': 1.7329826354980469, 'loss_priority_map_weighted': 0.17329826951026917, 'priority_map_loss': 1.7329826354980469, 'weighted_priority_map_loss': 0.17329826951026917, 'loss_priority_map_stage3': 1.602824091911316, 'loss_priority_map_stage4': 1.8631410598754883, 'loss_side_stage4': 0.31481146812438965, 'loss_side_stage3': 0.14471885561943054, 'loss_side_stage2': 0.11214554309844971, 'loss_side_stage1': 0.10355031490325928}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.9888/0.0000/42.1124 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6393/0.0000/12.1905 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6197 | key_norm_mean=1.1499 | context_mean=0.0000 | context_std=0.1236 | context_min=-0.2672 | context_max=0.3627 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9253 | key_norm_mean=0.6664 | context_mean=0.0000 | context_std=0.0570 | context_min=-0.1137 | context_max=0.1431 | total_candidate_weight=84.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.988801 | min=0.000000 | max=42.112392 | alpha=0.993316
+patch-priority map [stage4] | mean=0.062500 | std=0.639293 | min=0.000000 | max=12.190454 | alpha=0.993273
+Epoch 8/200
+  Mean train loss: 0.519183
+  Mean val loss:   0.515591
+  Current LR:      4.98e-05
+Val metrics   | CC: 0.5144 | SIM: 0.4095 | NSS: 2.9664
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_008.pth
+  New best val loss: 0.515591 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 9/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=19.3750 mean=-2.9895 std=2.6576
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0235 std=0.0952
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6439/0.0000/25.7057 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.5709/0.0000/12.5274 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6074 | key_norm_mean=1.1356 | context_mean=0.0001 | context_std=0.1157 | context_min=-0.2552 | context_max=0.3104 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9289 | key_norm_mean=0.6562 | context_mean=0.0001 | context_std=0.0534 | context_min=-0.1130 | context_max=0.1227 | total_candidate_weight=84.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.643903 | min=0.000000 | max=25.705702 | alpha=0.993316
+patch-priority map [stage4] | mean=0.062500 | std=0.570942 | min=0.000000 | max=12.527446 | alpha=0.993273
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 4111 patches (38.23%)
+  concept 271: 2333 patches (21.70%)
+  concept 363: 2307 patches (21.46%)
+  concept 356: 1032 patches (9.60%)
+  concept 114: 596 patches (5.54%)
+  concept 120: 219 patches (2.04%)
+  concept 358: 142 patches (1.32%)
+  concept 189: 5 patches (0.05%)
+  concept 274: 4 patches (0.04%)
+  concept 349: 2 patches (0.02%)
+  normalized usage entropy: 0.6957
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 1393 patches (51.82%)
+  concept 11: 1273 patches (47.36%)
+  concept 97: 22 patches (0.82%)
+  normalized usage entropy: 0.6745
+DEBUG visual concept usage [stage3] top 10:
+  concept 262: 361 patches (53.72%)
+  concept 349: 41 patches (6.10%)
+  concept 2: 40 patches (5.95%)
+  concept 213: 40 patches (5.95%)
+  concept 274: 40 patches (5.95%)
+  concept 131: 36 patches (5.36%)
+  concept 189: 36 patches (5.36%)
+  concept 335: 28 patches (4.17%)
+  concept 497: 17 patches (2.53%)
+  concept 379: 15 patches (2.23%)
+  normalized usage entropy: 0.5816
+DEBUG visual concept usage [stage4] top 10:
+  concept 72: 54 patches (32.14%)
+  concept 273: 36 patches (21.43%)
+  concept 119: 26 patches (15.48%)
+  concept 133: 11 patches (6.55%)
+  concept 262: 11 patches (6.55%)
+  concept 78: 9 patches (5.36%)
+  concept 34: 7 patches (4.17%)
+  concept 37: 4 patches (2.38%)
+  concept 347: 4 patches (2.38%)
+  concept 294: 3 patches (1.79%)
+  normalized usage entropy: 0.6426
+DEBUG pred min/max/mean/std: -3.984375 19.375 -2.984375 2.65625
+DEBUG target min/max/mean/std: 0.0 1.0 0.023486612364649773 0.09522829949855804
+DEBUG fixation pixels per sample: [225.0, 180.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0008789062849245965 0.029633352532982826
+DEBUG losses: {'loss_total': 0.4079309105873108, 'loss_fid': 15.590014457702637, 'loss_patch_fid': 4.3531317710876465, 'loss_dense_fid': 3.730053186416626, 'loss_dense_bce': -0.0, 'loss_dense_kl': 7.506829261779785, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.3853706121444702, 'loss_nss': -2.983652353286743, 'loss_sim': 0.4899693727493286, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.555319607257843, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.35139623284339905, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.06598936021327972, 'loss_decoder_side_aux': 0.05032101646065712, 'loss_priority_map': 1.1770200729370117, 'loss_priority_map_weighted': 0.11770200729370117, 'priority_map_loss': 1.1770200729370117, 'weighted_priority_map_loss': 0.11770200729370117, 'loss_priority_map_stage3': 1.246770977973938, 'loss_priority_map_stage4': 1.107269048690796, 'loss_side_stage4': 0.1183178722858429, 'loss_side_stage3': 0.12561935186386108, 'loss_side_stage2': 0.09468939900398254, 'loss_side_stage1': 0.08819887042045593}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0641/0.0000/57.8988 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8038/0.0000/24.5816 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.7014 | key_norm_mean=1.1971 | context_mean=0.0001 | context_std=0.1386 | context_min=-0.3075 | context_max=0.3821 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9594 | key_norm_mean=0.7121 | context_mean=0.0000 | context_std=0.0593 | context_min=-0.1242 | context_max=0.1747 | total_candidate_weight=84.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.064128 | min=0.000000 | max=57.898785 | alpha=0.993318
+patch-priority map [stage4] | mean=0.062500 | std=0.803839 | min=0.000000 | max=24.581604 | alpha=0.993265
+Epoch 9/200
+  Mean train loss: 0.499156
+  Mean val loss:   0.542498
+  Current LR:      4.98e-05
+Val metrics   | CC: 0.5012 | SIM: 0.4044 | NSS: 2.9029
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_009.pth
+
+Epoch 10/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=29.3750 mean=-3.1008 std=2.8572
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0192 std=0.0932
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5051/0.0000/13.0380 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.4976/0.0000/10.6853 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.7059 | key_norm_mean=1.2006 | context_mean=0.0000 | context_std=0.1383 | context_min=-0.3164 | context_max=0.3045 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9613 | key_norm_mean=0.7094 | context_mean=-0.0000 | context_std=0.0583 | context_min=-0.1242 | context_max=0.1386 | total_candidate_weight=84.0000 | spatial_strength=0.0991 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.505055 | min=0.000000 | max=13.037997 | alpha=0.993318
+patch-priority map [stage4] | mean=0.062500 | std=0.497576 | min=0.000000 | max=10.685308 | alpha=0.993265
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 5208 patches (48.44%)
+  concept 363: 2767 patches (25.73%)
+  concept 271: 1683 patches (15.65%)
+  concept 356: 936 patches (8.71%)
+  concept 114: 87 patches (0.81%)
+  concept 120: 69 patches (0.64%)
+  concept 358: 2 patches (0.02%)
+  normalized usage entropy: 0.6925
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 1879 patches (69.90%)
+  concept 11: 798 patches (29.69%)
+  concept 97: 8 patches (0.30%)
+  concept 322: 3 patches (0.11%)
+  normalized usage entropy: 0.7001
+DEBUG visual concept usage [stage3] top 10:
+  concept 262: 401 patches (59.67%)
+  concept 213: 184 patches (27.38%)
+  concept 206: 49 patches (7.29%)
+  concept 362: 18 patches (2.68%)
+  concept 274: 10 patches (1.49%)
+  concept 497: 7 patches (1.04%)
+  concept 335: 2 patches (0.30%)
+  concept 131: 1 patches (0.15%)
+  normalized usage entropy: 0.5207
+DEBUG visual concept usage [stage4] top 10:
+  concept 72: 49 patches (29.17%)
+  concept 168: 30 patches (17.86%)
+  concept 386: 24 patches (14.29%)
+  concept 294: 19 patches (11.31%)
+  concept 78: 15 patches (8.93%)
+  concept 34: 12 patches (7.14%)
+  concept 262: 6 patches (3.57%)
+  concept 133: 5 patches (2.98%)
+  concept 194: 4 patches (2.38%)
+  concept 273: 2 patches (1.19%)
+  normalized usage entropy: 0.5825
+DEBUG pred min/max/mean/std: -3.984375 29.375 -3.09375 2.859375
+DEBUG target min/max/mean/std: 0.0 1.0 0.01923959143459797 0.09324993938207626
+DEBUG fixation pixels per sample: [177.0, 327.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0010937500046566129 0.03305383399128914
+DEBUG losses: {'loss_total': 0.03823533654212952, 'loss_fid': 18.97152328491211, 'loss_patch_fid': 4.2899394035339355, 'loss_dense_fid': 3.834165334701538, 'loss_dense_bce': -0.0, 'loss_dense_kl': 10.847419738769531, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.20064717531204224, 'loss_nss': -3.7496466636657715, 'loss_sim': 0.43069982528686523, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.526536226272583, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.37605491280555725, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.059429410845041275, 'loss_decoder_side_aux': -0.08424320816993713, 'loss_priority_map': 1.5405848026275635, 'loss_priority_map_weighted': 0.15405848622322083, 'priority_map_loss': 1.5405848026275635, 'weighted_priority_map_loss': 0.15405848622322083, 'loss_priority_map_stage3': 1.3795344829559326, 'loss_priority_map_stage4': 1.7016351222991943, 'loss_side_stage4': -0.19365081191062927, 'loss_side_stage3': -0.15958091616630554, 'loss_side_stage2': -0.1658831238746643, 'loss_side_stage1': -0.16860052943229675}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0503/0.0000/39.6275 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8779/0.0000/22.9074 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6472 | key_norm_mean=1.1606 | context_mean=0.0001 | context_std=0.1299 | context_min=-0.2791 | context_max=0.3716 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0087 | key_norm_mean=0.8052 | context_mean=-0.0000 | context_std=0.0684 | context_min=-0.1438 | context_max=0.2018 | total_candidate_weight=84.0000 | spatial_strength=0.0990 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.050275 | min=0.000000 | max=39.627460 | alpha=0.993320
+patch-priority map [stage4] | mean=0.062500 | std=0.877859 | min=0.000000 | max=22.907387 | alpha=0.993255
+Epoch 10/200
+  Mean train loss: 0.488121
+  Mean val loss:   0.518788
+  Current LR:      4.97e-05
+Val metrics   | CC: 0.5041 | SIM: 0.4089 | NSS: 2.9475
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_010.pth
+
+Epoch 11/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=29.1250 mean=-3.2973 std=2.7536
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0162 std=0.0755
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6837/0.0000/29.8633 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6091/0.0000/22.1756 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6443 | key_norm_mean=1.1566 | context_mean=0.0000 | context_std=0.1265 | context_min=-0.2761 | context_max=0.3328 | total_candidate_weight=336.0000 | spatial_strength=0.0987 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6918 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0021 | key_norm_mean=0.7986 | context_mean=-0.0001 | context_std=0.0640 | context_min=-0.1461 | context_max=0.1461 | total_candidate_weight=84.0000 | spatial_strength=0.0990 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.683699 | min=0.000000 | max=29.863319 | alpha=0.993320
+patch-priority map [stage4] | mean=0.062500 | std=0.609098 | min=0.000000 | max=22.175562 | alpha=0.993255
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 3542 patches (32.94%)
+  concept 356: 2635 patches (24.51%)
+  concept 363: 2429 patches (22.59%)
+  concept 271: 1970 patches (18.32%)
+  concept 120: 164 patches (1.53%)
+  concept 114: 6 patches (0.06%)
+  concept 147: 2 patches (0.02%)
+  concept 157: 1 patches (0.01%)
+  concept 206: 1 patches (0.01%)
+  concept 358: 1 patches (0.01%)
+  normalized usage entropy: 0.7428
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 1421 patches (52.86%)
+  concept 363: 1264 patches (47.02%)
+  concept 97: 3 patches (0.11%)
+  normalized usage entropy: 0.7341
+DEBUG visual concept usage [stage3] top 10:
+  concept 206: 243 patches (36.16%)
+  concept 213: 166 patches (24.70%)
+  concept 262: 118 patches (17.56%)
+  concept 362: 79 patches (11.76%)
+  concept 379: 36 patches (5.36%)
+  concept 348: 26 patches (3.87%)
+  concept 497: 3 patches (0.45%)
+  concept 234: 1 patches (0.15%)
+  normalized usage entropy: 0.5459
+DEBUG visual concept usage [stage4] top 10:
+  concept 194: 39 patches (23.21%)
+  concept 386: 39 patches (23.21%)
+  concept 168: 24 patches (14.29%)
+  concept 438: 22 patches (13.10%)
+  concept 34: 10 patches (5.95%)
+  concept 262: 9 patches (5.36%)
+  concept 72: 8 patches (4.76%)
+  concept 392: 8 patches (4.76%)
+  concept 133: 5 patches (2.98%)
+  concept 78: 2 patches (1.19%)
+  normalized usage entropy: 0.5640
+DEBUG pred min/max/mean/std: -3.984375 29.125 -3.296875 2.75
+DEBUG target min/max/mean/std: 0.0 1.0 0.016201075166463852 0.07549581676721573
+DEBUG fixation pixels per sample: [148.0, 185.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0007226562593132257 0.026872579008340836
+DEBUG losses: {'loss_total': 0.605207085609436, 'loss_fid': 24.34532928466797, 'loss_patch_fid': 4.403536796569824, 'loss_dense_fid': 3.9494121074676514, 'loss_dense_bce': -0.0, 'loss_dense_kl': 15.992380142211914, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.4848588705062866, 'loss_nss': -2.6897382736206055, 'loss_sim': 0.5646443963050842, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5503432750701904, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3532991111278534, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.05938217043876648, 'loss_decoder_side_aux': 0.10405848920345306, 'loss_priority_map': 1.313353180885315, 'loss_priority_map_weighted': 0.1313353180885315, 'priority_map_loss': 1.313353180885315, 'weighted_priority_map_loss': 0.1313353180885315, 'loss_priority_map_stage3': 1.4454684257507324, 'loss_priority_map_stage4': 1.1812379360198975, 'loss_side_stage4': 0.16289454698562622, 'loss_side_stage3': 0.20691999793052673, 'loss_side_stage2': 0.21829137206077576, 'loss_side_stage1': 0.21239027380943298}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8743/0.0000/29.5767 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9269/0.0000/23.9016 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5257 | key_norm_mean=1.1092 | context_mean=0.0000 | context_std=0.1257 | context_min=-0.2642 | context_max=0.3328 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0173 | key_norm_mean=0.8400 | context_mean=-0.0001 | context_std=0.0752 | context_min=-0.1491 | context_max=0.2214 | total_candidate_weight=84.0000 | spatial_strength=0.0990 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.874284 | min=0.000000 | max=29.576712 | alpha=0.993320
+patch-priority map [stage4] | mean=0.062500 | std=0.926869 | min=0.000000 | max=23.901577 | alpha=0.993251
+Epoch 11/200
+  Mean train loss: 0.471963
+  Mean val loss:   0.491493
+  Current LR:      4.96e-05
+Val metrics   | CC: 0.5220 | SIM: 0.4108 | NSS: 2.9766
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_011.pth
+  New best val loss: 0.491493 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 12/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=16.0000 mean=-2.7127 std=2.6182
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0168 std=0.0796
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5701/0.0000/17.9215 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.5256/0.0000/12.4697 | patch_priority_alpha=0.9933
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5033 | key_norm_mean=1.0758 | context_mean=0.0000 | context_std=0.1111 | context_min=-0.2373 | context_max=0.2940 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9959 | key_norm_mean=0.8472 | context_mean=-0.0000 | context_std=0.0686 | context_min=-0.1461 | context_max=0.1596 | total_candidate_weight=84.0000 | spatial_strength=0.0990 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.570082 | min=0.000000 | max=17.921539 | alpha=0.993320
+patch-priority map [stage4] | mean=0.062500 | std=0.525642 | min=0.000000 | max=12.469708 | alpha=0.993251
+DEBUG visual concept usage [stage1] top 10:
+  concept 363: 3614 patches (33.61%)
+  concept 271: 2918 patches (27.14%)
+  concept 217: 2775 patches (25.81%)
+  concept 356: 1310 patches (12.18%)
+  concept 120: 122 patches (1.13%)
+  concept 157: 12 patches (0.11%)
+  concept 147: 1 patches (0.01%)
+  normalized usage entropy: 0.7638
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 1564 patches (58.18%)
+  concept 11: 1122 patches (41.74%)
+  concept 81: 2 patches (0.07%)
+  normalized usage entropy: 0.7539
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 213 patches (31.70%)
+  concept 206: 167 patches (24.85%)
+  concept 362: 125 patches (18.60%)
+  concept 262: 66 patches (9.82%)
+  concept 348: 47 patches (6.99%)
+  concept 379: 47 patches (6.99%)
+  concept 497: 4 patches (0.60%)
+  concept 234: 2 patches (0.30%)
+  concept 189: 1 patches (0.15%)
+  normalized usage entropy: 0.5467
+DEBUG visual concept usage [stage4] top 10:
+  concept 299: 77 patches (45.83%)
+  concept 386: 37 patches (22.02%)
+  concept 168: 17 patches (10.12%)
+  concept 194: 12 patches (7.14%)
+  concept 34: 7 patches (4.17%)
+  concept 392: 6 patches (3.57%)
+  concept 438: 6 patches (3.57%)
+  concept 262: 3 patches (1.79%)
+  concept 53: 1 patches (0.60%)
+  concept 72: 1 patches (0.60%)
+  normalized usage entropy: 0.5180
+DEBUG pred min/max/mean/std: -3.984375 16.0 -2.71875 2.625
+DEBUG target min/max/mean/std: 0.0 1.0 0.01676405966281891 0.07963753491640091
+DEBUG fixation pixels per sample: [196.0, 191.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0008398437639698386 0.02896791696548462
+DEBUG losses: {'loss_total': 0.5564044713973999, 'loss_fid': 13.479132652282715, 'loss_patch_fid': 4.378657817840576, 'loss_dense_fid': 3.48079514503479, 'loss_dense_bce': -0.0, 'loss_dense_kl': 5.6196794509887695, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.4450981616973877, 'loss_nss': -2.7430853843688965, 'loss_sim': 0.6133798360824585, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5477362871170044, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.35440218448638916, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.05654466897249222, 'loss_decoder_side_aux': 0.08706766366958618, 'loss_priority_map': 1.4248566627502441, 'loss_priority_map_weighted': 0.14248566329479218, 'priority_map_loss': 1.4248566627502441, 'weighted_priority_map_loss': 0.14248566329479218, 'loss_priority_map_stage3': 1.364471435546875, 'loss_priority_map_stage4': 1.4852417707443237, 'loss_side_stage4': 0.11365810036659241, 'loss_side_stage3': 0.15364646911621094, 'loss_side_stage2': 0.19447582960128784, 'loss_side_stage1': 0.18424370884895325}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0956/0.0000/50.6753 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.7255/0.0000/18.8714 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5690 | key_norm_mean=1.1093 | context_mean=0.0000 | context_std=0.1191 | context_min=-0.2597 | context_max=0.3567 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9662 | key_norm_mean=0.8614 | context_mean=-0.0000 | context_std=0.0645 | context_min=-0.1461 | context_max=0.1747 | total_candidate_weight=84.0000 | spatial_strength=0.0990 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.095564 | min=0.000000 | max=50.675255 | alpha=0.993322
+patch-priority map [stage4] | mean=0.062500 | std=0.725526 | min=0.000000 | max=18.871387 | alpha=0.993249
+Epoch 12/200
+  Mean train loss: 0.445701
+  Mean val loss:   0.521266
+  Current LR:      4.96e-05
+Val metrics   | CC: 0.5072 | SIM: 0.4098 | NSS: 2.9097
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_012.pth
+
+Epoch 13/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=27.3750 mean=-3.3182 std=2.8809
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0168 std=0.0868
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8571/0.0000/29.0846 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6166/0.0000/15.3636 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5650 | key_norm_mean=1.1044 | context_mean=0.0000 | context_std=0.1194 | context_min=-0.2597 | context_max=0.3552 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9584 | key_norm_mean=0.8618 | context_mean=-0.0001 | context_std=0.0647 | context_min=-0.1461 | context_max=0.1611 | total_candidate_weight=84.0000 | spatial_strength=0.0990 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.857053 | min=0.000000 | max=29.084599 | alpha=0.993322
+patch-priority map [stage4] | mean=0.062500 | std=0.616571 | min=0.000000 | max=15.363634 | alpha=0.993249
+DEBUG visual concept usage [stage1] top 10:
+  concept 363: 2942 patches (27.36%)
+  concept 217: 2843 patches (26.44%)
+  concept 356: 2560 patches (23.81%)
+  concept 271: 2147 patches (19.97%)
+  concept 120: 134 patches (1.25%)
+  concept 157: 81 patches (0.75%)
+  concept 388: 26 patches (0.24%)
+  concept 397: 15 patches (0.14%)
+  concept 22: 2 patches (0.02%)
+  concept 422: 2 patches (0.02%)
+  normalized usage entropy: 0.7887
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 1510 patches (56.18%)
+  concept 363: 1165 patches (43.34%)
+  concept 81: 12 patches (0.45%)
+  concept 424: 1 patches (0.04%)
+  normalized usage entropy: 0.7750
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 228 patches (33.93%)
+  concept 206: 164 patches (24.40%)
+  concept 362: 136 patches (20.24%)
+  concept 348: 57 patches (8.48%)
+  concept 379: 45 patches (6.70%)
+  concept 262: 39 patches (5.80%)
+  concept 234: 2 patches (0.30%)
+  concept 497: 1 patches (0.15%)
+  normalized usage entropy: 0.5501
+DEBUG visual concept usage [stage4] top 10:
+  concept 194: 32 patches (19.05%)
+  concept 299: 27 patches (16.07%)
+  concept 294: 24 patches (14.29%)
+  concept 266: 23 patches (13.69%)
+  concept 392: 17 patches (10.12%)
+  concept 53: 15 patches (8.93%)
+  concept 168: 12 patches (7.14%)
+  concept 386: 9 patches (5.36%)
+  concept 438: 6 patches (3.57%)
+  concept 262: 2 patches (1.19%)
+  normalized usage entropy: 0.4828
+DEBUG pred min/max/mean/std: -3.984375 27.375 -3.3125 2.875
+DEBUG target min/max/mean/std: 0.0 1.0 0.016756732016801834 0.08678770810365677
+DEBUG fixation pixels per sample: [176.0, 239.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0009006076725199819 0.029996639117598534
+DEBUG losses: {'loss_total': 0.030837014317512512, 'loss_fid': 21.10492706298828, 'loss_patch_fid': 4.22617769241333, 'loss_dense_fid': 4.037621021270752, 'loss_dense_bce': -0.0, 'loss_dense_kl': 12.8411283493042, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.25811028480529785, 'loss_nss': -3.823448657989502, 'loss_sim': 0.3865998387336731, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5534175038337708, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3508262038230896, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.055314548313617706, 'loss_decoder_side_aux': -0.0633913204073906, 'loss_priority_map': 0.8663867712020874, 'loss_priority_map_weighted': 0.0866386815905571, 'priority_map_loss': 0.8663867712020874, 'weighted_priority_map_loss': 0.0866386815905571, 'loss_priority_map_stage3': 0.8257027864456177, 'loss_priority_map_stage4': 0.9070706963539124, 'loss_side_stage4': -0.11044898629188538, 'loss_side_stage3': -0.1304599940776825, 'loss_side_stage2': -0.1320822536945343, 'loss_side_stage1': -0.12505266070365906}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0402/0.0000/38.3631 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9795/0.0000/25.3199 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6273 | key_norm_mean=1.1523 | context_mean=0.0000 | context_std=0.1355 | context_min=-0.2791 | context_max=0.3806 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0485 | key_norm_mean=0.9737 | context_mean=0.0001 | context_std=0.0846 | context_min=-0.1747 | context_max=0.2364 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.040219 | min=0.000000 | max=38.363079 | alpha=0.993321
+patch-priority map [stage4] | mean=0.062500 | std=0.979533 | min=0.000000 | max=25.319902 | alpha=0.993247
+Epoch 13/200
+  Mean train loss: 0.426005
+  Mean val loss:   0.533843
+  Current LR:      4.95e-05
+Val metrics   | CC: 0.4907 | SIM: 0.4042 | NSS: 2.8732
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_013.pth
+
+Epoch 14/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=32.0000 mean=-3.3138 std=2.9930
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0094 std=0.0634
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8285/0.0000/37.4912 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6661/0.0000/23.7121 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6220 | key_norm_mean=1.1450 | context_mean=0.0000 | context_std=0.1323 | context_min=-0.2791 | context_max=0.3851 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0396 | key_norm_mean=0.9753 | context_mean=-0.0000 | context_std=0.0829 | context_min=-0.1739 | context_max=0.2018 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.828502 | min=0.000000 | max=37.491207 | alpha=0.993321
+patch-priority map [stage4] | mean=0.062500 | std=0.666102 | min=0.000000 | max=23.712101 | alpha=0.993247
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 4687 patches (43.59%)
+  concept 271: 2689 patches (25.01%)
+  concept 363: 1354 patches (12.59%)
+  concept 356: 1305 patches (12.14%)
+  concept 157: 367 patches (3.41%)
+  concept 397: 118 patches (1.10%)
+  concept 37: 102 patches (0.95%)
+  concept 120: 82 patches (0.76%)
+  concept 92: 37 patches (0.34%)
+  concept 206: 9 patches (0.08%)
+  normalized usage entropy: 0.7874
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 1356 patches (50.45%)
+  concept 363: 1103 patches (41.03%)
+  concept 187: 181 patches (6.73%)
+  concept 81: 48 patches (1.79%)
+  normalized usage entropy: 0.7856
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 246 patches (36.61%)
+  concept 206: 169 patches (25.15%)
+  concept 362: 135 patches (20.09%)
+  concept 379: 75 patches (11.16%)
+  concept 262: 29 patches (4.32%)
+  concept 348: 16 patches (2.38%)
+  concept 234: 1 patches (0.15%)
+  concept 462: 1 patches (0.15%)
+  normalized usage entropy: 0.5485
+DEBUG visual concept usage [stage4] top 10:
+  concept 299: 63 patches (37.50%)
+  concept 168: 43 patches (25.60%)
+  concept 53: 34 patches (20.24%)
+  concept 266: 19 patches (11.31%)
+  concept 438: 4 patches (2.38%)
+  concept 294: 2 patches (1.19%)
+  concept 386: 2 patches (1.19%)
+  concept 392: 1 patches (0.60%)
+  normalized usage entropy: 0.4222
+DEBUG pred min/max/mean/std: -3.984375 32.0 -3.3125 3.0
+DEBUG target min/max/mean/std: 0.0 1.0 0.009410063736140728 0.06342649459838867
+DEBUG fixation pixels per sample: [190.0, 55.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0005316840251907706 0.023052169010043144
+DEBUG losses: {'loss_total': 0.3807479739189148, 'loss_fid': 23.26093292236328, 'loss_patch_fid': 4.227009296417236, 'loss_dense_fid': 4.054128646850586, 'loss_dense_bce': -0.0, 'loss_dense_kl': 14.9797945022583, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.45633983612060547, 'loss_nss': -4.104706764221191, 'loss_sim': 0.5762028694152832, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5322432518005371, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.36407986283302307, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.05054710805416107, 'loss_decoder_side_aux': 0.02107122167944908, 'loss_priority_map': 1.665710210800171, 'loss_priority_map_weighted': 0.1665710210800171, 'priority_map_loss': 1.665710210800171, 'weighted_priority_map_loss': 0.1665710210800171, 'loss_priority_map_stage3': 1.651851773262024, 'loss_priority_map_stage4': 1.6795687675476074, 'loss_side_stage4': 0.08485838770866394, 'loss_side_stage3': 0.028734415769577026, 'loss_side_stage2': 0.027157634496688843, 'loss_side_stage1': 0.049406081438064575}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.9410/0.0000/29.6204 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8530/0.0000/19.7964 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.6011 | key_norm_mean=1.1383 | context_mean=0.0001 | context_std=0.1365 | context_min=-0.2761 | context_max=0.3627 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0241 | key_norm_mean=1.0254 | context_mean=0.0001 | context_std=0.0869 | context_min=-0.1747 | context_max=0.2380 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.940950 | min=0.000000 | max=29.620413 | alpha=0.993327
+patch-priority map [stage4] | mean=0.062500 | std=0.852958 | min=0.000000 | max=19.796432 | alpha=0.993242
+Epoch 14/200
+  Mean train loss: 0.443293
+  Mean val loss:   0.483711
+  Current LR:      4.94e-05
+Val metrics   | CC: 0.5221 | SIM: 0.4121 | NSS: 3.0078
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_014.pth
+  New best val loss: 0.483711 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 15/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=23.7500 mean=-3.0063 std=2.9821
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0225 std=0.0891
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.7287/0.0000/28.1311 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.7202/0.0000/18.3336 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5804 | key_norm_mean=1.1029 | context_mean=0.0000 | context_std=0.1246 | context_min=-0.2537 | context_max=0.3358 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6920 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0126 | key_norm_mean=1.0410 | context_mean=0.0001 | context_std=0.0825 | context_min=-0.1724 | context_max=0.2274 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6928 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.728736 | min=0.000000 | max=28.131050 | alpha=0.993327
+patch-priority map [stage4] | mean=0.062500 | std=0.720165 | min=0.000000 | max=18.333624 | alpha=0.993242
+DEBUG visual concept usage [stage1] top 10:
+  concept 363: 4543 patches (42.25%)
+  concept 271: 2462 patches (22.90%)
+  concept 217: 1056 patches (9.82%)
+  concept 397: 955 patches (8.88%)
+  concept 157: 871 patches (8.10%)
+  concept 356: 532 patches (4.95%)
+  concept 92: 206 patches (1.92%)
+  concept 37: 86 patches (0.80%)
+  concept 120: 39 patches (0.36%)
+  concept 138: 2 patches (0.02%)
+  normalized usage entropy: 0.7747
+DEBUG visual concept usage [stage2] top 10:
+  concept 187: 1712 patches (63.69%)
+  concept 11: 495 patches (18.42%)
+  concept 363: 427 patches (15.89%)
+  concept 81: 54 patches (2.01%)
+  normalized usage entropy: 0.7004
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 277 patches (41.22%)
+  concept 206: 144 patches (21.43%)
+  concept 362: 109 patches (16.22%)
+  concept 379: 79 patches (11.76%)
+  concept 348: 35 patches (5.21%)
+  concept 262: 21 patches (3.12%)
+  concept 92: 4 patches (0.60%)
+  concept 505: 3 patches (0.45%)
+  normalized usage entropy: 0.5546
+DEBUG visual concept usage [stage4] top 10:
+  concept 266: 84 patches (50.00%)
+  concept 299: 28 patches (16.67%)
+  concept 392: 19 patches (11.31%)
+  concept 53: 16 patches (9.52%)
+  concept 168: 15 patches (8.93%)
+  concept 262: 6 patches (3.57%)
+  normalized usage entropy: 0.4103
+DEBUG pred min/max/mean/std: -3.984375 23.75 -3.0 2.984375
+DEBUG target min/max/mean/std: 0.0 1.0 0.02250698208808899 0.08910239487886429
+DEBUG fixation pixels per sample: [221.0, 174.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0008572048973292112 0.029265541583299637
+DEBUG losses: {'loss_total': 0.5474066734313965, 'loss_fid': 19.55994987487793, 'loss_patch_fid': 4.207688331604004, 'loss_dense_fid': 3.872492551803589, 'loss_dense_bce': -0.0, 'loss_dense_kl': 11.479768753051758, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.4274839162826538, 'loss_nss': -2.3679909706115723, 'loss_sim': 0.5162947773933411, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5081327557563782, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3900134563446045, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.050440818071365356, 'loss_decoder_side_aux': 0.0983220785856247, 'loss_priority_map': 1.1478747129440308, 'loss_priority_map_weighted': 0.11478747427463531, 'priority_map_loss': 1.1478747129440308, 'weighted_priority_map_loss': 0.11478747427463531, 'loss_priority_map_stage3': 1.3244984149932861, 'loss_priority_map_stage4': 0.9712510108947754, 'loss_side_stage4': 0.20501591265201569, 'loss_side_stage3': 0.21202604472637177, 'loss_side_stage2': 0.19450749456882477, 'loss_side_stage1': 0.1884627491235733}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0621/0.0000/35.3980 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/1.0201/0.0000/27.4187 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5815 | key_norm_mean=1.1354 | context_mean=0.0000 | context_std=0.1330 | context_min=-0.2642 | context_max=0.3672 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6921 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0751 | key_norm_mean=1.1156 | context_mean=0.0001 | context_std=0.0983 | context_min=-0.2018 | context_max=0.2696 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.062119 | min=0.000000 | max=35.397980 | alpha=0.993326
+patch-priority map [stage4] | mean=0.062500 | std=1.020062 | min=0.000000 | max=27.418707 | alpha=0.993242
+Epoch 15/200
+  Mean train loss: 0.422115
+  Mean val loss:   0.482116
+  Current LR:      4.93e-05
+Val metrics   | CC: 0.5215 | SIM: 0.4202 | NSS: 3.0115
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_015.pth
+  New best val loss: 0.482116 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 16/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=31.1250 mean=-3.1716 std=3.0523
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0145 std=0.0753
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8547/0.0000/38.9945 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8383/0.0000/30.9542 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5707 | key_norm_mean=1.1208 | context_mean=0.0000 | context_std=0.1285 | context_min=-0.2567 | context_max=0.3657 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6921 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0759 | key_norm_mean=1.1169 | context_mean=0.0001 | context_std=0.0915 | context_min=-0.2003 | context_max=0.2184 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.854749 | min=0.000000 | max=38.994465 | alpha=0.993326
+patch-priority map [stage4] | mean=0.062500 | std=0.838268 | min=0.000000 | max=30.954227 | alpha=0.993242
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 5294 patches (49.24%)
+  concept 363: 2822 patches (26.25%)
+  concept 356: 971 patches (9.03%)
+  concept 37: 661 patches (6.15%)
+  concept 397: 279 patches (2.59%)
+  concept 92: 243 patches (2.26%)
+  concept 271: 227 patches (2.11%)
+  concept 157: 204 patches (1.90%)
+  concept 120: 39 patches (0.36%)
+  concept 138: 4 patches (0.04%)
+  normalized usage entropy: 0.7931
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 1226 patches (45.61%)
+  concept 363: 764 patches (28.42%)
+  concept 81: 470 patches (17.49%)
+  concept 187: 228 patches (8.48%)
+  normalized usage entropy: 0.7829
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 298 patches (44.35%)
+  concept 206: 164 patches (24.40%)
+  concept 379: 99 patches (14.73%)
+  concept 348: 62 patches (9.23%)
+  concept 362: 34 patches (5.06%)
+  concept 262: 12 patches (1.79%)
+  concept 92: 3 patches (0.45%)
+  normalized usage entropy: 0.5561
+DEBUG visual concept usage [stage4] top 10:
+  concept 266: 56 patches (33.33%)
+  concept 262: 34 patches (20.24%)
+  concept 53: 31 patches (18.45%)
+  concept 392: 24 patches (14.29%)
+  concept 294: 15 patches (8.93%)
+  concept 168: 5 patches (2.98%)
+  concept 299: 3 patches (1.79%)
+  normalized usage entropy: 0.3965
+DEBUG pred min/max/mean/std: -3.984375 31.125 -3.171875 3.046875
+DEBUG target min/max/mean/std: 0.0 1.0 0.014505608938634396 0.07534981518983841
+DEBUG fixation pixels per sample: [285.0, 155.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0009548611124046147 0.030886102467775345
+DEBUG losses: {'loss_total': 0.39727354049682617, 'loss_fid': 21.442949295043945, 'loss_patch_fid': 4.160801410675049, 'loss_dense_fid': 4.029794692993164, 'loss_dense_bce': -0.0, 'loss_dense_kl': 13.25235366821289, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.4259851574897766, 'loss_nss': -3.4756124019622803, 'loss_sim': 0.4613450765609741, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5239008665084839, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.36783599853515625, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.049162715673446655, 'loss_decoder_side_aux': 0.04403339698910713, 'loss_priority_map': 1.4011592864990234, 'loss_priority_map_weighted': 0.14011593163013458, 'priority_map_loss': 1.4011592864990234, 'weighted_priority_map_loss': 0.14011593163013458, 'loss_priority_map_stage3': 1.2900382280349731, 'loss_priority_map_stage4': 1.5122802257537842, 'loss_side_stage4': 0.1392892301082611, 'loss_side_stage3': 0.09433320164680481, 'loss_side_stage2': 0.08574190735816956, 'loss_side_stage1': 0.07387164235115051}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.9144/0.0000/35.8423 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8329/0.0000/18.8419 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5265 | key_norm_mean=1.0970 | context_mean=0.0000 | context_std=0.1268 | context_min=-0.2537 | context_max=0.3478 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.1010 | key_norm_mean=1.1423 | context_mean=-0.0000 | context_std=0.1027 | context_min=-0.2033 | context_max=0.2605 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.914398 | min=0.000000 | max=35.842270 | alpha=0.993330
+patch-priority map [stage4] | mean=0.062500 | std=0.832945 | min=0.000000 | max=18.841864 | alpha=0.993240
+Epoch 16/200
+  Mean train loss: 0.425059
+  Mean val loss:   0.484648
+  Current LR:      4.92e-05
+Val metrics   | CC: 0.5150 | SIM: 0.4212 | NSS: 2.9950
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_016.pth
+
+Epoch 17/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=33.2500 mean=-3.2265 std=3.2948
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0142 std=0.0844
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6605/0.0000/21.3189 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6306/0.0000/14.9566 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5138 | key_norm_mean=1.0809 | context_mean=0.0000 | context_std=0.1203 | context_min=-0.2433 | context_max=0.3209 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0741 | key_norm_mean=1.1541 | context_mean=-0.0000 | context_std=0.0935 | context_min=-0.1928 | context_max=0.2304 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.660502 | min=0.000000 | max=21.318947 | alpha=0.993330
+patch-priority map [stage4] | mean=0.062500 | std=0.630629 | min=0.000000 | max=14.956626 | alpha=0.993240
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 3137 patches (29.18%)
+  concept 363: 2373 patches (22.07%)
+  concept 271: 1586 patches (14.75%)
+  concept 157: 1311 patches (12.19%)
+  concept 397: 1000 patches (9.30%)
+  concept 37: 552 patches (5.13%)
+  concept 356: 415 patches (3.86%)
+  concept 92: 302 patches (2.81%)
+  concept 120: 36 patches (0.33%)
+  concept 176: 23 patches (0.21%)
+  normalized usage entropy: 0.8203
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 1029 patches (38.28%)
+  concept 11: 921 patches (34.26%)
+  concept 81: 374 patches (13.91%)
+  concept 187: 364 patches (13.54%)
+  normalized usage entropy: 0.7994
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 299 patches (44.49%)
+  concept 206: 163 patches (24.26%)
+  concept 379: 81 patches (12.05%)
+  concept 348: 80 patches (11.90%)
+  concept 362: 34 patches (5.06%)
+  concept 262: 10 patches (1.49%)
+  concept 92: 4 patches (0.60%)
+  concept 505: 1 patches (0.15%)
+  normalized usage entropy: 0.5584
+DEBUG visual concept usage [stage4] top 10:
+  concept 266: 39 patches (23.21%)
+  concept 296: 39 patches (23.21%)
+  concept 299: 36 patches (21.43%)
+  concept 392: 20 patches (11.90%)
+  concept 262: 15 patches (8.93%)
+  concept 53: 12 patches (7.14%)
+  concept 294: 6 patches (3.57%)
+  concept 168: 1 patches (0.60%)
+  normalized usage entropy: 0.3972
+DEBUG pred min/max/mean/std: -3.984375 33.25 -3.21875 3.296875
+DEBUG target min/max/mean/std: 0.0 1.0 0.01418835949152708 0.08435769379138947
+DEBUG fixation pixels per sample: [111.0, 71.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.00039496528916060925 0.019869830459356308
+DEBUG losses: {'loss_total': -0.3100626766681671, 'loss_fid': 23.49302101135254, 'loss_patch_fid': 4.178631782531738, 'loss_dense_fid': 4.042903423309326, 'loss_dense_bce': -0.0, 'loss_dense_kl': 15.271486282348633, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.17585158348083496, 'loss_nss': -5.796647548675537, 'loss_sim': 0.3850964307785034, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.531917929649353, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3561607599258423, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.048708438873291016, 'loss_decoder_side_aux': -0.19212862849235535, 'loss_priority_map': 1.6038539409637451, 'loss_priority_map_weighted': 0.160385400056839, 'priority_map_loss': 1.6038539409637451, 'weighted_priority_map_loss': 0.160385400056839, 'loss_priority_map_stage3': 1.6307038068771362, 'loss_priority_map_stage4': 1.5770041942596436, 'loss_side_stage4': -0.3685014843940735, 'loss_side_stage3': -0.36659395694732666, 'loss_side_stage2': -0.37246060371398926, 'loss_side_stage1': -0.4058752655982971}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.9447/0.0000/35.3963 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9897/0.0000/32.3542 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5697 | key_norm_mean=1.1060 | context_mean=0.0000 | context_std=0.1242 | context_min=-0.2537 | context_max=0.3448 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6921 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0518 | key_norm_mean=1.1587 | context_mean=0.0001 | context_std=0.0965 | context_min=-0.1920 | context_max=0.2831 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.944727 | min=0.000000 | max=35.396305 | alpha=0.993328
+patch-priority map [stage4] | mean=0.062500 | std=0.989658 | min=0.000000 | max=32.354237 | alpha=0.993237
+Epoch 17/200
+  Mean train loss: 0.403619
+  Mean val loss:   0.483057
+  Current LR:      4.91e-05
+Val metrics   | CC: 0.5208 | SIM: 0.3994 | NSS: 2.9959
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_017.pth
+
+Epoch 18/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=32.0000 mean=-2.9252 std=2.9838
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0236 std=0.0925
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6796/0.0000/33.5920 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.7058/0.0000/25.4786 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5577 | key_norm_mean=1.0896 | context_mean=0.0001 | context_std=0.1154 | context_min=-0.2463 | context_max=0.3075 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6921 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0580 | key_norm_mean=1.1558 | context_mean=0.0001 | context_std=0.0921 | context_min=-0.1988 | context_max=0.2169 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6927 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.679621 | min=0.000000 | max=33.592037 | alpha=0.993328
+patch-priority map [stage4] | mean=0.062500 | std=0.705753 | min=0.000000 | max=25.478605 | alpha=0.993237
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 4105 patches (38.18%)
+  concept 363: 2017 patches (18.76%)
+  concept 92: 1003 patches (9.33%)
+  concept 37: 892 patches (8.30%)
+  concept 271: 849 patches (7.90%)
+  concept 397: 655 patches (6.09%)
+  concept 356: 507 patches (4.72%)
+  concept 157: 408 patches (3.79%)
+  concept 138: 221 patches (2.06%)
+  concept 176: 45 patches (0.42%)
+  normalized usage entropy: 0.8167
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 924 patches (34.38%)
+  concept 187: 623 patches (23.18%)
+  concept 363: 612 patches (22.77%)
+  concept 81: 529 patches (19.68%)
+  normalized usage entropy: 0.7994
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 265 patches (39.43%)
+  concept 379: 203 patches (30.21%)
+  concept 348: 89 patches (13.24%)
+  concept 206: 76 patches (11.31%)
+  concept 362: 21 patches (3.12%)
+  concept 92: 15 patches (2.23%)
+  concept 505: 3 patches (0.45%)
+  normalized usage entropy: 0.5520
+DEBUG visual concept usage [stage4] top 10:
+  concept 392: 68 patches (40.48%)
+  concept 266: 35 patches (20.83%)
+  concept 299: 27 patches (16.07%)
+  concept 262: 15 patches (8.93%)
+  concept 53: 14 patches (8.33%)
+  concept 296: 5 patches (2.98%)
+  concept 294: 4 patches (2.38%)
+  normalized usage entropy: 0.3943
+DEBUG pred min/max/mean/std: -3.984375 32.0 -2.921875 2.984375
+DEBUG target min/max/mean/std: 0.0 1.0 0.023572169244289398 0.09245838969945908
+DEBUG fixation pixels per sample: [200.0, 233.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0009396701352670789 0.03063966892659664
+DEBUG losses: {'loss_total': 0.22726169228553772, 'loss_fid': 23.177562713623047, 'loss_patch_fid': 4.189720630645752, 'loss_dense_fid': 3.748328924179077, 'loss_dense_bce': -0.0, 'loss_dense_kl': 15.239514350891113, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.2769913673400879, 'loss_nss': -2.858952760696411, 'loss_sim': 0.473008930683136, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5249111652374268, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3594089150428772, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.0499907061457634, 'loss_decoder_side_aux': 2.452288754284382e-05, 'loss_priority_map': 1.0028403997421265, 'loss_priority_map_weighted': 0.10028403997421265, 'priority_map_loss': 1.0028403997421265, 'weighted_priority_map_loss': 0.10028403997421265, 'loss_priority_map_stage3': 1.0132567882537842, 'loss_priority_map_stage4': 0.9924240112304688, 'loss_side_stage4': -0.002566695213317871, 'loss_side_stage3': 0.010282129049301147, 'loss_side_stage2': 0.00182381272315979, 'loss_side_stage1': -0.005744636058807373}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0622/0.0000/41.6250 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9195/0.0000/26.8296 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4982 | key_norm_mean=1.0728 | context_mean=0.0001 | context_std=0.1221 | context_min=-0.2552 | context_max=0.3478 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0305 | key_norm_mean=1.0999 | context_mean=0.0001 | context_std=0.0954 | context_min=-0.1973 | context_max=0.2605 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6929 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.062164 | min=0.000000 | max=41.624981 | alpha=0.993327
+patch-priority map [stage4] | mean=0.062500 | std=0.919504 | min=0.000000 | max=26.829578 | alpha=0.993237
+Epoch 18/200
+  Mean train loss: 0.371542
+  Mean val loss:   0.466476
+  Current LR:      4.90e-05
+Val metrics   | CC: 0.5250 | SIM: 0.4144 | NSS: 3.0388
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_018.pth
+  New best val loss: 0.466476 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 19/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=39.0000 mean=-3.0760 std=3.0381
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0136 std=0.0725
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6480/0.0000/31.3707 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6788/0.0000/23.7671 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4840 | key_norm_mean=1.0549 | context_mean=0.0000 | context_std=0.1128 | context_min=-0.2328 | context_max=0.3269 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0152 | key_norm_mean=1.1132 | context_mean=0.0000 | context_std=0.0846 | context_min=-0.1943 | context_max=0.2063 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6929 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.648042 | min=0.000000 | max=31.370739 | alpha=0.993327
+patch-priority map [stage4] | mean=0.062500 | std=0.678790 | min=0.000000 | max=23.767122 | alpha=0.993237
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 2954 patches (27.47%)
+  concept 37: 1622 patches (15.09%)
+  concept 363: 1570 patches (14.60%)
+  concept 157: 1098 patches (10.21%)
+  concept 92: 1067 patches (9.92%)
+  concept 356: 719 patches (6.69%)
+  concept 138: 523 patches (4.86%)
+  concept 397: 457 patches (4.25%)
+  concept 271: 445 patches (4.14%)
+  concept 193: 121 patches (1.13%)
+  normalized usage entropy: 0.8199
+DEBUG visual concept usage [stage2] top 10:
+  concept 11: 891 patches (33.15%)
+  concept 81: 785 patches (29.20%)
+  concept 363: 691 patches (25.71%)
+  concept 187: 321 patches (11.94%)
+  normalized usage entropy: 0.7990
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 309 patches (45.98%)
+  concept 379: 191 patches (28.42%)
+  concept 348: 79 patches (11.76%)
+  concept 206: 74 patches (11.01%)
+  concept 262: 7 patches (1.04%)
+  concept 362: 6 patches (0.89%)
+  concept 92: 5 patches (0.74%)
+  concept 505: 1 patches (0.15%)
+  normalized usage entropy: 0.5611
+DEBUG visual concept usage [stage4] top 10:
+  concept 299: 43 patches (25.60%)
+  concept 392: 42 patches (25.00%)
+  concept 53: 30 patches (17.86%)
+  concept 262: 23 patches (13.69%)
+  concept 266: 16 patches (9.52%)
+  concept 296: 14 patches (8.33%)
+  normalized usage entropy: 0.3896
+DEBUG pred min/max/mean/std: -3.984375 39.0 -3.078125 3.03125
+DEBUG target min/max/mean/std: 0.0 1.0 0.013596856966614723 0.0725080594420433
+DEBUG fixation pixels per sample: [232.0, 176.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.000885416695382446 0.029742807149887085
+DEBUG losses: {'loss_total': 0.23099786043167114, 'loss_fid': 24.954730987548828, 'loss_patch_fid': 4.215550899505615, 'loss_dense_fid': 3.821732997894287, 'loss_dense_bce': -0.0, 'loss_dense_kl': 16.91744613647461, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.3241000175476074, 'loss_nss': -4.068266868591309, 'loss_sim': 0.46217554807662964, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5209503769874573, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3575921356678009, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.04655396565794945, 'loss_decoder_side_aux': -0.026947839185595512, 'loss_priority_map': 2.0953688621520996, 'loss_priority_map_weighted': 0.20953689515590668, 'priority_map_loss': 2.0953688621520996, 'weighted_priority_map_loss': 0.20953689515590668, 'loss_priority_map_stage3': 2.136472225189209, 'loss_priority_map_stage4': 2.0542657375335693, 'loss_side_stage4': -0.039379507303237915, 'loss_side_stage3': -0.0056504011154174805, 'loss_side_stage2': -0.05589953064918518, 'loss_side_stage1': -0.08014446496963501}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0300/0.0000/35.4127 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9676/0.0000/26.2380 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5384 | key_norm_mean=1.0892 | context_mean=0.0001 | context_std=0.1258 | context_min=-0.2597 | context_max=0.3418 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0225 | key_norm_mean=1.0820 | context_mean=0.0000 | context_std=0.0919 | context_min=-0.1943 | context_max=0.2500 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6929 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.029951 | min=0.000000 | max=35.412701 | alpha=0.993330
+patch-priority map [stage4] | mean=0.062500 | std=0.967555 | min=0.000000 | max=26.237955 | alpha=0.993232
+Epoch 19/200
+  Mean train loss: 0.351329
+  Mean val loss:   0.470791
+  Current LR:      4.89e-05
+Val metrics   | CC: 0.5217 | SIM: 0.4170 | NSS: 3.0364
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_019.pth
+
+Epoch 20/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=37.0000 mean=-3.0988 std=3.3572
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0098 std=0.0629
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8586/0.0000/43.4137 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9438/0.0000/40.1978 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5199 | key_norm_mean=1.0752 | context_mean=0.0000 | context_std=0.1246 | context_min=-0.2597 | context_max=0.3522 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0003 | key_norm_mean=1.0921 | context_mean=0.0000 | context_std=0.0868 | context_min=-0.1943 | context_max=0.2560 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6929 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.858580 | min=0.000000 | max=43.413734 | alpha=0.993330
+patch-priority map [stage4] | mean=0.062500 | std=0.943845 | min=0.000000 | max=40.197773 | alpha=0.993232
+DEBUG visual concept usage [stage1] top 10:
+  concept 363: 4321 patches (40.19%)
+  concept 92: 1623 patches (15.09%)
+  concept 397: 1146 patches (10.66%)
+  concept 37: 666 patches (6.19%)
+  concept 356: 531 patches (4.94%)
+  concept 138: 519 patches (4.83%)
+  concept 157: 472 patches (4.39%)
+  concept 217: 405 patches (3.77%)
+  concept 193: 392 patches (3.65%)
+  concept 271: 313 patches (2.91%)
+  normalized usage entropy: 0.7928
+DEBUG visual concept usage [stage2] top 10:
+  concept 187: 1083 patches (40.29%)
+  concept 11: 682 patches (25.37%)
+  concept 81: 667 patches (24.81%)
+  concept 363: 254 patches (9.45%)
+  concept 244: 2 patches (0.07%)
+  normalized usage entropy: 0.7887
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 362 patches (53.87%)
+  concept 379: 154 patches (22.92%)
+  concept 206: 91 patches (13.54%)
+  concept 348: 48 patches (7.14%)
+  concept 92: 14 patches (2.08%)
+  concept 362: 2 patches (0.30%)
+  concept 505: 1 patches (0.15%)
+  normalized usage entropy: 0.5641
+DEBUG visual concept usage [stage4] top 10:
+  concept 262: 43 patches (25.60%)
+  concept 299: 42 patches (25.00%)
+  concept 53: 28 patches (16.67%)
+  concept 392: 28 patches (16.67%)
+  concept 296: 16 patches (9.52%)
+  concept 266: 10 patches (5.95%)
+  concept 362: 1 patches (0.60%)
+  normalized usage entropy: 0.3990
+DEBUG pred min/max/mean/std: -3.984375 37.0 -3.09375 3.359375
+DEBUG target min/max/mean/std: 0.0 1.0 0.009803496301174164 0.06290988624095917
+DEBUG fixation pixels per sample: [139.0, 105.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0005295139271765947 0.023005099967122078
+DEBUG losses: {'loss_total': -0.18877145648002625, 'loss_fid': 25.063318252563477, 'loss_patch_fid': 4.1756744384765625, 'loss_dense_fid': 3.9809012413024902, 'loss_dense_bce': -0.0, 'loss_dense_kl': 16.906742095947266, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.2669036388397217, 'loss_nss': -5.592961311340332, 'loss_sim': 0.49369776248931885, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5139360427856445, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.36384302377700806, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.04474420100450516, 'loss_decoder_side_aux': -0.13661815226078033, 'loss_priority_map': 1.0717122554779053, 'loss_priority_map_weighted': 0.10717123001813889, 'priority_map_loss': 1.0717122554779053, 'weighted_priority_map_loss': 0.10717123001813889, 'loss_priority_map_stage3': 1.0924596786499023, 'loss_priority_map_stage4': 1.0509648323059082, 'loss_side_stage4': -0.12272873520851135, 'loss_side_stage3': -0.28554123640060425, 'loss_side_stage2': -0.29087716341018677, 'loss_side_stage1': -0.29148006439208984}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.0859/0.0000/41.1373 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/1.0557/0.0000/31.2290 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5465 | key_norm_mean=1.1006 | context_mean=0.0001 | context_std=0.1283 | context_min=-0.2687 | context_max=0.3657 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0674 | key_norm_mean=1.1435 | context_mean=-0.0000 | context_std=0.0999 | context_min=-0.2048 | context_max=0.2892 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6929 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.085896 | min=0.000000 | max=41.137318 | alpha=0.993328
+patch-priority map [stage4] | mean=0.062500 | std=1.055741 | min=0.000000 | max=31.228968 | alpha=0.993232
+Epoch 20/200
+  Mean train loss: 0.337051
+  Mean val loss:   0.472284
+  Current LR:      4.88e-05
+Val metrics   | CC: 0.5187 | SIM: 0.4222 | NSS: 3.0439
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_020.pth
+
+Epoch 21/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=47.2500 mean=-3.2128 std=3.2999
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0147 std=0.0761
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.9676/0.0000/43.0944 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9807/0.0000/36.7626 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5269 | key_norm_mean=1.0804 | context_mean=0.0001 | context_std=0.1256 | context_min=-0.2537 | context_max=0.3403 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6922 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0404 | key_norm_mean=1.1573 | context_mean=-0.0001 | context_std=0.0934 | context_min=-0.1988 | context_max=0.2937 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6929 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.967621 | min=0.000000 | max=43.094437 | alpha=0.993328
+patch-priority map [stage4] | mean=0.062500 | std=0.980741 | min=0.000000 | max=36.762592 | alpha=0.993232
+DEBUG visual concept usage [stage1] top 10:
+  concept 363: 3435 patches (31.95%)
+  concept 397: 1578 patches (14.68%)
+  concept 92: 1086 patches (10.10%)
+  concept 138: 1077 patches (10.02%)
+  concept 37: 624 patches (5.80%)
+  concept 217: 573 patches (5.33%)
+  concept 356: 566 patches (5.26%)
+  concept 157: 479 patches (4.45%)
+  concept 193: 469 patches (4.36%)
+  concept 271: 211 patches (1.96%)
+  normalized usage entropy: 0.8051
+DEBUG visual concept usage [stage2] top 10:
+  concept 81: 955 patches (35.53%)
+  concept 11: 780 patches (29.02%)
+  concept 187: 623 patches (23.18%)
+  concept 363: 324 patches (12.05%)
+  concept 87: 5 patches (0.19%)
+  concept 244: 1 patches (0.04%)
+  normalized usage entropy: 0.8012
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 344 patches (51.19%)
+  concept 379: 126 patches (18.75%)
+  concept 206: 85 patches (12.65%)
+  concept 348: 77 patches (11.46%)
+  concept 92: 31 patches (4.61%)
+  concept 362: 9 patches (1.34%)
+  normalized usage entropy: 0.5646
+DEBUG visual concept usage [stage4] top 10:
+  concept 262: 68 patches (40.48%)
+  concept 299: 44 patches (26.19%)
+  concept 296: 23 patches (13.69%)
+  concept 53: 17 patches (10.12%)
+  concept 362: 12 patches (7.14%)
+  concept 266: 2 patches (1.19%)
+  concept 392: 2 patches (1.19%)
+  normalized usage entropy: 0.3725
+DEBUG pred min/max/mean/std: -3.984375 47.25 -3.21875 3.296875
+DEBUG target min/max/mean/std: 0.0 1.0 0.01470913365483284 0.07609325647354126
+DEBUG fixation pixels per sample: [211.0, 236.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0009700520895421505 0.031130583956837654
+DEBUG losses: {'loss_total': -0.015224754810333252, 'loss_fid': 27.100513458251953, 'loss_patch_fid': 4.070067882537842, 'loss_dense_fid': 4.051070690155029, 'loss_dense_bce': -0.0, 'loss_dense_kl': 18.9793758392334, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.2633779048919678, 'loss_nss': -4.098496437072754, 'loss_sim': 0.43239033222198486, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5137579441070557, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3641374707221985, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.04479915648698807, 'loss_decoder_side_aux': -0.07495187968015671, 'loss_priority_map': 0.7917814254760742, 'loss_priority_map_weighted': 0.07917814701795578, 'priority_map_loss': 0.7917814254760742, 'weighted_priority_map_loss': 0.07917814701795578, 'loss_priority_map_stage3': 0.9400771856307983, 'loss_priority_map_stage4': 0.6434856057167053, 'loss_side_stage4': -0.22863951325416565, 'loss_side_stage3': -0.14021086692810059, 'loss_side_stage2': -0.135768860578537, 'loss_side_stage1': -0.1456674337387085}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.1123/0.0000/48.1239 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8849/0.0000/27.9259 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4685 | key_norm_mean=1.0593 | context_mean=0.0000 | context_std=0.1166 | context_min=-0.2448 | context_max=0.3403 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6923 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0981 | key_norm_mean=1.1748 | context_mean=-0.0000 | context_std=0.1038 | context_min=-0.2274 | context_max=0.2681 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6930 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.112317 | min=0.000000 | max=48.123863 | alpha=0.993327
+patch-priority map [stage4] | mean=0.062500 | std=0.884925 | min=0.000000 | max=27.925861 | alpha=0.993233
+Epoch 21/200
+  Mean train loss: 0.361557
+  Mean val loss:   0.457375
+  Current LR:      4.87e-05
+Val metrics   | CC: 0.5309 | SIM: 0.4160 | NSS: 3.0599
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_021.pth
+  New best val loss: 0.457375 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 22/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=33.7500 mean=-2.9465 std=3.3449
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0189 std=0.0875
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5789/0.0000/18.2560 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6255/0.0000/14.4912 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4373 | key_norm_mean=1.0234 | context_mean=0.0001 | context_std=0.1027 | context_min=-0.2254 | context_max=0.2507 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6923 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0569 | key_norm_mean=1.2027 | context_mean=-0.0001 | context_std=0.0948 | context_min=-0.2169 | context_max=0.2169 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6930 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.578907 | min=0.000000 | max=18.255987 | alpha=0.993327
+patch-priority map [stage4] | mean=0.062500 | std=0.625517 | min=0.000000 | max=14.491247 | alpha=0.993233
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 3673 patches (34.16%)
+  concept 363: 1318 patches (12.26%)
+  concept 397: 805 patches (7.49%)
+  concept 157: 746 patches (6.94%)
+  concept 291: 680 patches (6.32%)
+  concept 176: 634 patches (5.90%)
+  concept 37: 620 patches (5.77%)
+  concept 92: 449 patches (4.18%)
+  concept 138: 360 patches (3.35%)
+  concept 356: 357 patches (3.32%)
+  normalized usage entropy: 0.8345
+DEBUG visual concept usage [stage2] top 10:
+  concept 363: 860 patches (31.99%)
+  concept 11: 843 patches (31.36%)
+  concept 81: 510 patches (18.97%)
+  concept 187: 472 patches (17.56%)
+  concept 87: 3 patches (0.11%)
+  normalized usage entropy: 0.8161
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 396 patches (58.93%)
+  concept 379: 134 patches (19.94%)
+  concept 92: 61 patches (9.08%)
+  concept 348: 44 patches (6.55%)
+  concept 206: 22 patches (3.27%)
+  concept 362: 12 patches (1.79%)
+  concept 262: 2 patches (0.30%)
+  concept 505: 1 patches (0.15%)
+  normalized usage entropy: 0.5729
+DEBUG visual concept usage [stage4] top 10:
+  concept 262: 70 patches (41.67%)
+  concept 53: 41 patches (24.40%)
+  concept 299: 32 patches (19.05%)
+  concept 296: 11 patches (6.55%)
+  concept 362: 11 patches (6.55%)
+  concept 392: 2 patches (1.19%)
+  concept 266: 1 patches (0.60%)
+  normalized usage entropy: 0.3643
+DEBUG pred min/max/mean/std: -3.984375 33.75 -2.953125 3.34375
+DEBUG target min/max/mean/std: 0.0 1.0 0.018933748826384544 0.08749982714653015
+DEBUG fixation pixels per sample: [166.0, 222.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0008420139201916754 0.02900528907775879
+DEBUG losses: {'loss_total': 0.08252335339784622, 'loss_fid': 21.27426528930664, 'loss_patch_fid': 4.134249210357666, 'loss_dense_fid': 3.9172465801239014, 'loss_dense_bce': -0.0, 'loss_dense_kl': 13.222768783569336, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.26446467638015747, 'loss_nss': -3.7133913040161133, 'loss_sim': 0.43913543224334717, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5253921747207642, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3530515134334564, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.045812830328941345, 'loss_decoder_side_aux': -0.05153689160943031, 'loss_priority_map': 1.1327621936798096, 'loss_priority_map_weighted': 0.11327622085809708, 'priority_map_loss': 1.1327621936798096, 'weighted_priority_map_loss': 0.11327622085809708, 'loss_priority_map_stage3': 1.1136457920074463, 'loss_priority_map_stage4': 1.1518785953521729, 'loss_side_stage4': -0.07558047771453857, 'loss_side_stage3': -0.10791751742362976, 'loss_side_stage2': -0.10767123103141785, 'loss_side_stage1': -0.10407716035842896}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.8418/0.0000/44.3371 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.9982/0.0000/33.0009 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5605 | key_norm_mean=1.0949 | context_mean=0.0000 | context_std=0.1250 | context_min=-0.2687 | context_max=0.3328 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6923 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0182 | key_norm_mean=1.1853 | context_mean=-0.0000 | context_std=0.0960 | context_min=-0.2018 | context_max=0.2786 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.841804 | min=0.000000 | max=44.337143 | alpha=0.993328
+patch-priority map [stage4] | mean=0.062500 | std=0.998167 | min=0.000000 | max=33.000904 | alpha=0.993232
+Epoch 22/200
+  Mean train loss: 0.324265
+  Mean val loss:   0.466701
+  Current LR:      4.86e-05
+Val metrics   | CC: 0.5233 | SIM: 0.4234 | NSS: 3.0556
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_022.pth
+
+Epoch 23/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=40.7500 mean=-3.1899 std=3.2781
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0146 std=0.0787
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.5918/0.0000/22.6622 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.7536/0.0000/26.9031 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.5521 | key_norm_mean=1.0831 | context_mean=0.0000 | context_std=0.1172 | context_min=-0.2537 | context_max=0.3060 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6923 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0118 | key_norm_mean=1.1825 | context_mean=-0.0000 | context_std=0.0841 | context_min=-0.1807 | context_max=0.2425 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.591780 | min=0.000000 | max=22.662188 | alpha=0.993328
+patch-priority map [stage4] | mean=0.062500 | std=0.753572 | min=0.000000 | max=26.903112 | alpha=0.993232
+DEBUG visual concept usage [stage1] top 10:
+  concept 363: 4012 patches (37.31%)
+  concept 397: 2787 patches (25.92%)
+  concept 176: 1013 patches (9.42%)
+  concept 138: 567 patches (5.27%)
+  concept 271: 426 patches (3.96%)
+  concept 388: 406 patches (3.78%)
+  concept 92: 233 patches (2.17%)
+  concept 356: 228 patches (2.12%)
+  concept 157: 204 patches (1.90%)
+  concept 33: 186 patches (1.73%)
+  normalized usage entropy: 0.7830
+DEBUG visual concept usage [stage2] top 10:
+  concept 187: 884 patches (32.89%)
+  concept 81: 701 patches (26.08%)
+  concept 363: 569 patches (21.17%)
+  concept 11: 505 patches (18.79%)
+  concept 87: 29 patches (1.08%)
+  normalized usage entropy: 0.8139
+DEBUG visual concept usage [stage3] top 10:
+  concept 379: 370 patches (55.06%)
+  concept 213: 232 patches (34.52%)
+  concept 92: 53 patches (7.89%)
+  concept 206: 6 patches (0.89%)
+  concept 362: 6 patches (0.89%)
+  concept 348: 5 patches (0.74%)
+  normalized usage entropy: 0.5496
+DEBUG visual concept usage [stage4] top 10:
+  concept 53: 71 patches (42.26%)
+  concept 296: 55 patches (32.74%)
+  concept 299: 22 patches (13.10%)
+  concept 262: 16 patches (9.52%)
+  concept 362: 4 patches (2.38%)
+  normalized usage entropy: 0.3570
+DEBUG pred min/max/mean/std: -3.984375 40.75 -3.1875 3.28125
+DEBUG target min/max/mean/std: 0.0 1.0 0.014576909132301807 0.07870227843523026
+DEBUG fixation pixels per sample: [183.0, 152.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0007269965717568994 0.02695310115814209
+DEBUG losses: {'loss_total': -0.08997437357902527, 'loss_fid': 27.478675842285156, 'loss_patch_fid': 4.027782917022705, 'loss_dense_fid': 3.9579813480377197, 'loss_dense_bce': -0.0, 'loss_dense_kl': 19.49291229248047, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.23996806144714355, 'loss_nss': -5.051539421081543, 'loss_sim': 0.41994351148605347, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5107988119125366, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.37412142753601074, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.044316958636045456, 'loss_decoder_side_aux': -0.12430126965045929, 'loss_priority_map': 1.7323532104492188, 'loss_priority_map_weighted': 0.17323532700538635, 'priority_map_loss': 1.7323532104492188, 'weighted_priority_map_loss': 0.17323532700538635, 'loss_priority_map_stage3': 1.919079303741455, 'loss_priority_map_stage4': 1.5456271171569824, 'loss_side_stage4': -0.18982425332069397, 'loss_side_stage3': -0.22986865043640137, 'loss_side_stage2': -0.2579590082168579, 'loss_side_stage1': -0.26564669609069824}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.9546/0.0000/45.5592 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/1.0063/0.0000/34.6389 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4678 | key_norm_mean=1.0468 | context_mean=0.0000 | context_std=0.1162 | context_min=-0.2463 | context_max=0.3299 | total_candidate_weight=336.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6923 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0316 | key_norm_mean=1.1998 | context_mean=-0.0000 | context_std=0.1031 | context_min=-0.2154 | context_max=0.2892 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.954580 | min=0.000000 | max=45.559231 | alpha=0.993324
+patch-priority map [stage4] | mean=0.062500 | std=1.006267 | min=0.000000 | max=34.638908 | alpha=0.993232
+Epoch 23/200
+  Mean train loss: 0.346234
+  Mean val loss:   0.453326
+  Current LR:      4.84e-05
+Val metrics   | CC: 0.5283 | SIM: 0.4273 | NSS: 3.0870
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_023.pth
+  New best val loss: 0.453326 (saved training_outputs/ckpts/20260917_155406/best_checkpoint.pth)
+
+Epoch 24/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=30.2500 mean=-3.1045 std=3.2667
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0106 std=0.0661
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.7318/0.0000/23.7373 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.8181/0.0000/20.7843 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4687 | key_norm_mean=1.0561 | context_mean=0.0001 | context_std=0.1247 | context_min=-0.2493 | context_max=0.2955 | total_candidate_weight=336.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6923 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=1.0436 | key_norm_mean=1.1936 | context_mean=-0.0000 | context_std=0.1081 | context_min=-0.2169 | context_max=0.2741 | total_candidate_weight=84.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6931 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.731785 | min=0.000000 | max=23.737274 | alpha=0.993324
+patch-priority map [stage4] | mean=0.062500 | std=0.818081 | min=0.000000 | max=20.784292 | alpha=0.993232
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 3599 patches (33.47%)
+  concept 363: 2623 patches (24.40%)
+  concept 176: 752 patches (6.99%)
+  concept 397: 676 patches (6.29%)
+  concept 138: 656 patches (6.10%)
+  concept 157: 288 patches (2.68%)
+  concept 271: 253 patches (2.35%)
+  concept 388: 243 patches (2.26%)
+  concept 20: 218 patches (2.03%)
+  concept 92: 211 patches (1.96%)
+  normalized usage entropy: 0.8335
+DEBUG visual concept usage [stage2] top 10:
+  concept 110: 668 patches (24.85%)
+  concept 187: 639 patches (23.77%)
+  concept 363: 492 patches (18.30%)
+  concept 11: 451 patches (16.78%)
+  concept 81: 424 patches (15.77%)
+  concept 87: 14 patches (0.52%)
+  normalized usage entropy: 0.7983
+DEBUG visual concept usage [stage3] top 10:
+  concept 379: 278 patches (41.37%)
+  concept 213: 233 patches (34.67%)
+  concept 92: 142 patches (21.13%)
+  concept 362: 10 patches (1.49%)
+  concept 348: 7 patches (1.04%)
+  concept 505: 2 patches (0.30%)
+  normalized usage entropy: 0.5628
+DEBUG visual concept usage [stage4] top 10:
+  concept 53: 75 patches (44.64%)
+  concept 296: 55 patches (32.74%)
+  concept 299: 24 patches (14.29%)
+  concept 262: 8 patches (4.76%)
+  concept 362: 6 patches (3.57%)
+  normalized usage entropy: 0.3502
+DEBUG pred min/max/mean/std: -3.984375 30.25 -3.109375 3.265625
+DEBUG target min/max/mean/std: 0.0 1.0 0.01062254048883915 0.06610184907913208
+DEBUG fixation pixels per sample: [226.0, 145.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0008051215554587543 0.028363266959786415
+DEBUG losses: {'loss_total': 0.07175667583942413, 'loss_fid': 19.698135375976562, 'loss_patch_fid': 4.0204339027404785, 'loss_dense_fid': 4.019504547119141, 'loss_dense_bce': -0.0, 'loss_dense_kl': 11.658197402954102, 'loss_topk': -0.0, 'loss_delta': -0.0, 'loss_cc': 0.36191320419311523, 'loss_nss': -4.664471626281738, 'loss_sim': 0.5222586393356323, 'loss_concept_dense': 0.0, 'loss_concept_kl': 0.0, 'loss_align': 0.0, 'loss_sparse': 0.0, 'loss_div': 0.0, 'loss_gate': 0.0, 'loss_visual_entropy': 0.5060478448867798, 'loss_visual_equiv': 0.0, 'loss_visual_usage': 0.3637954890727997, 'loss_temporal_attention_entropy': 0.0, 'loss_total_concept': 0.042668454349040985, 'loss_decoder_side_aux': -0.053594715893268585, 'loss_priority_map': 0.960812509059906, 'loss_priority_map_weighted': 0.09608124941587448, 'priority_map_loss': 0.960812509059906, 'weighted_priority_map_loss': 0.09608124941587448, 'loss_priority_map_stage3': 1.038792610168457, 'loss_priority_map_stage4': 0.882832407951355, 'loss_side_stage4': -0.09646332263946533, 'loss_side_stage3': -0.10893630981445312, 'loss_side_stage2': -0.11646315455436707, 'loss_side_stage1': -0.10204222798347473}
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/1.1381/0.0000/64.2358 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/1.0102/0.0000/28.7228 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4489 | key_norm_mean=1.0339 | context_mean=0.0001 | context_std=0.1133 | context_min=-0.2403 | context_max=0.3582 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6924 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9709 | key_norm_mean=1.1460 | context_mean=0.0000 | context_std=0.0896 | context_min=-0.1845 | context_max=0.2560 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6933 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=1.138116 | min=0.000000 | max=64.235794 | alpha=0.993325
+patch-priority map [stage4] | mean=0.062500 | std=1.010213 | min=0.000000 | max=28.722818 | alpha=0.993230
+Epoch 24/200
+  Mean train loss: 0.312111
+  Mean val loss:   0.473029
+  Current LR:      4.83e-05
+Val metrics   | CC: 0.5167 | SIM: 0.4235 | NSS: 3.0274
+  Saved checkpoint: training_outputs/ckpts/20260917_155406/epoch_024.pth
+
+Epoch 25/200
+pred_saliency: shape=(2, 1, 224, 384) min=-3.9844 max=27.2500 mean=-3.0171 std=3.2921
+sal_batch: shape=(2, 1, 360, 640) min=0.0000 max=1.0000 mean=0.0155 std=0.0811
+DEBUG features_shape: {'stage1': (2, 96, 16, 56, 96), 'stage2': (2, 192, 16, 28, 48), 'stage3': (2, 384, 16, 14, 24), 'stage4': (2, 768, 16, 7, 12)}
+DEBUG gate: no gate_debug available. This usually means return_concept_losses=False or lambda_gate=0.
+DEBUG decoder visual FiLM [stage1] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage2] | film_gamma=unavailable (pass return_decoder_diagnostics=True)
+DEBUG decoder visual FiLM [stage3] | film_gamma mean/std/min/max=0.0625/0.6930/0.0000/27.3587 | patch_priority_alpha=0.9933
+DEBUG decoder visual FiLM [stage4] | film_gamma mean/std/min/max=0.0625/0.6461/0.0000/17.3700 | patch_priority_alpha=0.9932
+DEBUG factorized comparison [stage3] | query_norm_mean=1.4472 | key_norm_mean=1.0360 | context_mean=0.0000 | context_std=0.1171 | context_min=-0.2463 | context_max=0.3119 | total_candidate_weight=336.0000 | spatial_strength=0.0988 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6924 | rank=32
+DEBUG factorized comparison [stage4] | query_norm_mean=0.9836 | key_norm_mean=1.1372 | context_mean=-0.0000 | context_std=0.0892 | context_min=-0.1898 | context_max=0.2380 | total_candidate_weight=84.0000 | spatial_strength=0.0989 | spatial_freq_entropy=2.7726 | spatial_freq_weight_mean=0.6933 | rank=32
+patch-priority map [stage3] | mean=0.062500 | std=0.693026 | min=0.000000 | max=27.358744 | alpha=0.993325
+patch-priority map [stage4] | mean=0.062500 | std=0.646091 | min=0.000000 | max=17.370024 | alpha=0.993230
+DEBUG visual concept usage [stage1] top 10:
+  concept 217: 1179 patches (10.97%)
+  concept 363: 922 patches (8.58%)
+  concept 138: 910 patches (8.46%)
+  concept 422: 875 patches (8.14%)
+  concept 193: 873 patches (8.12%)
+  concept 291: 749 patches (6.97%)
+  concept 92: 673 patches (6.26%)
+  concept 44: 555 patches (5.16%)
+  concept 397: 386 patches (3.59%)
+  concept 37: 375 patches (3.49%)
+  normalized usage entropy: 0.8257
+DEBUG visual concept usage [stage2] top 10:
+  concept 81: 1325 patches (49.29%)
+  concept 11: 698 patches (25.97%)
+  concept 363: 350 patches (13.02%)
+  concept 187: 168 patches (6.25%)
+  concept 87: 96 patches (3.57%)
+  concept 110: 51 patches (1.90%)
+  normalized usage entropy: 0.7866
+DEBUG visual concept usage [stage3] top 10:
+  concept 213: 284 patches (42.26%)
+  concept 92: 178 patches (26.49%)
+  concept 379: 146 patches (21.73%)
+  concept 392: 41 patches (6.10%)
+  concept 348: 16 patches (2.38%)
+  concept 206: 3 patches (0.45%)
+  concept 362: 3 patches (0.45%)
+  concept 505: 1 patches (0.15%)
+  normalized usage entropy: 0.5857
+DEBUG visual concept usage [stage4] top 10:
+  concept 296: 64 patches (38.10%)
+  concept 53: 62 patches (36.90%)
+  concept 262: 23 patches (13.69%)
+  concept 362: 13 patches (7.74%)
+  concept 299: 6 patches (3.57%)
+  normalized usage entropy: 0.3387
+DEBUG pred min/max/mean/std: -3.984375 27.25 -3.015625 3.296875
+DEBUG target min/max/mean/std: 0.0 1.0 0.015490716323256493 0.0811406597495079
+DEBUG fixation pixels per sample: [151.0, 187.0]
+DEBUG fix_batch min/max/mean/std: 0.0 1.0 0.0007335069822147489 0.02707342617213726
+DEBUG losses: 

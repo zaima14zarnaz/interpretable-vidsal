@@ -17,8 +17,7 @@ import torch
 
 
 DEFAULT_CHECKPOINT = Path(
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/"
-    "training_outputs/saved_weights/best_dhf1k.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260917_155406/epoch_021.pth"
 )
 DEFAULT_OUTPUT = Path(
     "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/"
