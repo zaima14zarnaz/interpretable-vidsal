@@ -3,21 +3,31 @@
 
 Only ``concept_creations.<stage>.visual_concepts`` tensors are replaced.  Every
 other model tensor is copied unchanged from the source checkpoint.
+
+Optional ``--diagnostic`` mode runs a single-sample forward comparison between
+the original and random-prototype checkpoints and writes an ordered JSON report.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
+import random
 import re
+import sys
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 DEFAULT_CHECKPOINT = Path(
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260917_155406/epoch_021.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260921_220540/epoch_175.pth"
 )
 DEFAULT_OUTPUT = Path(
     "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/"
@@ -26,16 +36,88 @@ DEFAULT_OUTPUT = Path(
 PROTOTYPE_PATTERN = re.compile(
     r"^(?:module\.)?concept_creations\.([^.]+)\.visual_concepts$"
 )
+_SRC_ROOT = Path(__file__).resolve().parents[2]
+EXPECTED_STAGES = ("stage1", "stage2", "stage3", "stage4")
+
+# Branch annotations for merge-point clarity in the report.
+_BRANCH_HINTS = {
+    "fusion.stage4.skip_prev_upsampled": "skip_path",
+    "fusion.stage3.skip_prev_upsampled": "skip_path",
+    "fusion.stage2.skip_prev_upsampled": "skip_path",
+    "fusion.stage1.skip_prev_upsampled": "skip_path",
+    "fusion.stage4.fused_with_skip": "skip_merge",
+    "fusion.stage3.fused_with_skip": "skip_merge",
+    "fusion.stage2.fused_with_skip": "skip_merge",
+    "fusion.stage1.fused_with_skip": "skip_merge",
+    "fusion.stage4.prototype_mask_product": "prototype_path",
+    "fusion.stage3.prototype_mask_product": "prototype_path",
+    "fusion.stage2.mask_multiplier": "prototype_path",
+    "fusion.stage1.mask_multiplier": "prototype_path",
+    "fusion.stage4.post_mask_features": "prototype_merge",
+    "fusion.stage3.post_mask_features": "prototype_merge",
+    "fusion.stage2.post_mask_features": "prototype_merge",
+    "fusion.stage1.post_mask_features": "prototype_merge",
+    "fusion.stage4.decoded_output": "stage_output_after_merge",
+    "fusion.stage3.decoded_output": "stage_output_after_merge",
+    "fusion.stage2.decoded_output": "stage_output_after_merge",
+    "fusion.stage1.decoded_output": "stage_output_after_merge",
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Replace only the learned visual prototype banks with random unit vectors."
+        description=(
+            "Replace only the learned visual prototype banks with random unit "
+            "vectors. Optionally run a single-sample diagnostic comparison."
+        )
     )
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--metadata", type=Path, default=None)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="After creating the checkpoint, run a single-sample forward diagnostic.",
+    )
+    parser.add_argument(
+        "--sample-index",
+        type=int,
+        default=0,
+        help="Dataset window index used by --diagnostic.",
+    )
+    parser.add_argument(
+        "--dataset-dir",
+        type=Path,
+        default=None,
+        help="Validation/test dataset root (defaults to train.VAL_DATASET_DIR).",
+    )
+    parser.add_argument(
+        "--window-len",
+        type=int,
+        default=None,
+        help="Temporal window length (defaults to train.WINDOW_LEN).",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Torch device, e.g. cuda:1 or cpu (defaults to train.DEFAULT_GPU_ID).",
+    )
+    parser.add_argument(
+        "--diagnostic-report",
+        type=Path,
+        default=None,
+        help="JSON path for the full diagnostic report.",
+    )
+    parser.add_argument("--atol", type=float, default=1e-5)
+    parser.add_argument("--rtol", type=float, default=1e-4)
+    parser.add_argument(
+        "--close-rel-l2",
+        type=float,
+        default=1e-3,
+        help="Relative L2 threshold used to treat tensors as numerically close.",
+    )
     return parser.parse_args()
 
 
@@ -80,6 +162,28 @@ def random_unit_vectors_like(
     return vectors.to(dtype=tensor.dtype)
 
 
+def prototype_difference(
+    original: torch.Tensor,
+    replacement: torch.Tensor,
+) -> Dict[str, float]:
+    """Summarize how far randomized prototypes diverge from the originals."""
+    orig = original.float()
+    repl = replacement.float()
+    delta = repl - orig
+    cosine = torch.nn.functional.cosine_similarity(orig, repl, dim=-1)
+    per_proto_l2 = delta.norm(dim=-1)
+    return {
+        "mean_cosine_to_original": float(cosine.mean().item()),
+        "min_cosine_to_original": float(cosine.min().item()),
+        "max_cosine_to_original": float(cosine.max().item()),
+        "mean_l2_diff": float(per_proto_l2.mean().item()),
+        "max_l2_diff": float(per_proto_l2.max().item()),
+        "frobenius_diff": float(delta.norm().item()),
+        "mean_abs_diff": float(delta.abs().mean().item()),
+        "max_abs_diff": float(delta.abs().max().item()),
+    }
+
+
 def replace_prototypes(
     state: Mapping[str, torch.Tensor],
     seed: int,
@@ -101,11 +205,7 @@ def replace_prototypes(
                 "state_dict_key": key,
                 "shape": list(original.shape),
                 "dtype": str(original.dtype),
-                "mean_cosine_to_original": float(
-                    torch.nn.functional.cosine_similarity(
-                        original.float(), replacement.float(), dim=-1
-                    ).mean().item()
-                ),
+                **prototype_difference(original, replacement),
             }
         )
 
@@ -136,6 +236,855 @@ def build_output_checkpoint(
     return payload
 
 
+def create_random_checkpoint(
+    checkpoint_path: Path,
+    output_path: Path,
+    metadata_path: Path,
+    seed: int,
+) -> Tuple[Dict[str, Any], list[Dict[str, Any]]]:
+    checkpoint = torch_load(checkpoint_path)
+    state, container_key = extract_state_dict(checkpoint)
+    randomized_state, records = replace_prototypes(state, seed)
+    output_checkpoint = build_output_checkpoint(
+        checkpoint, container_key, randomized_state
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(output_checkpoint, output_path)
+    metadata = {
+        "control": "random_normalized_prototype_vectors",
+        "seed": seed,
+        "source_checkpoint": str(checkpoint_path),
+        "output_checkpoint": str(output_path),
+        "prototype_banks": records,
+    }
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return metadata, records
+
+
+def verify_checkpoint_delta(
+    original_path: Path,
+    random_path: Path,
+) -> Dict[str, Any]:
+    """Confirm all four banks changed and every other tensor is identical."""
+    orig_state, _ = extract_state_dict(torch_load(original_path))
+    rand_state, _ = extract_state_dict(torch_load(random_path))
+    if set(orig_state.keys()) != set(rand_state.keys()):
+        raise RuntimeError("Original and random checkpoints have different key sets")
+
+    changed_proto: List[str] = []
+    identical_other = 0
+    mismatched_other: List[str] = []
+    unchanged_proto: List[str] = []
+
+    for key, orig in orig_state.items():
+        rand = rand_state[key]
+        match = PROTOTYPE_PATTERN.match(key)
+        if match is not None:
+            if torch.equal(orig, rand):
+                unchanged_proto.append(key)
+            else:
+                changed_proto.append(match.group(1))
+        else:
+            if torch.equal(orig, rand):
+                identical_other += 1
+            else:
+                mismatched_other.append(key)
+
+    stages = set(changed_proto)
+    ok = (
+        stages == set(EXPECTED_STAGES)
+        and not unchanged_proto
+        and not mismatched_other
+    )
+    report = {
+        "ok": ok,
+        "changed_prototype_stages": sorted(stages),
+        "unchanged_prototype_keys": unchanged_proto,
+        "identical_non_prototype_tensors": identical_other,
+        "mismatched_non_prototype_keys": mismatched_other,
+    }
+    if not ok:
+        raise RuntimeError(
+            "Checkpoint delta verification failed: "
+            f"changed_stages={sorted(stages)} "
+            f"unchanged_proto={unchanged_proto} "
+            f"mismatched_other={mismatched_other[:5]}"
+        )
+    return report
+
+
+def _ensure_src_on_path() -> None:
+    src = str(_SRC_ROOT)
+    if src not in sys.path:
+        sys.path.insert(0, src)
+
+
+def _set_deterministic(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except TypeError:
+        try:
+            torch.use_deterministic_algorithms(True)
+        except Exception:
+            pass
+
+
+def _resolve_device(device_arg: Optional[str]) -> torch.device:
+    _ensure_src_on_path()
+    import train as train_cfg
+
+    if device_arg:
+        return torch.device(device_arg)
+    if torch.cuda.is_available():
+        gpu_id = int(getattr(train_cfg, "DEFAULT_GPU_ID", 0))
+        if gpu_id >= torch.cuda.device_count():
+            gpu_id = 0
+        return torch.device(f"cuda:{gpu_id}")
+    return torch.device("cpu")
+
+
+def build_diagnostic_model(device: torch.device) -> nn.Module:
+    """Match train.py architecture (not the divergent evaluation.py defaults)."""
+    _ensure_src_on_path()
+    from model.model import ExplainableVidSalModel
+    import train as train_cfg
+
+    model = ExplainableVidSalModel(
+        backbone_stages=("stage1", "stage2", "stage3", "stage4"),
+        pretrained_backbone=True,
+        freeze_backbone=train_cfg.FREEZE_BACKBONE,
+        backbone_gradient_checkpointing=False,
+        input_format="BTCHW",
+        resize_to=(224, 384),
+        concept_dim=128,
+        num_concepts=512,
+        concept_hidden_dim=256,
+        saliency_hidden_dim=256,
+        top_k=8,
+        max_source_patches=64,
+        tau_pi=0.5,
+        tau_alpha=0.07,
+        tau_concept=0.07,
+        concept_residual_weight=0.0,
+        last_transition_only=True,
+        use_rgb_refinement=False,
+        use_feature_refinement=False,
+        output_activation="none",
+        return_details=True,
+        use_subpatch_head=True,
+        subpatch_factor=4,
+        subpatch_residual_scale=0.5,
+        use_temporal_transition_aggregation=True,
+        temporal_aggregation_hidden_channels=128,
+        temporal_aggregation_temperature=1.0,
+        visual_concept_on=train_cfg.VISUAL_CONCEPT_ON,
+        temporal_concepts_on=train_cfg.TEMPORAL_CONCEPTS_ON,
+        visual_concept_logit_scale=train_cfg.VISUAL_CONCEPT_LOGIT_SCALE,
+        visual_concept_residual_weight=1.0,
+        use_temporal_feature_infusion=True,
+        use_shared_concept_activations=True,
+        prototype_bottleneck_strength=train_cfg.PROTOTYPE_BOTTLENECK_STRENGTH,
+        prototype_application_position=train_cfg.PROTOTYPE_APPLICATION_POSITION,
+        fine_unary_mask_strength=train_cfg.FINE_UNARY_MASK_STRENGTH,
+    ).to_split_devices(device, device)
+    return model
+
+
+def load_model_checkpoint(model: nn.Module, checkpoint_path: Path) -> Dict[str, Any]:
+    checkpoint = torch_load(checkpoint_path)
+    state, _ = extract_state_dict(checkpoint)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        preview = ", ".join(missing[:5])
+        suffix = " ..." if len(missing) > 5 else ""
+        raise RuntimeError(
+            f"Checkpoint missing weights required by the model: {preview}{suffix}"
+        )
+    if unexpected:
+        print(
+            f"Warning: ignored {len(unexpected)} unexpected checkpoint keys from "
+            f"{checkpoint_path}"
+        )
+    return checkpoint if isinstance(checkpoint, dict) else {"model_state_dict": state}
+
+
+def _register_module_hooks(
+    model: nn.Module,
+    trace_names: List[str],
+) -> List[Any]:
+    """Forward hooks for named modules; distinguishes repeated calls via #N."""
+    from model.diagnostic_trace import record as diag_record
+
+    handles: List[Any] = []
+    call_counts: Dict[str, int] = {}
+
+    def _hook(name: str):
+        def _fn(_module: nn.Module, _inp: Any, out: Any) -> None:
+            call_counts[name] = call_counts.get(name, 0) + 1
+            label = name if call_counts[name] == 1 else f"{name}#{call_counts[name]}"
+            if torch.is_tensor(out):
+                diag_record(label, out)
+            elif isinstance(out, Mapping):
+                for key, value in out.items():
+                    if torch.is_tensor(value):
+                        diag_record(f"{label}.{key}", value)
+            elif isinstance(out, (tuple, list)):
+                for idx, value in enumerate(out):
+                    if torch.is_tensor(value):
+                        diag_record(f"{label}[{idx}]", value)
+
+        return _fn
+
+    for name in trace_names:
+        module = dict(model.named_modules()).get(name)
+        if module is None:
+            continue
+        handles.append(module.register_forward_hook(_hook(f"hook.{name}")))
+    return handles
+
+
+def run_traced_forward(
+    model: nn.Module,
+    rgb: torch.Tensor,
+    sal: torch.Tensor,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    from model.diagnostic_trace import capture_diagnostic_trace
+
+    hook_targets = [
+        "backbone",
+        *[f"concept_creations.{s}.visual_encoder" for s in EXPECTED_STAGES],
+        *[f"temporal_feature_infusers.{s}" for s in EXPECTED_STAGES],
+        *[
+            f"saliency_prediction.fusion_blocks.{s}.{sub}"
+            for s in ("stage4", "stage3", "stage2", "stage1")
+            for sub in ("feature_proj", "concept_proj", "film", "refine1", "refine2")
+        ],
+        "saliency_prediction.final_upsample_head",
+        "saliency_prediction.patch_logit_head",
+    ]
+    handles = _register_module_hooks(model, hook_targets)
+    try:
+        with capture_diagnostic_trace() as trace:
+            with torch.inference_mode():
+                out = model(
+                    rgb,
+                    saliency_maps=sal,
+                    return_details=True,
+                    return_concept_losses=False,
+                    return_decoder_diagnostics=True,
+                )
+        # Move tensors to CPU for durable comparison.
+        for entry in trace:
+            tensor = entry.get("tensor")
+            if torch.is_tensor(tensor):
+                entry["tensor"] = tensor.detach().cpu()
+        return out, list(trace)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
+def _safe_float(value: float) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return value  # type: ignore[return-value]
+    if isinstance(value, (int, float)):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return float(value)
+    return None
+
+
+def compare_topk_indices(
+    a: torch.Tensor,
+    b: torch.Tensor,
+) -> Dict[str, Any]:
+    a_i = a.detach().cpu().long().reshape(-1, a.shape[-1])
+    b_i = b.detach().cpu().long().reshape(-1, b.shape[-1])
+    if a_i.shape != b_i.shape:
+        return {
+            "kind": "topk_indices",
+            "shape_a": list(a.shape),
+            "shape_b": list(b.shape),
+            "error": "shape_mismatch",
+        }
+    exact_equal = bool(torch.equal(a_i, b_i))
+    frac_positions_different = float((a_i != b_i).any(dim=-1).float().mean().item())
+    overlaps = []
+    for row_a, row_b in zip(a_i, b_i):
+        set_a = set(row_a.tolist())
+        set_b = set(row_b.tolist())
+        denom = max(len(set_a), 1)
+        overlaps.append(len(set_a & set_b) / denom)
+    return {
+        "kind": "topk_indices",
+        "shape": list(a.shape),
+        "exact_equal": exact_equal,
+        "frac_positions_different": frac_positions_different,
+        "mean_topk_overlap": float(sum(overlaps) / max(len(overlaps), 1)),
+    }
+
+
+def compare_float_tensors(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    *,
+    atol: float,
+    rtol: float,
+    close_rel_l2: float,
+) -> Dict[str, Any]:
+    a_f = a.detach().float().reshape(-1).cpu()
+    b_f = b.detach().float().reshape(-1).cpu()
+    if a.shape != b.shape:
+        return {
+            "kind": "float_tensor",
+            "shape_a": list(a.shape),
+            "shape_b": list(b.shape),
+            "error": "shape_mismatch",
+            "exact_equal": False,
+            "allclose": False,
+        }
+
+    delta = a_f - b_f
+    abs_delta = delta.abs()
+    mean_abs = float(abs_delta.mean().item())
+    max_abs = float(abs_delta.max().item()) if abs_delta.numel() else 0.0
+    a_norm = float(a_f.norm().item())
+    b_norm = float(b_f.norm().item())
+    denom = max(a_norm, b_norm, 1e-12)
+    rel_l2 = float(delta.norm().item() / denom)
+
+    # Cosine is undefined for near-zero vectors; report None rather than 1.0.
+    if a_norm < 1e-12 or b_norm < 1e-12:
+        cosine: Optional[float] = None
+        cosine_note = "undefined_near_zero_norm"
+    else:
+        cosine = float(F.cosine_similarity(a_f.unsqueeze(0), b_f.unsqueeze(0)).item())
+        cosine_note = None
+
+    exact_equal = bool(torch.equal(a.cpu(), b.cpu()))
+    allclose = bool(torch.allclose(a.float().cpu(), b.float().cpu(), atol=atol, rtol=rtol))
+    # Do not treat tiny absolute diffs as convergence when scales differ.
+    numerically_close = bool(
+        exact_equal
+        or (
+            allclose
+            and rel_l2 <= close_rel_l2
+            and (cosine is None or cosine >= 1.0 - max(rtol, 1e-4))
+        )
+    )
+
+    return {
+        "kind": "float_tensor",
+        "shape": list(a.shape),
+        "mean_abs_diff": mean_abs,
+        "max_abs_diff": max_abs,
+        "relative_l2": rel_l2,
+        "cosine_similarity": cosine,
+        "cosine_note": cosine_note,
+        "norm_a": a_norm,
+        "norm_b": b_norm,
+        "exact_equal": exact_equal,
+        "allclose": allclose,
+        "allclose_atol": atol,
+        "allclose_rtol": rtol,
+        "numerically_close": numerically_close,
+    }
+
+
+def compare_trace_entries(
+    left: Dict[str, Any],
+    right: Dict[str, Any],
+    *,
+    atol: float,
+    rtol: float,
+    close_rel_l2: float,
+) -> Dict[str, Any]:
+    name = left.get("name") or right.get("name")
+    op = left.get("op") or right.get("op")
+    base: Dict[str, Any] = {
+        "name": name,
+        "op": op,
+        "branch_hint": _BRANCH_HINTS.get(str(op)) or _BRANCH_HINTS.get(str(name)),
+        "call_index": left.get("call_index", right.get("call_index")),
+    }
+
+    if not left.get("available", False) and not right.get("available", False):
+        base.update(
+            {
+                "status": "both_unavailable",
+                "reason_a": left.get("reason"),
+                "reason_b": right.get("reason"),
+                "exact_equal": None,
+                "numerically_close": None,
+            }
+        )
+        return base
+    if not left.get("available", False) or not right.get("available", False):
+        base.update(
+            {
+                "status": "one_side_unavailable",
+                "available_a": bool(left.get("available")),
+                "available_b": bool(right.get("available")),
+                "reason_a": left.get("reason"),
+                "reason_b": right.get("reason"),
+                "exact_equal": False,
+                "numerically_close": False,
+            }
+        )
+        return base
+
+    a = left.get("tensor")
+    b = right.get("tensor")
+    if not torch.is_tensor(a) or not torch.is_tensor(b):
+        base.update({"status": "non_tensor", "exact_equal": None})
+        return base
+
+    if (
+        (not a.dtype.is_floating_point)
+        or (not b.dtype.is_floating_point)
+        or ("topk_indices" in str(name))
+    ):
+        stats = compare_topk_indices(a, b)
+        stats["numerically_close"] = bool(stats.get("exact_equal"))
+    else:
+        stats = compare_float_tensors(
+            a, b, atol=atol, rtol=rtol, close_rel_l2=close_rel_l2
+        )
+
+    base.update(stats)
+    base["status"] = "compared"
+    return base
+
+
+def align_and_compare_traces(
+    trace_a: Sequence[Dict[str, Any]],
+    trace_b: Sequence[Dict[str, Any]],
+    *,
+    atol: float,
+    rtol: float,
+    close_rel_l2: float,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Match entries by name; report unmatched names as unavailable."""
+    map_a = {entry["name"]: entry for entry in trace_a if "name" in entry}
+    map_b = {entry["name"]: entry for entry in trace_b if "name" in entry}
+    # Preserve forward order from the original run, then append only-in-b.
+    ordered_names: List[str] = []
+    seen = set()
+    for entry in trace_a:
+        name = entry.get("name")
+        if name and name not in seen:
+            ordered_names.append(name)
+            seen.add(name)
+    for entry in trace_b:
+        name = entry.get("name")
+        if name and name not in seen:
+            ordered_names.append(name)
+            seen.add(name)
+
+    comparisons: List[Dict[str, Any]] = []
+    unavailable: List[str] = []
+    for name in ordered_names:
+        left = map_a.get(name)
+        right = map_b.get(name)
+        if left is None:
+            unavailable.append(name)
+            comparisons.append(
+                {
+                    "name": name,
+                    "status": "missing_in_original",
+                    "exact_equal": False,
+                    "numerically_close": False,
+                }
+            )
+            continue
+        if right is None:
+            unavailable.append(name)
+            comparisons.append(
+                {
+                    "name": name,
+                    "status": "missing_in_random",
+                    "exact_equal": False,
+                    "numerically_close": False,
+                }
+            )
+            continue
+        comparisons.append(
+            compare_trace_entries(
+                left,
+                right,
+                atol=atol,
+                rtol=rtol,
+                close_rel_l2=close_rel_l2,
+            )
+        )
+    return comparisons, unavailable
+
+
+def find_divergence_events(
+    comparisons: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    first_divergent: Optional[Dict[str, Any]] = None
+    reconvergences: List[Dict[str, Any]] = []
+    previously_divergent = False
+    last_divergent_name: Optional[str] = None
+
+    for entry in comparisons:
+        status = entry.get("status")
+        if status not in ("compared",):
+            continue
+        close = bool(entry.get("numerically_close") or entry.get("exact_equal"))
+        trivial_identical = bool(entry.get("exact_equal")) and float(
+            entry.get("relative_l2") or entry.get("mean_abs_diff") or 0.0
+        ) == 0.0
+        if not close:
+            if first_divergent is None:
+                first_divergent = {
+                    "name": entry.get("name"),
+                    "branch_hint": entry.get("branch_hint"),
+                    "relative_l2": entry.get("relative_l2"),
+                    "mean_abs_diff": entry.get("mean_abs_diff"),
+                    "cosine_similarity": entry.get("cosine_similarity"),
+                    "frac_positions_different": entry.get("frac_positions_different"),
+                }
+            previously_divergent = True
+            last_divergent_name = entry.get("name")
+        elif previously_divergent and close and not trivial_identical:
+            # Local attenuation / branch-local closeness only — not full convergence.
+            reconvergences.append(
+                {
+                    "name": entry.get("name"),
+                    "branch_hint": entry.get("branch_hint"),
+                    "relative_l2": entry.get("relative_l2"),
+                    "cosine_similarity": entry.get("cosine_similarity"),
+                    "note": (
+                        "This tensor is close again, but that does not imply the "
+                        "full model state has converged — other branches may still "
+                        "differ. Prior divergent point: "
+                        f"{last_divergent_name}"
+                    ),
+                }
+            )
+
+    never_converged = first_divergent is not None and any(
+        not bool(e.get("numerically_close") or e.get("exact_equal"))
+        for e in comparisons
+        if e.get("status") == "compared"
+        and e.get("name")
+        in {
+            "decoder.raw_saliency_map",
+            "decoder.fused_saliency_logits",
+        }
+    )
+
+    return {
+        "first_divergence": first_divergent,
+        "local_reconvergences": reconvergences,
+        "final_outputs_still_divergent": never_converged,
+        "note": (
+            "A close value on one branch (e.g. skip path) does not mean complete "
+            "model states have converged when prototype-guided and skip paths merge."
+        ),
+    }
+
+
+def compare_final_maps(
+    map_a: torch.Tensor,
+    map_b: torch.Tensor,
+) -> Dict[str, Any]:
+    a = map_a.detach().float().cpu().reshape(-1)
+    b = map_b.detach().float().cpu().reshape(-1)
+    delta = a - b
+    a_norm = float(a.norm().item())
+    b_norm = float(b.norm().item())
+    denom = max(a_norm, b_norm, 1e-12)
+    if a.numel() < 2 or a.std() < 1e-12 or b.std() < 1e-12:
+        corr = None
+    else:
+        corr = float(torch.corrcoef(torch.stack([a, b]))[0, 1].item())
+    return {
+        "mae": float(delta.abs().mean().item()),
+        "relative_l2": float(delta.norm().item() / denom),
+        "map_correlation": corr,
+        "exact_equal": bool(torch.equal(map_a.cpu(), map_b.cpu())),
+    }
+
+
+def _format_cell(value: Any, digits: int = 4) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, bool):
+        return "Y" if value else "N"
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return "n/a"
+        return f"{value:.{digits}g}"
+    return str(value)
+
+
+def print_comparison_table(comparisons: Sequence[Dict[str, Any]]) -> None:
+    # Compact ordered table: prioritize non-hook inline/diagnostic entries first
+    # but print all compared entries with a short summary.
+    header = (
+        f"{'#':>3}  {'name':<55}  {'eq':>2}  {'close':>5}  "
+        f"{'mean|d|':>10}  {'relL2':>10}  {'cos':>8}  {'topkΔ':>6}  hint"
+    )
+    print(header)
+    print("-" * len(header))
+    shown = 0
+    for idx, entry in enumerate(comparisons, start=1):
+        # Prefer primary diagnostic ops; still show hooks that diverge.
+        name = str(entry.get("name", ""))
+        is_hook = name.startswith("hook.")
+        close = entry.get("numerically_close")
+        exact = entry.get("exact_equal")
+        divergent = exact is False and close is not True
+        if is_hook and not divergent:
+            continue
+        shown += 1
+        print(
+            f"{idx:>3}  {name[:55]:<55}  "
+            f"{_format_cell(exact):>2}  {_format_cell(close):>5}  "
+            f"{_format_cell(entry.get('mean_abs_diff')):>10}  "
+            f"{_format_cell(entry.get('relative_l2')):>10}  "
+            f"{_format_cell(entry.get('cosine_similarity')):>8}  "
+            f"{_format_cell(entry.get('frac_positions_different')):>6}  "
+            f"{entry.get('branch_hint') or ''}"
+        )
+    print(f"(showing {shown} primary/divergent rows of {len(comparisons)} total)")
+
+
+def _json_sanitize(obj: Any) -> Any:
+    if torch.is_tensor(obj):
+        return {
+            "_tensor": True,
+            "shape": list(obj.shape),
+            "dtype": str(obj.dtype),
+        }
+    if isinstance(obj, dict):
+        return {str(k): _json_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_sanitize(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    return obj
+
+
+def run_diagnostic(
+    *,
+    original_checkpoint: Path,
+    random_checkpoint: Path,
+    sample_index: int,
+    dataset_dir: Optional[Path],
+    window_len: Optional[int],
+    device: torch.device,
+    report_path: Path,
+    atol: float,
+    rtol: float,
+    close_rel_l2: float,
+    seed: int,
+) -> Dict[str, Any]:
+    _ensure_src_on_path()
+    import train as train_cfg
+    from pre_process.collate import video_saliency_collate_fn
+    from pre_process.dataloader import DatasetLoader
+    from metrics import compute_saliency_metrics, prepare_prediction_map
+
+    _set_deterministic(seed)
+
+    ds_dir = Path(dataset_dir) if dataset_dir else Path(train_cfg.VAL_DATASET_DIR)
+    win = int(window_len) if window_len is not None else int(train_cfg.WINDOW_LEN)
+    dataset = DatasetLoader(str(ds_dir), window_len=win, stride=32)
+    if sample_index < 0 or sample_index >= len(dataset):
+        raise IndexError(
+            f"sample_index={sample_index} out of range for dataset len={len(dataset)}"
+        )
+    sample = dataset[sample_index]
+    video_name, start_frame = dataset.windows[sample_index]
+    _, rgb, sal, fix, n_frames, valid_mask = video_saliency_collate_fn([sample])
+
+    print(
+        f"Diagnostic sample: index={sample_index} video={video_name} "
+        f"start={start_frame} frames={int(n_frames[0])} device={device}"
+    )
+
+    delta_report = verify_checkpoint_delta(original_checkpoint, random_checkpoint)
+    print(
+        "Checkpoint verification OK: "
+        f"changed stages={delta_report['changed_prototype_stages']}, "
+        f"identical other tensors={delta_report['identical_non_prototype_tensors']}"
+    )
+
+    model_orig = build_diagnostic_model(device)
+    load_model_checkpoint(model_orig, original_checkpoint)
+    model_orig.eval()
+
+    model_rand = build_diagnostic_model(device)
+    load_model_checkpoint(model_rand, random_checkpoint)
+    model_rand.eval()
+
+    rgb_o, sal_o, fix_o = model_orig.prepare_training_batch(rgb, sal, fix)
+    # Exact same preprocessed tensors for both runs.
+    rgb_r, sal_r, fix_r = rgb_o.clone(), sal_o.clone(), fix_o.clone()
+    fix_o = (fix_o > 0).float()
+    fix_r = (fix_r > 0).float()
+
+    _set_deterministic(seed)
+    out_orig, trace_orig = run_traced_forward(model_orig, rgb_o, sal_o)
+    _set_deterministic(seed)
+    out_rand, trace_rand = run_traced_forward(model_rand, rgb_r, sal_r)
+
+    comparisons, unavailable = align_and_compare_traces(
+        trace_orig,
+        trace_rand,
+        atol=atol,
+        rtol=rtol,
+        close_rel_l2=close_rel_l2,
+    )
+    divergence = find_divergence_events(comparisons)
+
+    map_orig = out_orig["saliency_map"].detach().cpu()
+    map_rand = out_rand["saliency_map"].detach().cpu()
+    final_map_cmp = compare_final_maps(map_orig, map_rand)
+
+    # Evaluation-style normalized/resized prediction (prepare_prediction_map).
+    eval_pred_orig = prepare_prediction_map(map_orig)
+    eval_pred_rand = prepare_prediction_map(map_rand)
+    eval_map_cmp = compare_final_maps(eval_pred_orig, eval_pred_rand)
+
+    gt_metrics: Dict[str, Any] = {}
+    if sal_o is not None:
+        m_orig = compute_saliency_metrics(
+            map_orig,
+            sal_o.cpu(),
+            fixation_target=fix_o.cpu(),
+            allow_pseudo_fixations=False,
+            dh1k_exact=True,
+        )
+        m_rand = compute_saliency_metrics(
+            map_rand,
+            sal_r.cpu(),
+            fixation_target=fix_r.cpu(),
+            allow_pseudo_fixations=False,
+            dh1k_exact=True,
+        )
+        gt_metrics = {
+            "original": {k: float(v.detach().cpu()) for k, v in m_orig.items()},
+            "random": {k: float(v.detach().cpu()) for k, v in m_rand.items()},
+            "note": (
+                "Similar aggregate CC/SIM/NSS alone does not imply internal "
+                "convergence; use the ordered tensor table."
+            ),
+        }
+
+    # Explicitly list expected sites that might be missing.
+    expected_ops = []
+    for stage in EXPECTED_STAGES:
+        expected_ops.extend(
+            [
+                f"backbone.{stage}",
+                f"concept.{stage}.prototype_cosine_similarity",
+                f"concept.{stage}.topk_indices",
+                f"concept.{stage}.active_prototypes",
+                f"decoder_features.{stage}",
+            ]
+        )
+    for stage in ("stage4", "stage3", "stage2", "stage1"):
+        expected_ops.extend(
+            [
+                f"fusion.{stage}.film_features",
+                f"fusion.{stage}.unary_scores",
+                f"fusion.{stage}.priority_mask_last",
+                f"fusion.{stage}.pre_mask_features",
+                f"fusion.{stage}.post_mask_features",
+                f"fusion.{stage}.decoded_output",
+            ]
+        )
+    expected_ops.extend(
+        [
+            "decoder.pre_upsample_features",
+            "decoder.main_logits_unfused",
+            "decoder.fused_saliency_logits",
+            "decoder.raw_saliency_map",
+        ]
+    )
+    present = {c["name"] for c in comparisons}
+    missing_expected = [name for name in expected_ops if name not in present]
+
+    report: Dict[str, Any] = {
+        "control": "random_normalized_prototype_vectors",
+        "seed": seed,
+        "sample": {
+            "index": sample_index,
+            "video": video_name,
+            "start_frame": int(start_frame),
+            "dataset_dir": str(ds_dir),
+            "window_len": win,
+            "n_frames": int(n_frames[0]),
+        },
+        "checkpoints": {
+            "original": str(original_checkpoint),
+            "random": str(random_checkpoint),
+            "verification": delta_report,
+        },
+        "device": str(device),
+        "tolerances": {
+            "atol": atol,
+            "rtol": rtol,
+            "close_rel_l2": close_rel_l2,
+        },
+        "trace_lengths": {
+            "original": len(trace_orig),
+            "random": len(trace_rand),
+        },
+        "unavailable_or_unmatched": unavailable,
+        "missing_expected_ops": missing_expected,
+        "comparisons": _json_sanitize(comparisons),
+        "divergence_analysis": divergence,
+        "final_saliency_comparison": final_map_cmp,
+        "eval_prepared_prediction_comparison": eval_map_cmp,
+        "ground_truth_metrics": gt_metrics,
+    }
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(_json_sanitize(report), indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    print("\n=== Ordered comparison table (original vs random prototypes) ===")
+    print_comparison_table(comparisons)
+    print("\n=== Divergence analysis ===")
+    print(json.dumps(divergence, indent=2))
+    print("\n=== Final saliency map comparison ===")
+    print(json.dumps(final_map_cmp, indent=2))
+    print("=== Eval-prepared prediction comparison ===")
+    print(json.dumps(eval_map_cmp, indent=2))
+    if gt_metrics:
+        print("=== Ground-truth metrics (do not infer convergence from these alone) ===")
+        print(json.dumps(gt_metrics, indent=2))
+    if missing_expected:
+        print("\nMissing expected ops:")
+        for name in missing_expected:
+            print(f"  - {name}")
+    print(f"\nSaved diagnostic report: {report_path}")
+    return report
+
+
 def main() -> None:
     args = parse_args()
     args.checkpoint = args.checkpoint.expanduser().resolve()
@@ -147,30 +1096,53 @@ def main() -> None:
     if not args.checkpoint.is_file():
         raise FileNotFoundError(f"Source checkpoint not found: {args.checkpoint}")
 
-    checkpoint = torch_load(args.checkpoint)
-    state, container_key = extract_state_dict(checkpoint)
-    randomized_state, records = replace_prototypes(state, args.seed)
-    output_checkpoint = build_output_checkpoint(checkpoint, container_key, randomized_state)
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(output_checkpoint, args.output)
-    args.metadata.parent.mkdir(parents=True, exist_ok=True)
-    args.metadata.write_text(
-        json.dumps(
-            {
-                "control": "random_normalized_prototype_vectors",
-                "seed": args.seed,
-                "source_checkpoint": str(args.checkpoint),
-                "output_checkpoint": str(args.output),
-                "prototype_banks": records,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+    metadata, records = create_random_checkpoint(
+        args.checkpoint,
+        args.output,
+        args.metadata,
+        args.seed,
     )
     print(f"Saved random-prototype checkpoint: {args.output}")
     print(f"Saved metadata: {args.metadata}")
+    print("Prototype difference (original vs randomized):")
+    for record in records:
+        print(
+            f"  {record['stage']}: shape={record['shape']} "
+            f"mean_cos={record['mean_cosine_to_original']:.4f} "
+            f"(min={record['min_cosine_to_original']:.4f}, "
+            f"max={record['max_cosine_to_original']:.4f}) "
+            f"mean_l2={record['mean_l2_diff']:.4f} "
+            f"frobenius={record['frobenius_diff']:.4f} "
+            f"mean_abs={record['mean_abs_diff']:.6f} "
+            f"max_abs={record['max_abs_diff']:.6f}"
+        )
+
+    if not args.diagnostic:
+        return
+
+    if args.diagnostic_report is None:
+        args.diagnostic_report = args.output.with_name(
+            args.output.stem + f"_diagnostic_sample{args.sample_index}.json"
+        )
+    else:
+        args.diagnostic_report = args.diagnostic_report.expanduser().resolve()
+    if args.dataset_dir is not None:
+        args.dataset_dir = args.dataset_dir.expanduser().resolve()
+
+    device = _resolve_device(args.device)
+    run_diagnostic(
+        original_checkpoint=args.checkpoint,
+        random_checkpoint=args.output,
+        sample_index=args.sample_index,
+        dataset_dir=args.dataset_dir,
+        window_len=args.window_len,
+        device=device,
+        report_path=args.diagnostic_report,
+        atol=args.atol,
+        rtol=args.rtol,
+        close_rel_l2=args.close_rel_l2,
+        seed=args.seed,
+    )
 
 
 if __name__ == "__main__":

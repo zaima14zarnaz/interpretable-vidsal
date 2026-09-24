@@ -49,7 +49,8 @@ NUM_WORKERS = train_cfg.NUM_WORKERS
 SEED = train_cfg.SEED
 SKIP_EXISTING = True
 # Use a single GPU for the full model (backbone + head on the same device).
-GPU_ID = 0
+# Keep aligned with train.DEFAULT_GPU_ID.
+GPU_ID = int(getattr(train_cfg, "DEFAULT_GPU_ID", 1))
 
 
 def _resolve_single_device(gpu_id: int = GPU_ID) -> torch.device:

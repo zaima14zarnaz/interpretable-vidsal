@@ -14,6 +14,7 @@ import torch.nn.functional as F
 
 from model.backbones.video_swin_custom import VideoSwinTransformer
 from model.concept_creation import VisualConceptCreation
+from model.diagnostic_trace import record as _diag_record
 from model.saliency_prediction import ConceptGatedMultiScaleSaliencyDecoder
 from model.temporal_feature_infusion import SpatioTemporal3DFeatureInfusion
 
@@ -101,6 +102,9 @@ class ExplainableVidSalModel(nn.Module):
         decoder_use_side_logit_fusion: bool = True,
         use_temporal_feature_infusion: bool = True,
         use_shared_concept_activations: bool = False,
+        prototype_bottleneck_strength: float = 0.4,
+        prototype_application_position: str = "pre_refine",
+        fine_unary_mask_strength: float = 0.6,
         **_deprecated_saliency_kwargs: Any,
     ):
         super().__init__()
@@ -213,6 +217,9 @@ class ExplainableVidSalModel(nn.Module):
             temporal_aggregation=decoder_temporal_aggregation,
             use_side_logit_fusion=decoder_use_side_logit_fusion,
             use_shared_concept_activations=use_shared_concept_activations,
+            prototype_bottleneck_strength=prototype_bottleneck_strength,
+            prototype_application_position=prototype_application_position,
+            fine_unary_mask_strength=fine_unary_mask_strength,
         )
 
         if freeze_backbone:
@@ -449,6 +456,9 @@ class ExplainableVidSalModel(nn.Module):
                 features_dict = self.backbone.forward_features(x)
 
             features_dict = self._move_features_dict_to_head(features_dict)
+            for stage in self.backbone_stages:
+                if stage in features_dict:
+                    _diag_record(f"backbone.{stage}", features_dict[stage])
 
             if saliency_maps is not None:
                 saliency_maps = saliency_maps.to(
@@ -483,6 +493,7 @@ class ExplainableVidSalModel(nn.Module):
                 )
                 if return_details:
                     concept_features_shape[stage] = tuple(concept_features.shape)
+                concept_creations[stage]._diagnostic_label = f"concept.{stage}"
                 visual_out = concept_creations[stage](
                     concept_features,
                     saliency_maps=saliency_maps_for_concepts,
@@ -496,6 +507,10 @@ class ExplainableVidSalModel(nn.Module):
                     )
                 else:
                     decoder_features_dict[stage] = concept_features
+                _diag_record(
+                    f"decoder_features.{stage}",
+                    decoder_features_dict[stage],
+                )
 
             # Learned ConvTranspose upsampling uses fixed scale factors tied to the
             # backbone feature resolution, so decoder output_size should match

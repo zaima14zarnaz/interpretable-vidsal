@@ -34,6 +34,7 @@ torch.backends.cudnn.allow_tf32 = True
 # Edit these directly (no argparse).
 # ---------------------------------------------------------------------------
 CHECKPOINT_PATH = (
+    # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/empty_prot_ckpt.pth"
     "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth"
     # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
@@ -50,16 +51,17 @@ MAP_SAVE_INTERVAL = train_cfg.MAP_SAVE_INTERVAL if SAVE_VAL_MAPS else 10**9
 
 
 def _resolve_devices() -> Tuple[torch.device, torch.device]:
-    """Match the backbone/head split used in train.py."""
+    """Match train.py: backbone + head on a single GPU (DEFAULT_GPU_ID)."""
+    gpu_id = int(getattr(train_cfg, "DEFAULT_GPU_ID", 1))
     if torch.cuda.is_available():
-        backbone_device = torch.device("cuda:1")
-        head_device = torch.device(
-            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:1"
-        )
-    else:
-        backbone_device = torch.device("cpu")
-        head_device = torch.device("cpu")
-    return backbone_device, head_device
+        if gpu_id >= torch.cuda.device_count():
+            raise ValueError(
+                f"DEFAULT_GPU_ID={gpu_id} is unavailable; "
+                f"found {torch.cuda.device_count()} CUDA device(s)."
+            )
+        device = torch.device(f"cuda:{gpu_id}")
+        return device, device
+    return torch.device("cpu"), torch.device("cpu")
 
 
 def build_model(
@@ -101,6 +103,8 @@ def build_model(
         visual_concept_residual_weight=1.0,
         use_temporal_feature_infusion=True,
         use_shared_concept_activations=True,
+        prototype_bottleneck_strength=train_cfg.PROTOTYPE_BOTTLENECK_STRENGTH,
+        prototype_application_position=train_cfg.PROTOTYPE_APPLICATION_POSITION,
     ).to_split_devices(backbone_device, head_device)
 
 

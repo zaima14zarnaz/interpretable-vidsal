@@ -66,16 +66,17 @@ _EPOCH_PATH_RE = re.compile(r"epoch_(\d+)\.pth$")
 
 
 def _resolve_devices() -> Tuple[torch.device, torch.device]:
-    """Match the backbone/head split used in train.py."""
+    """Match train.py: backbone + head on a single GPU (DEFAULT_GPU_ID)."""
+    gpu_id = int(getattr(train_cfg, "DEFAULT_GPU_ID", 1))
     if torch.cuda.is_available():
-        backbone_device = torch.device("cuda:0")
-        head_device = torch.device(
-            "cuda:1" if torch.cuda.device_count() > 1 else "cuda:0"
-        )
-    else:
-        backbone_device = torch.device("cpu")
-        head_device = torch.device("cpu")
-    return backbone_device, head_device
+        if gpu_id >= torch.cuda.device_count():
+            raise ValueError(
+                f"DEFAULT_GPU_ID={gpu_id} is unavailable; "
+                f"found {torch.cuda.device_count()} CUDA device(s)."
+            )
+        device = torch.device(f"cuda:{gpu_id}")
+        return device, device
+    return torch.device("cpu"), torch.device("cpu")
 
 
 def build_model(
@@ -115,6 +116,8 @@ def build_model(
         temporal_concepts_on=train_cfg.TEMPORAL_CONCEPTS_ON,
         visual_concept_logit_scale=train_cfg.VISUAL_CONCEPT_LOGIT_SCALE,
         visual_concept_residual_weight=1.0,
+        prototype_bottleneck_strength=train_cfg.PROTOTYPE_BOTTLENECK_STRENGTH,
+        prototype_application_position=train_cfg.PROTOTYPE_APPLICATION_POSITION,
     ).to_split_devices(backbone_device, head_device)
 
 

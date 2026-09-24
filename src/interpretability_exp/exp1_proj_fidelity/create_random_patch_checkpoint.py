@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model-factory", default="model.model:ExplainableVidSalModel")
     parser.add_argument("--model-kwargs-json", type=Path, default=None)
-    parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda:1" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--window-len", type=int, default=16)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)

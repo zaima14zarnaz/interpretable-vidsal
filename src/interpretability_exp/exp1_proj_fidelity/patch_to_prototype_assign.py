@@ -150,7 +150,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=0, help="Reserved for compatibility; search is deterministic and indexed directly.")
-    parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda:1" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--similarity-chunk-size", type=int, default=65536)
     parser.add_argument(

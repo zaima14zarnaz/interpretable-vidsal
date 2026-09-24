@@ -15,6 +15,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .diagnostic_trace import record as _diag_record
+
 
 class VisualConceptCreation(nn.Module):
     """
@@ -549,6 +551,15 @@ class VisualConceptCreation(nn.Module):
             H=H,
             W=W,
         )
+
+        # Optional diagnostic snapshots (no-op unless capture_diagnostic_trace).
+        _diag_label = getattr(self, "_diagnostic_label", "concept")
+        _diag_record(f"{_diag_label}.patch_embeddings", q_vis)
+        _diag_record(f"{_diag_label}.prototype_cosine_similarity", raw_similarity)
+        _diag_record(f"{_diag_label}.visual_activations", visual_activations)
+        _diag_record(f"{_diag_label}.topk_indices", active_visual_prototype_indices)
+        _diag_record(f"{_diag_label}.active_prototypes", active_visual_prototypes)
+        _diag_record(f"{_diag_label}.concept_representation", visual_repr)
 
         return {
             "active_visual_prototypes": active_visual_prototypes,

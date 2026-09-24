@@ -82,6 +82,16 @@ VISUAL_CONCEPT_ON = True
 TEMPORAL_CONCEPTS_ON = False
 VISUAL_CONCEPT_LOGIT_SCALE = 1.0
 
+# Fixed convex blend at stage3/stage4 patch-priority fusion:
+# guided_last = (1 - lambda) * base_last + lambda * prototype_branch_last
+PROTOTYPE_BOTTLENECK_STRENGTH = 1.0
+# "pre_refine": blend into FiLM features before prev-up + refine (legacy).
+# "post_refine": blend into refined decoder features after prev-up + refine.
+PROTOTYPE_APPLICATION_POSITION = "post_refine"
+# Residual unary mask strength at stage1/stage2 (after refine):
+# guided_last = decoded_base_last * ((1 - s) + s * priority_mask_last)
+FINE_UNARY_MASK_STRENGTH = 1.0
+
 # Last-frame patch-priority map KL at Stage 3 and Stage 4.
 PRIORITY_MAP_LOSS_WEIGHT = 0.1
 PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
@@ -124,7 +134,7 @@ LOSS_LAMBDA = {
     "lambda_kl": 1.0,
     "lambda_cc": 1.0,
     "lambda_nss": 0.1,
-    "lambda_similarity": 0.1,
+    "lambda_similarity": 0.05,
 
     # Disable explicit background suppression for now
     "topk_percent": 0.000,
@@ -324,9 +334,58 @@ def _read_checkpoint(checkpoint_path: str) -> dict:
     return checkpoint
 
 
+def _is_allowed_missing_fine_unary_key(key: str) -> bool:
+    """Newly added stage1/stage2 unary-mask modules may be absent in old ckpts."""
+    for stage in ("stage1", "stage2"):
+        prefix = f"saliency_prediction.fusion_blocks.{stage}."
+        if not key.startswith(prefix):
+            continue
+        suffix = key[len(prefix) :]
+        allowed_roots = (
+            "feature_token_proj.",
+            "concept_proto_proj.",
+            "unary_priority_mlp.",
+            "shared_patch_proj.",
+            "null_prototype",
+        )
+        if any(
+            suffix == root.rstrip(".") or suffix.startswith(root)
+            for root in allowed_roots
+        ):
+            return True
+    return False
+
+
 def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, checkpoint_path: str) -> None:
-    model.load_state_dict(checkpoint["model_state_dict"])
+    state_dict = checkpoint["model_state_dict"]
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    missing = list(incompatible.missing_keys)
+    unexpected = list(incompatible.unexpected_keys)
+    allowed_missing = [k for k in missing if _is_allowed_missing_fine_unary_key(k)]
+    disallowed_missing = [k for k in missing if not _is_allowed_missing_fine_unary_key(k)]
+    if unexpected or disallowed_missing:
+        details = []
+        if disallowed_missing:
+            details.append(
+                "unexpected missing keys:\n  " + "\n  ".join(disallowed_missing)
+            )
+        if unexpected:
+            details.append(
+                "unexpected keys:\n  " + "\n  ".join(unexpected)
+            )
+        raise RuntimeError(
+            f"Failed to load checkpoint '{checkpoint_path}' with selective "
+            "compatibility for new stage1/stage2 unary-mask parameters.\n"
+            + "\n".join(details)
+        )
     print(f"Loaded model weights from checkpoint: {checkpoint_path}")
+    if allowed_missing:
+        print(
+            "Initialized newly added stage1/stage2 unary-mask parameters "
+            f"({len(allowed_missing)} missing keys):"
+        )
+        for key in allowed_missing:
+            print(f"  {key}")
 
 
 def _optimizer_hparams_from_checkpoint(checkpoint: dict, checkpoint_path: str) -> Tuple[float, float]:
@@ -731,7 +790,7 @@ def _print_decoder_concept_gate_debug(
     model: ExplainableVidSalModel,
     model_out: dict,
 ) -> None:
-    """Print visual FiLM diagnostics and patch-priority residual strength."""
+    """Print visual FiLM diagnostics and prototype bottleneck strength."""
     decoder = getattr(model, "saliency_prediction", None)
     if decoder is None:
         print("DEBUG decoder gates: no saliency_prediction module found")
@@ -759,12 +818,13 @@ def _print_decoder_concept_gate_debug(
                     " | film_gamma=unavailable "
                     "(pass return_decoder_diagnostics=True)"
                 )
-            raw_strength = getattr(block, "raw_strength", None)
-            if torch.is_tensor(raw_strength):
-                alpha = float(
-                    (block.max_strength * torch.sigmoid(raw_strength.detach())).cpu()
+            if getattr(block, "enable_patch_prioritization", False):
+                msg += (
+                    " | prototype_bottleneck_strength="
+                    f"{float(block.prototype_bottleneck_strength):.4f}"
+                    " | prototype_application_position="
+                    f"{block.prototype_application_position}"
                 )
-                msg += f" | patch_priority_alpha={alpha:.4f}"
             print(msg)
 
     if isinstance(pred_out, dict):
@@ -809,13 +869,21 @@ def _print_patch_priority_diagnostics(model_out: dict) -> None:
         diag = stage_diag.get(stage)
         if not isinstance(diag, dict):
             continue
+        ratio = diag.get(
+            "prototype_to_base_norm_ratio",
+            diag.get("prototype_to_film_norm_ratio", float("nan")),
+        )
         print(
             f"patch-priority map [{stage}] | "
             f"mean={float(diag.get('patch_priority_mean', float('nan'))):.6f} | "
             f"std={float(diag.get('patch_priority_std', float('nan'))):.6f} | "
             f"min={float(diag.get('patch_priority_min', float('nan'))):.6f} | "
             f"max={float(diag.get('patch_priority_max', float('nan'))):.6f} | "
-            f"alpha={float(diag.get('residual_strength', float('nan'))):.6f}"
+            f"prototype_application_position="
+            f"{diag.get('prototype_application_position', 'n/a')} | "
+            f"prototype_bottleneck_strength="
+            f"{float(diag.get('prototype_bottleneck_strength', float('nan'))):.6f} | "
+            f"prototype_to_base_norm_ratio={float(ratio):.6f}"
         )
 
 
@@ -1297,6 +1365,9 @@ def main() -> None:
         visual_concept_residual_weight=1.0,
         use_temporal_feature_infusion=True,
         use_shared_concept_activations=True,
+        prototype_bottleneck_strength=PROTOTYPE_BOTTLENECK_STRENGTH,
+        prototype_application_position=PROTOTYPE_APPLICATION_POSITION,
+        fine_unary_mask_strength=FINE_UNARY_MASK_STRENGTH,
     ).to_split_devices(backbone_device, head_device)
 
     checkpoint = None
