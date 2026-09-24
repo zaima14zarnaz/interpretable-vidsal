@@ -27,7 +27,7 @@ import torch.nn.functional as F
 
 
 DEFAULT_CHECKPOINT = Path(
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260923_221022/epoch_050.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260923_220130/epoch_001.pth"
 )
 DEFAULT_OUTPUT = Path(
     "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/"
@@ -1171,13 +1171,8 @@ def run_validation_csv(
                 )
                 out_orig = model_orig(rgb_ready, **forward_args)
                 out_rand = model_rand(rgb_ready, **forward_args)
-                map_orig = (out_orig if torch.is_tensor(out_orig) else out_orig["saliency_map"]).detach().cpu()
-                map_rand = (out_rand if torch.is_tensor(out_rand) else out_rand["saliency_map"]).detach().cpu()
-                if map_orig.ndim != 4 or map_rand.shape != map_orig.shape or map_orig.shape[1] != 1:
-                    raise ValueError(
-                        f"Expected matching [B,1,H,W] maps, got {tuple(map_orig.shape)} "
-                        f"and {tuple(map_rand.shape)}"
-                    )
+                map_orig = out_orig["saliency_map"].detach().cpu()
+                map_rand = out_rand["saliency_map"].detach().cpu()
 
                 sal_cpu = sal_ready.cpu()
                 fix_cpu = fix_ready.cpu()

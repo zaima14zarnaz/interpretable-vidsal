@@ -27,7 +27,7 @@ import torch.nn.functional as F
 
 
 DEFAULT_CHECKPOINT = Path(
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260923_221022/epoch_050.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260923_220130/epoch_001.pth"
 )
 DEFAULT_OUTPUT = Path(
     "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/"
@@ -109,10 +109,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="JSON path for the full diagnostic report.",
-    )
-    parser.add_argument(
-        "--validation-csv", type=Path, default=None,
-        help="Evaluate every validation window and write paired metrics to CSV.",
     )
     parser.add_argument("--atol", type=float, default=1e-5)
     parser.add_argument("--rtol", type=float, default=1e-4)
@@ -1092,143 +1088,6 @@ def run_diagnostic(
     return report
 
 
-def run_validation_csv(
-    *,
-    original_checkpoint: Path,
-    random_checkpoint: Path,
-    csv_path: Path,
-    dataset_dir: Optional[Path],
-    window_len: Optional[int],
-    device: torch.device,
-    seed: int,
-) -> None:
-    """Evaluate every validation window under both checkpoints, one row each."""
-    _ensure_src_on_path()
-    import csv
-    import train as train_cfg
-    from pre_process.collate import video_saliency_collate_fn
-    from pre_process.dataloader import DatasetLoader
-    from metrics import compute_saliency_metrics, prepare_prediction_map
-
-    _set_deterministic(seed)
-    ds_dir = Path(dataset_dir) if dataset_dir is not None else Path(train_cfg.VAL_DATASET_DIR)
-    win = int(window_len) if window_len is not None else int(train_cfg.WINDOW_LEN)
-    dataset = DatasetLoader(str(ds_dir), window_len=win, stride=32)
-    if len(dataset) == 0:
-        raise ValueError(f"Validation dataset is empty: {ds_dir}")
-
-    verification = verify_checkpoint_delta(original_checkpoint, random_checkpoint)
-    if not verification["ok"]:
-        raise RuntimeError("Original/random checkpoint verification failed")
-    model_orig = build_diagnostic_model(device)
-    load_model_checkpoint(model_orig, original_checkpoint)
-    model_orig.eval()
-    model_rand = build_diagnostic_model(device)
-    load_model_checkpoint(model_rand, random_checkpoint)
-    model_rand.eval()
-
-    fieldnames = [
-        "sample_index", "video", "start_frame", "n_frames",
-        "original_CC", "random_CC", "original_SIM", "random_SIM",
-        "original_NSS", "random_NSS", "mae", "relative_L2",
-        "map_correlation", "cc_comp",
-    ]
-
-    def metric_value(metrics: Mapping[str, Any], name: str) -> float:
-        matches = [value for key, value in metrics.items() if str(key).upper() == name]
-        if len(matches) != 1:
-            raise KeyError(f"Expected one {name} metric; got keys {list(metrics)}")
-        value = matches[0]
-        number = float(value.detach().cpu()) if torch.is_tensor(value) else float(value)
-        if not math.isfinite(number):
-            raise ValueError(f"Nonfinite {name} metric: {number}")
-        return number
-
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    part_path = csv_path.with_name(csv_path.name + ".part")
-    # The .part file remains available if a long evaluation is interrupted.
-    with part_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        with torch.inference_mode():
-            for sample_index in range(len(dataset)):
-                sample = dataset[sample_index]
-                _, rgb, sal, fix, n_frames, _ = video_saliency_collate_fn([sample])
-                if sal is None or fix is None:
-                    raise ValueError(f"Missing saliency or fixation target at index {sample_index}")
-                # Preprocess once, then feed identical tensors into both models.
-                rgb_ready, sal_ready, fix_ready = model_orig.prepare_training_batch(
-                    rgb, sal, fix
-                )
-                if sal_ready is None or fix_ready is None:
-                    raise ValueError(f"Missing prepared targets at index {sample_index}")
-                fix_ready = (fix_ready > 0).float()
-                forward_args = dict(
-                    saliency_maps=sal_ready,
-                    return_details=False,
-                    return_concept_losses=False,
-                    return_decoder_diagnostics=False,
-                )
-                out_orig = model_orig(rgb_ready, **forward_args)
-                out_rand = model_rand(rgb_ready, **forward_args)
-                map_orig = (out_orig if torch.is_tensor(out_orig) else out_orig["saliency_map"]).detach().cpu()
-                map_rand = (out_rand if torch.is_tensor(out_rand) else out_rand["saliency_map"]).detach().cpu()
-                if map_orig.ndim != 4 or map_rand.shape != map_orig.shape or map_orig.shape[1] != 1:
-                    raise ValueError(
-                        f"Expected matching [B,1,H,W] maps, got {tuple(map_orig.shape)} "
-                        f"and {tuple(map_rand.shape)}"
-                    )
-
-                sal_cpu = sal_ready.cpu()
-                fix_cpu = fix_ready.cpu()
-                metric_args = dict(
-                    fixation_target=fix_cpu,
-                    allow_pseudo_fixations=False,
-                    dh1k_exact=True,
-                )
-                original_metrics = compute_saliency_metrics(map_orig, sal_cpu, **metric_args)
-                random_metrics = compute_saliency_metrics(map_rand, sal_cpu, **metric_args)
-                # Compare eval-prepared predictions, so MAE has the same scale
-                # used by the repository's saliency metric preparation.
-                comparison = compare_final_maps(
-                    prepare_prediction_map(map_orig),
-                    prepare_prediction_map(map_rand),
-                )
-                original_cc = metric_value(original_metrics, "CC")
-                random_cc = metric_value(random_metrics, "CC")
-                if random_cc > original_cc:
-                    cc_comp = "better"
-                elif random_cc == original_cc:
-                    cc_comp = "equal"
-                else:
-                    cc_comp = "worse"
-
-                video, start_frame = dataset.windows[sample_index]
-                row = {
-                    "sample_index": sample_index,
-                    "video": video,
-                    "start_frame": start_frame,
-                    "n_frames": int(n_frames[0]),
-                    "original_CC": original_cc,
-                    "random_CC": random_cc,
-                    "original_SIM": metric_value(original_metrics, "SIM"),
-                    "random_SIM": metric_value(random_metrics, "SIM"),
-                    "original_NSS": metric_value(original_metrics, "NSS"),
-                    "random_NSS": metric_value(random_metrics, "NSS"),
-                    "mae": comparison["mae"],
-                    "relative_L2": comparison["relative_l2"],
-                    "map_correlation": comparison["map_correlation"],
-                    "cc_comp": cc_comp,
-                }
-                writer.writerow(row)
-                if (sample_index + 1) % 100 == 0 or sample_index + 1 == len(dataset):
-                    file.flush()
-                    print(f"Validation: {sample_index + 1}/{len(dataset)} windows")
-
-    part_path.replace(csv_path)
-    print(f"Saved {len(dataset)} paired validation rows: {csv_path}")
-
-
 def main() -> None:
     args = parse_args()
     args.checkpoint = args.checkpoint.expanduser().resolve()
@@ -1259,15 +1118,6 @@ def main() -> None:
             f"frobenius={record['frobenius_diff']:.4f} "
             f"mean_abs={record['mean_abs_diff']:.6f} "
             f"max_abs={record['max_abs_diff']:.6f}"
-        )
-
-    if args.validation_csv is not None:
-        csv_path = args.validation_csv.expanduser().resolve()
-        ds_dir = args.dataset_dir.expanduser().resolve() if args.dataset_dir is not None else None
-        run_validation_csv(
-            original_checkpoint=args.checkpoint, random_checkpoint=args.output,
-            csv_path=csv_path, dataset_dir=ds_dir, window_len=args.window_len,
-            device=_resolve_device(args.device), seed=args.seed,
         )
 
     if not args.diagnostic:

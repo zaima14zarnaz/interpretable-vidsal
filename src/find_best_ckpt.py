@@ -118,6 +118,12 @@ def build_model(
         visual_concept_residual_weight=1.0,
         prototype_bottleneck_strength=train_cfg.PROTOTYPE_BOTTLENECK_STRENGTH,
         prototype_application_position=train_cfg.PROTOTYPE_APPLICATION_POSITION,
+        fine_unary_mask_strength=getattr(
+            train_cfg, "FINE_UNARY_MASK_STRENGTH", 0.6
+        ),
+        stage2_backbone_fusion_enabled=getattr(
+            train_cfg, "STAGE2_BACKBONE_FUSION_ENABLED", True
+        ),
     ).to_split_devices(backbone_device, head_device)
 
 

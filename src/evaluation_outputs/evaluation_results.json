@@ -7,12 +7,12 @@
   "batch_size": 2,
   "backbone_device": "cuda:1",
   "head_device": "cuda:1",
-  "mean_loss": 0.4656893845927884,
+  "mean_loss": 0.7625431427356331,
   "metrics": {
-    "CC": 0.5479994837556241,
-    "SIM": 0.3851606484173493,
-    "NSS": 3.2174496923125426
+    "CC": 0.4569654125911199,
+    "SIM": 0.22901400505700184,
+    "NSS": 2.5216179783725168
   },
-  "checkpoint_epoch": 175,
-  "evaluated_at": "2026-09-23T20:39:24"
+  "checkpoint_epoch": 1,
+  "evaluated_at": "2026-09-23T22:18:08"
 }

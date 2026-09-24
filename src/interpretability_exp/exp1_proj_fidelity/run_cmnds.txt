@@ -1,0 +1,5 @@
+# Check prototype dependence on a single sample
+python visualize_prototype_intervention.py \
+  --sample-index 0 \
+  --stage stage4 \
+  --output-dir random_prot_exp_qual 

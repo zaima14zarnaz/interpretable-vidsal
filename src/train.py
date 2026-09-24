@@ -91,6 +91,10 @@ PROTOTYPE_APPLICATION_POSITION = "post_refine"
 # Residual unary mask strength at stage1/stage2 (after refine):
 # guided_last = decoded_base_last * ((1 - s) + s * priority_mask_last)
 FINE_UNARY_MASK_STRENGTH = 1.0
+# When False: stage2 fused = prev_scale * prev_up (no stage2 backbone/FiLM
+# addition into the decode stream). Mask scoring still uses stage2 FiLM features.
+# Non-parameter flag; same checkpoint loads for controlled comparison.
+STAGE2_BACKBONE_FUSION_ENABLED = True
 
 # Last-frame patch-priority map KL at Stage 3 and Stage 4.
 PRIORITY_MAP_LOSS_WEIGHT = 0.1
@@ -1368,6 +1372,7 @@ def main() -> None:
         prototype_bottleneck_strength=PROTOTYPE_BOTTLENECK_STRENGTH,
         prototype_application_position=PROTOTYPE_APPLICATION_POSITION,
         fine_unary_mask_strength=FINE_UNARY_MASK_STRENGTH,
+        stage2_backbone_fusion_enabled=STAGE2_BACKBONE_FUSION_ENABLED,
     ).to_split_devices(backbone_device, head_device)
 
     checkpoint = None

@@ -1,0 +1,115 @@
+{
+  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260923_221022/epoch_050.pth",
+  "dataset_dir": "/data/quantization/zaima/videosal_datasets/dhf1k/val",
+  "sample_index": 0,
+  "video": "601",
+  "start_frame": 0,
+  "n_frames": 32,
+  "stage": "stage2",
+  "prototype_id": 382,
+  "prototype_vector_l2": 1.0157843828201294,
+  "intervention": "exclude selected global prototype ID from this stage's priority competition",
+  "removed_candidate_occurrences": 1159,
+  "patches_without_remaining_prototypes": 1159,
+  "priority_mask_max_abs_change": 13.68204116821289,
+  "metrics": {
+    "original": {
+      "CC": 0.9132146835327148,
+      "SIM": 0.702196478843689,
+      "NSS": 8.651126861572266
+    },
+    "intervention": {
+      "CC": 0.9150440692901611,
+      "SIM": 0.6745278239250183,
+      "NSS": 8.869929313659668
+    },
+    "delta_intervention_minus_original": {
+      "CC": 0.001829385757446289,
+      "SIM": -0.027668654918670654,
+      "NSS": 0.21880245208740234
+    },
+    "random": {
+      "CC": 0.844868540763855,
+      "SIM": 0.5324481725692749,
+      "NSS": 8.047547340393066
+    }
+  },
+  "map_comparison_evaluation_prepared": {
+    "mae": 0.0020982029382139444,
+    "relative_L2": 0.14566941617421603,
+    "map_correlation": 0.9970088601112366
+  },
+  "top_matched_patches": [
+    {
+      "patch_yx": [
+        27,
+        8
+      ],
+      "topk_slot": 0,
+      "image_box_xyxy_approx": [
+        106,
+        347,
+        120,
+        360
+      ],
+      "prototype_priority": 0.001559784053824842,
+      "unary_score": 0.003491342067718506,
+      "context_score": null,
+      "concept_activation": 1.0,
+      "cosine_patch_to_learned_prototype": 0.9957866668701172
+    },
+    {
+      "patch_yx": [
+        24,
+        10
+      ],
+      "topk_slot": 0,
+      "image_box_xyxy_approx": [
+        133,
+        308,
+        146,
+        321
+      ],
+      "prototype_priority": 0.0015125431818887591,
+      "unary_score": 0.00041584111750125885,
+      "context_score": null,
+      "concept_activation": 1.0,
+      "cosine_patch_to_learned_prototype": 0.9821891784667969
+    },
+    {
+      "patch_yx": [
+        1,
+        12
+      ],
+      "topk_slot": 0,
+      "image_box_xyxy_approx": [
+        160,
+        12,
+        173,
+        25
+      ],
+      "prototype_priority": 0.0015085645718500018,
+      "unary_score": 0.0001524612307548523,
+      "context_score": null,
+      "concept_activation": 1.0,
+      "cosine_patch_to_learned_prototype": 0.9684880971908569
+    }
+  ],
+  "projected_training_patch": null,
+  "note": "Displayed input crops approximate feature-grid cells, not full CNN receptive fields.",
+  "random_checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth",
+  "map_comparison_original_vs_random_evaluation_prepared": {
+    "mae": 0.004820066038519144,
+    "relative_L2": 0.5734598815478568,
+    "map_correlation": 0.937865138053894
+  },
+  "prediction_files": {
+    "original_raw_numpy": "random_prot_exp_qual/sample_00000_stage2_prototype_382_original_raw.npy",
+    "original_eval_numpy": "random_prot_exp_qual/sample_00000_stage2_prototype_382_original_eval.npy",
+    "original_eval_png": "random_prot_exp_qual/sample_00000_stage2_prototype_382_original_eval.png",
+    "random_raw_numpy": "random_prot_exp_qual/sample_00000_stage2_prototype_382_random_raw.npy",
+    "random_eval_numpy": "random_prot_exp_qual/sample_00000_stage2_prototype_382_random_eval.npy",
+    "random_eval_png": "random_prot_exp_qual/sample_00000_stage2_prototype_382_random_eval.png"
+  },
+  "prediction_file_note": "_raw.npy holds unprocessed model outputs; _eval.npy and _eval.png hold independently evaluation-prepared predictions on a common [0,1] scale."
+}

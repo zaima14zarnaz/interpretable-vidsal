@@ -105,6 +105,7 @@ class ExplainableVidSalModel(nn.Module):
         prototype_bottleneck_strength: float = 0.4,
         prototype_application_position: str = "pre_refine",
         fine_unary_mask_strength: float = 0.6,
+        stage2_backbone_fusion_enabled: bool = True,
         **_deprecated_saliency_kwargs: Any,
     ):
         super().__init__()
@@ -143,6 +144,7 @@ class ExplainableVidSalModel(nn.Module):
         self.decoder_use_side_logit_fusion = bool(decoder_use_side_logit_fusion)
         self.use_temporal_feature_infusion = bool(use_temporal_feature_infusion)
         self.use_shared_concept_activations = bool(use_shared_concept_activations)
+        self.stage2_backbone_fusion_enabled = bool(stage2_backbone_fusion_enabled)
         if not self.visual_concept_on and not self.temporal_concepts_on:
             raise ValueError(
                 "At least one concept branch must be enabled: "
@@ -220,6 +222,7 @@ class ExplainableVidSalModel(nn.Module):
             prototype_bottleneck_strength=prototype_bottleneck_strength,
             prototype_application_position=prototype_application_position,
             fine_unary_mask_strength=fine_unary_mask_strength,
+            stage2_backbone_fusion_enabled=stage2_backbone_fusion_enabled,
         )
 
         if freeze_backbone:
