@@ -41,10 +41,12 @@ SHOW_PROGRESS_BAR = sys.stdout.isatty()
 
 TRAIN_DATASET_DIR = (
     # "/data/quantization/zaima/videosal_datasets/hollywood2/videos/training"
+    # "/data/quantization/zaima/videosal_datasets/ucfsports/training"
     "/data/quantization/zaima/videosal_datasets/dhf1k/train"
 )
 VAL_DATASET_DIR = ( 
     # "/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing"
+    # "/data/quantization/zaima/videosal_datasets/ucfsports/testing"
     "/data/quantization/zaima/videosal_datasets/dhf1k/val"
 )
 WINDOW_LEN = 32
@@ -156,7 +158,7 @@ LOSS_LAMBDA = {
 
     # Temporarily reduce visual regularizers
     "lambda_visual_entropy": 0.005,
-    "lambda_visual_usage": 0.1,
+    "lambda_visual_usage": 0.7,
     "lambda_visual_equiv": 0.00,
     "lambda_temporal_attention_entropy": 0.0,
 

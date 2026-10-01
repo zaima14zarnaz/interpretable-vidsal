@@ -30,8 +30,8 @@ class VisualConceptCreation(nn.Module):
     """
 
     DEFAULT_LOSS_WEIGHTS = {
-        "visual": 0.1,
-        "visual_div": 0.05,
+        "visual": 1.0,
+        "visual_div": 0.1,
     }
 
     DROPOUT_P = 0.2
@@ -64,7 +64,7 @@ class VisualConceptCreation(nn.Module):
         visual_assignment_mode: str = "straight_through",
         visual_assignment_temperature: float = 0.07,
         visual_entropy_weight: float = 0.01,
-        visual_usage_weight: float = 0.02,
+        visual_usage_weight: float = 0.1,
         use_visual_saliency_alignment: bool = True,
         visual_saliency_align_weight: float = 0.05,
         use_target_centric: bool = True,

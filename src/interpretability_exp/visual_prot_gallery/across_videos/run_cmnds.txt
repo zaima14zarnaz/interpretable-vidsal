@@ -1,0 +1,9 @@
+python visual_concept_explanations.py \
+    --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260930_225842/epoch_022.pth \
+    --dataset-dir /data/quantization/zaima/videosal_datasets/dhf1k/val \
+    --concepts-root /data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/cross_video \
+    --activation-key stage4.visual_concept_logits \
+    --top-k 8 \
+    --skip-llm \
+    --salient-patches-only \
+    --saliency-top-percent 0.30 

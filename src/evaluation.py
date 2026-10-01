@@ -35,12 +35,12 @@ torch.backends.cudnn.allow_tf32 = True
 # ---------------------------------------------------------------------------
 CHECKPOINT_PATH = (
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/empty_prot_ckpt.pth"
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth"
+    # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth"
     # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
-    # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20260917_155406/epoch_021.pth"
+    "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
 )
-VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val"
+VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val" # "/data/quantization/zaima/videosal_datasets/ucfsports/testing"
 WINDOW_LEN = train_cfg.WINDOW_LEN
 BATCH_SIZE = train_cfg._dataloader_batch_size()
 NUM_WORKERS = train_cfg.NUM_WORKERS
@@ -52,7 +52,7 @@ MAP_SAVE_INTERVAL = train_cfg.MAP_SAVE_INTERVAL if SAVE_VAL_MAPS else 10**9
 
 def _resolve_devices() -> Tuple[torch.device, torch.device]:
     """Match train.py: backbone + head on a single GPU (DEFAULT_GPU_ID)."""
-    gpu_id = int(getattr(train_cfg, "DEFAULT_GPU_ID", 1))
+    gpu_id = 0 #int(getattr(train_cfg, "DEFAULT_GPU_ID", 0))
     if torch.cuda.is_available():
         if gpu_id >= torch.cuda.device_count():
             raise ValueError(
@@ -106,7 +106,7 @@ def build_model(
         prototype_bottleneck_strength=train_cfg.PROTOTYPE_BOTTLENECK_STRENGTH,
         prototype_application_position=train_cfg.PROTOTYPE_APPLICATION_POSITION,
         fine_unary_mask_strength=getattr(
-            train_cfg, "FINE_UNARY_MASK_STRENGTH", 0.6
+            train_cfg, "FINE_UNARY_MASK_STRENGTH", 1.0
         ),
         stage2_backbone_fusion_enabled=getattr(
             train_cfg, "STAGE2_BACKBONE_FUSION_ENABLED", True
@@ -148,7 +148,7 @@ def build_val_loader() -> Tuple[DataLoader, DatasetLoader]:
     val_dataset = DatasetLoader(
         VAL_DATASET_DIR,
         window_len=WINDOW_LEN,
-        stride=32,
+        stride=1,
     )
 
     loader_kwargs = {
@@ -231,8 +231,8 @@ def evaluate_checkpoint(
             "  Val metrics   | "
             f"CC: {val_metrics['CC']:.4f} | "
             f"SIM: {val_metrics['SIM']:.4f} | "
-            # f"AUC: {val_metrics['AUC']:.4f} | "
-            # f"sAUC: {val_metrics['sAUC']:.4f} | "
+            f"AUC: {val_metrics['AUC']:.4f} | "
+            f"sAUC: {val_metrics['sAUC']:.4f} | "
             f"NSS: {val_metrics['NSS']:.4f}"
         )
     print(f"  Saved results: {results_path}")
