@@ -134,6 +134,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import heapq
 import json
 import math
@@ -189,6 +190,7 @@ STAGE1_SAMPLE_MAX_NEW_TOKENS = 256
 STAGE1_SAMPLE_RETRY_MAX_NEW_TOKENS = 512
 STAGE2_AGGREGATE_MAX_NEW_TOKENS = 512
 STAGE2_AGGREGATE_RETRY_MAX_NEW_TOKENS = 1024
+CACHED_FEATS = "/data/quantization/zaima/videosal_datasets/dhf1k/cached_feats"
 
 # Prototypes kept per patch for decoder priority scoring. Not stored in the
 # checkpoint, so it must match the value hard-coded in train.py.
@@ -356,6 +358,7 @@ def build_model(device: torch.device) -> ExplainableVidSalModel:
         prototype_application_position=train_cfg.PROTOTYPE_APPLICATION_POSITION,
         fine_unary_mask_strength=train_cfg.FINE_UNARY_MASK_STRENGTH,
         stage2_backbone_fusion_enabled=train_cfg.STAGE2_BACKBONE_FUSION_ENABLED,
+        reference_cache_dir=CACHED_FEATS,
     ).to_split_devices(device, device)
     model.eval()
     return model
@@ -1036,6 +1039,39 @@ def gallery_video_btchw_from_window(
     return gallery, native_hw
 
 
+def extract_peak_frame_rgb(rgb_window: torch.Tensor, frame_idx: int) -> torch.Tensor:
+    """Extract one target frame as compact uint8 [C, H, W] on CPU (gallery uses one frame)."""
+    window = rgb_window
+    if window.dim() == 4:
+        video = rgb_video_to_btchw(window.unsqueeze(0))
+    elif window.dim() == 5:
+        video = rgb_video_to_btchw(window)
+    else:
+        raise ValueError(f"Expected 4D or 5D RGB window, got {tuple(window.shape)}")
+    t = int(video.shape[1])
+    frame_idx = max(0, min(int(frame_idx), t - 1))
+    frame = video[0, frame_idx].clamp(0.0, 1.0)
+    return (frame * 255.0).round().to(torch.uint8).cpu().contiguous()
+
+
+def gallery_video_from_peak_frame(
+    peak_frame_rgb: torch.Tensor,
+    gallery_input_hw: Tuple[int, int],
+) -> Tuple[torch.Tensor, Tuple[int, int]]:
+    """Backbone-resize a single stored peak frame to [1, 1, C, H, W] for gallery crops."""
+    frame = peak_frame_rgb.detach().cpu()
+    if frame.dim() != 3:
+        raise ValueError(f"peak_frame_rgb must be [C, H, W], got {tuple(frame.shape)}")
+    if frame.dtype == torch.uint8:
+        frame_f = frame.float() / 255.0
+    else:
+        frame_f = frame.float().clamp(0.0, 1.0)
+    native_hw = (int(frame_f.shape[-2]), int(frame_f.shape[-1]))
+    video_btchw = frame_f.unsqueeze(0).unsqueeze(0)
+    gallery = preprocess_rgb_video_like_backbone(video_btchw, gallery_input_hw)
+    return gallery, native_hw
+
+
 def map_patch_box_xyxy_to_native(
     box_xyxy: Tuple[int, int, int, int],
     gallery_hw: Tuple[int, int],
@@ -1442,6 +1478,7 @@ class HeapItem:
         compare=False, default=None
     )
     peak_time_idx: Optional[int] = field(compare=False, default=None)
+    peak_frame_rgb: Any = field(compare=False, default=None)
     rgb_window: Any = field(compare=False, default=None)
     gallery_input_hw: Optional[Tuple[int, int]] = field(compare=False, default=None)
     native_input_hw: Optional[Tuple[int, int]] = field(compare=False, default=None)
@@ -1502,17 +1539,32 @@ def populate_heap_item_images(item: HeapItem) -> None:
     """Prepare patch crop and full frame in backbone-resized RGB space (matches model input)."""
     if item.activated_sample_image is not None and item.full_activated_frame_image is not None:
         return
-    if item.rgb_window is None:
-        raise ValueError(f"Missing RGB window for retrieved example {item.video_name!r}.")
     if item.gallery_input_hw is None:
         raise ValueError(
             f"Missing gallery_input_hw for retrieved example {item.video_name!r}. "
             "Re-run retrieval with a loaded ExplainableVidSalModel so backbone resize is recorded."
         )
-    video, native_hw = gallery_video_btchw_from_window(item.rgb_window, item.gallery_input_hw)
+    if item.peak_frame_rgb is not None:
+        video, native_hw = gallery_video_from_peak_frame(
+            item.peak_frame_rgb, item.gallery_input_hw
+        )
+    elif item.rgb_window is not None:
+        video, native_hw = gallery_video_btchw_from_window(
+            item.rgb_window, item.gallery_input_hw
+        )
+    else:
+        raise ValueError(
+            f"Missing peak_frame_rgb for retrieved example {item.video_name!r}."
+        )
     item.native_input_hw = native_hw
     _, frames, _, height, width = video.shape
-    target = frames - 1 if item.peak_time_idx is None else int(item.peak_time_idx)
+    if item.peak_frame_rgb is not None:
+        # peak_frame_rgb already holds the selected window frame (e.g. t=31).
+        target = 0
+    elif item.peak_time_idx is None:
+        target = frames - 1
+    else:
+        target = int(item.peak_time_idx)
     if target < 0 or target >= frames:
         raise ValueError(f"Target frame {target} is outside the RGB window for {item.video_name}.")
     if item.grid_hw is None:
@@ -1603,7 +1655,6 @@ def update_heaps_from_activations(
         name = os.path.normpath(str(value))
         groups.setdefault(name, []).append(b_idx)
     serial = serial_start
-    window_cache: Dict[int, torch.Tensor] = {}
     for video_name, batch_members in groups.items():
         # Search ALL eligible patches from ALL occurrences of this video.
         video_scores = scores[batch_members][:, :, indices].reshape(-1, len(indices))
@@ -1622,18 +1673,15 @@ def update_heaps_from_activations(
             local_index = int(locations[column])
             b_idx = batch_members[local_index // n_patches]
             p_idx = local_index % n_patches
-            # Share one immutable CPU window among accepted concepts; rejected
-            # candidates never trigger an expensive RGB clone.
-            if b_idx not in window_cache:
-                window_cache[b_idx] = rgb_batch[b_idx].detach().cpu().clone()
             frame_idx = int(peak_time_indices[b_idx, p_idx, c_idx]) if peak_time_indices is not None else int(rgb_video_to_btchw(rgb_batch[b_idx:b_idx+1]).shape[1]) - 1
             if frame_idx < 0:
                 raise ValueError("A finite target-step match has no target RGB frame index.")
+            peak_frame_rgb = extract_peak_frame_rgb(rgb_batch[b_idx], frame_idx)
             flat_idx = b_idx * n_patches + p_idx
             item = HeapItem(
                 score=value, serial=serial, concept_idx=c_idx,
                 batch_index=b_idx, patch_index=p_idx, video_name=video_name,
-                grid_hw=grid_hw, rgb_window=window_cache[b_idx],
+                grid_hw=grid_hw, peak_frame_rgb=peak_frame_rgb, rgb_window=None,
                 gallery_input_hw=gallery_input_hw,
                 peak_time_idx=frame_idx, activation_score=float(acts[b_idx, p_idx, c_idx]),
                 patch_pred_saliency=float(patch_sal[b_idx, p_idx]),
@@ -1913,8 +1961,25 @@ def save_single_concept_heap(
     if ranked:
         save_contact_sheet(ranked, top_examples_dir / "contact_sheet.jpg", overwrite=overwrite)
         save_frame_gallery(ranked, top_examples_dir / "gallery.jpg", overwrite=overwrite)
+    for item in ranked:
+        release_heap_item_render_cache(item)
     metadata_path.write_text(json.dumps(metadata_entries, indent=2), encoding="utf-8")
     return saved_examples
+
+
+def release_heap_item_render_cache(item: HeapItem) -> None:
+    """Drop in-memory PIL crops after JPEGs are written (keep peak_frame_rgb for re-save)."""
+    item.activated_sample_image = None
+    item.full_activated_frame_image = None
+
+
+def release_heap_retrieval_buffers(heaps: Dict[int, List[HeapItem]]) -> None:
+    """Free peak-frame tensors after the full retrieval pass is finished."""
+    for heap in heaps.values():
+        for item in heap:
+            item.peak_frame_rgb = None
+            item.rgb_window = None
+            release_heap_item_render_cache(item)
 
 
 def partition_concepts_for_retrieval(
@@ -2880,7 +2945,7 @@ def retrieve_and_save_top_examples(
             if save_every_n_batches > 0
             else "once at end of dataset pass"
         )
-        amp_note = "on" if use_amp and device.type == "cuda:1" else "off"
+        amp_note = "on" if use_amp and device.type == "cuda:0" else "off"
         print(
             f"Retrieving top examples for {len(retrieve_indices)} concept(s); "
             f"saving {save_note}; AMP {amp_note}."
@@ -2888,7 +2953,7 @@ def retrieve_and_save_top_examples(
     elif concept_indices:
         print("All requested concepts already have saved top_examples; skipping retrieval.")
 
-    amp_enabled = use_amp and device.type == "cuda:1"
+    amp_enabled = use_amp and device.type == "cuda:0"
     with torch.inference_mode():
         for batch_idx, batch in enumerate(tqdm(loader, desc="Retrieving top concept examples")):
             if max_batches is not None and batch_idx >= max_batches:
@@ -3004,6 +3069,10 @@ def retrieve_and_save_top_examples(
                 saved_examples.update(interim_saved)
 
             del model_out, rgb_device, sal_device
+            if (batch_idx + 1) % 32 == 0:
+                gc.collect()
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
 
     if retrieve_indices:
         newly_saved = save_retrieved_examples(
@@ -3028,6 +3097,8 @@ def retrieve_and_save_top_examples(
             )
 
     write_retrieved_examples_aggregate(saved_examples, output_dir)
+    release_heap_retrieval_buffers(heaps)
+    gc.collect()
     return saved_examples
 
 
@@ -3096,7 +3167,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None, help="Optional subset size")
     parser.add_argument("--max-batches", type=int, default=None, help="Optional max batches for quick testing")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", default="cuda:1" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument(
         "--activation-key",
         default=None,
@@ -3431,7 +3502,7 @@ def main() -> None:
 
     concept_indices = resolve_concept_indices(args.num_concepts, args.max_concepts)
 
-    use_amp = args.use_amp if args.use_amp is not None else device.type == "cuda:1"
+    use_amp = args.use_amp if args.use_amp is not None else device.type == "cuda:0"
     saved_examples = retrieve_and_save_top_examples(
         model=model,
         loader=loader,

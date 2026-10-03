@@ -1,0 +1,46 @@
+python prototype_to_patch.py \
+    --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261001_040032/epoch_068.pth \
+    --dataset-dir /data/quantization/zaima/videosal_datasets/dhf1k/train \
+    --concepts-root /data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/cross_video \
+    --activation-key stage4.visual_concept_logits \
+    --top-k 8 \
+    --skip-llm \
+    --salient-patches-only \
+    --saliency-top-percent 0.30 \
+    --save-every-n-batches 200 \
+    --max-samples 1000
+
+
+nohup python patch_to_prototype.py \
+  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261001_040032/epoch_068.pth \
+  --dataset-dir /data/quantization/zaima/videosal_datasets/dhf1k/train \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v3 \
+  --min-group-size 2 \
+  --max-group-size 8 \
+  --top-k 10 \
+  --min-stage4-cosine 0.40 \
+  --max-rgb-mae 0.18 \
+  --min-rgb-structure-cosine 0.50 \
+  --no-salient-patches-only \
+  --max-windows 0 \
+  --device cuda:0 \
+  --overwrite-results > out.log 2>&1 &
+
+
+python patch_to_prototype.py \
+  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261001_040032/epoch_068.pth \
+  --dataset-dir /data/quantization/zaima/videosal_datasets/dhf1k/train \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v3 \
+  --min-group-size 4 \
+  --max-group-size 8 \
+  --top-k 10 \
+  --min-stage4-cosine 0.55 \
+  --max-rgb-mae 0.30 \
+  --min-rgb-structure-cosine 0.20 \
+  --salient-patches-only \
+  --saliency-source predicted \
+  --saliency-filter-mode gt_top_percent \
+  --saliency-top-percent 1.0 \
+  --max-windows 0 \
+  --device cuda:0 \
+  --overwrite-results
