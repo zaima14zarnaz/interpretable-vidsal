@@ -12,9 +12,9 @@ python prototype_to_patch.py \
 
 
 nohup python patch_to_prototype.py \
-  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261001_040032/epoch_068.pth \
+  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth \
   --dataset-dir /data/quantization/zaima/videosal_datasets/dhf1k/train \
-  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v3 \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v4 \
   --min-group-size 2 \
   --max-group-size 8 \
   --top-k 10 \
@@ -23,7 +23,7 @@ nohup python patch_to_prototype.py \
   --min-rgb-structure-cosine 0.50 \
   --no-salient-patches-only \
   --max-windows 0 \
-  --device cuda:0 \
+  --device cuda:1 \
   --overwrite-results > out.log 2>&1 &
 
 

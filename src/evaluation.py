@@ -37,8 +37,8 @@ CHECKPOINT_PATH = (
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/empty_prot_ckpt.pth"
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth"
     # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
-    # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
-    "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
+    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
+    # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
 )
 VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val" # "/data/quantization/zaima/videosal_datasets/ucfsports/testing"
 WINDOW_LEN = train_cfg.WINDOW_LEN

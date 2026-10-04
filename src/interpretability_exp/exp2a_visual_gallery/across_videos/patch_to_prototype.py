@@ -513,7 +513,7 @@ def load_target_references(model, dataset, adapter, settings, specs, window_len)
             resized = adapter.preprocess_rgb_video_like_backbone(rgb, resize_to)
             capture_time['offset'] = target_offset
             out = model(batch.to(model.input_device), return_details=True,
-                        return_concept_losses=False, use_reference_cache=False)
+                        return_concept_losses=False)
             grid = captured.pop('grid')
             stage = out['concept_out']['stage4']
             shape = stage['visual_metadata']['feature_shape']
@@ -726,8 +726,7 @@ def collect_candidates(model,loader,adapter,settings,references,sampling='one_mi
                 raise ValueError('Video names and RGB batch size differ.')
             resized = adapter.preprocess_rgb_video_like_backbone(rgb,resize_to)
             model_input = rgb_batch.to(model.input_device,non_blocking=True)
-            out = model(model_input,return_details=True,return_concept_losses=False,
-                        use_reference_cache=False)
+            out = model(model_input,return_details=True,return_concept_losses=False)
             if 'stage4' not in captured:
                 raise RuntimeError('Stage4 concept input capture did not run.')
             feature_grid = captured.pop('stage4')
@@ -1083,6 +1082,20 @@ def export_results(pool,groups,dataset,adapter,model,settings,root,manifest,*,ov
             structure_footers.append(
                 f'rgb-structure-cosine {float(metrics["rgb_structure_cosine"][0, local_index]):.3f}')
         (group_dir/'patch_metadata.json').write_text(json.dumps(metadata,indent=2),encoding='utf-8')
+        write_csv(group_dir/'patch_saliency.csv', [
+            {'group': group_number,
+             'patch': record['group_patch_index'],
+             'is_target_reference': record['is_target_reference'],
+             'video_id': record['video_id'],
+             'frame_filename': record['frame_filename'],
+             'absolute_frame_index': record['absolute_frame_index'],
+             'patch_index': record['patch_index'],
+             'grid_row': record['grid_row'],
+             'grid_column': record['grid_column'],
+             'saliency': record['patch_pred_saliency'],
+             'saliency_source': settings.saliency_source,
+             'is_salient_region': record['is_salient_region']}
+            for record in metadata])
         save_montage(crops,group_dir/'contact_sheet.png',footers=structure_footers)
         save_montage(frames,group_dir/'frame_gallery.png')
         mask = ~torch.eye(len(members),dtype=torch.bool)
@@ -1141,6 +1154,7 @@ def export_results(pool,groups,dataset,adapter,model,settings,root,manifest,*,ov
                         f'<img src="{name}/contact_sheet.png"/><br/><img src="{name}/frame_gallery.png"/>'
                         f'<p><a href="{name}/activation_heatmap.svg">Activation heatmap</a> · '
                         f'<a href="{name}/prototype_summary.csv">Prototype summary</a> · '
+                        f'<a href="{name}/patch_saliency.csv">Patch saliency</a> · '
                         f'<a href="{name}/patch_metadata.json">Frames, windows, and coordinates</a></p></section>')
     page = ('<!doctype html><meta charset="utf-8"><title>Stage-4 similar patch groups</title>'
             '<style>body{font:16px sans-serif;max-width:1200px;margin:32px auto;padding:0 20px}img{max-width:100%}section{margin:36px 0}</style>'
@@ -1243,7 +1257,7 @@ def main():
     )
     subset = Subset(dataset, indices)
     loader = DataLoader(subset,batch_size=args.batch_size,shuffle=False,num_workers=args.num_workers,
-                        collate_fn=adapter.video_saliency_collate_fn,pin_memory=device.type=='cuda')
+                        collate_fn=adapter.video_saliency_collate_fn,pin_memory=device.type=='cuda:1')
     pool,stats = collect_candidates(model,loader,adapter,settings,references,sampling,
                                     similarity_device=args.similarity_device)
     print(f'Comparing {len(pool["metadata"])} patches across {stats["retained_distinct_videos"]} videos '
