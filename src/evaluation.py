@@ -36,8 +36,9 @@ torch.backends.cudnn.allow_tf32 = True
 CHECKPOINT_PATH = (
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/empty_prot_ckpt.pth"
     # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/random_prot_ckpt.pth"
-    "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261001_040032/epoch_104.pth"
     # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
+    # "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
+    "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
 )
 VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val" # "/data/quantization/zaima/videosal_datasets/ucfsports/testing"
 WINDOW_LEN = train_cfg.WINDOW_LEN
@@ -110,7 +111,6 @@ def build_model(
         stage2_backbone_fusion_enabled=getattr(
             train_cfg, "STAGE2_BACKBONE_FUSION_ENABLED", True
         ),
-        reference_cache_dir=train_cfg.CACHED_FEATS,
     ).to_split_devices(backbone_device, head_device)
 
 

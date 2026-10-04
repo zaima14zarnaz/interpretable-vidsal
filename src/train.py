@@ -68,7 +68,6 @@ WEIGHT_DECAY = 1e-4
 NUM_WORKERS = 4
 SEED = 42
 OUTPUT_DIR = "training_outputs"
-CACHED_FEATS = "/data/quantization/zaima/videosal_datasets/dhf1k/cached_feats"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
 MAP_SAVE_INTERVAL = 1000
 VAL_EVERY_N_EPOCHS = 1
@@ -141,7 +140,7 @@ LOSS_LAMBDA = {
     "lambda_kl": 1.0,
     "lambda_cc": 1.0,
     "lambda_nss": 0.1,
-    "lambda_similarity": 0.005,
+    "lambda_similarity": 0.05,
 
     # Disable explicit background suppression for now
     "topk_percent": 0.000,
@@ -1376,7 +1375,6 @@ def main() -> None:
         prototype_application_position=PROTOTYPE_APPLICATION_POSITION,
         fine_unary_mask_strength=FINE_UNARY_MASK_STRENGTH,
         stage2_backbone_fusion_enabled=STAGE2_BACKBONE_FUSION_ENABLED,
-        reference_cache_dir=CACHED_FEATS,
     ).to_split_devices(backbone_device, head_device)
 
     checkpoint = None
