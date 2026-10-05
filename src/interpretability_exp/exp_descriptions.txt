@@ -1,0 +1,9 @@
+EXPERIMENT 1:
+Name: Prototype Dependency
+Purpose: Show that the model predictions are dependent on the prototypes. 
+
+EXPERIMENT 2:
+Name: Prototype Consistency
+Purpose: Show that the same set of prototypes are being activated for patches with same visuals and patches with same levels of saliency.
+Part a: Prototype overlap among patches with same visual features.
+Part b: Prototype overlap among patches with the same levels of saliency (predicted saliency).

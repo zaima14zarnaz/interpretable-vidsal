@@ -1,5 +1,5 @@
 {
-  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261002_204128/epoch_138.pth",
+  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth",
   "val_dir": "/data/quantization/zaima/videosal_datasets/dhf1k/val",
   "num_samples": 57173,
   "num_windows": 57173,
@@ -7,12 +7,12 @@
   "batch_size": 2,
   "backbone_device": "cuda:0",
   "head_device": "cuda:0",
-  "mean_loss": 0.5106590785664489,
+  "mean_loss": 0.6205984348257325,
   "metrics": {
-    "CC": 0.5401550733884465,
-    "SIM": 0.4122249348438966,
-    "NSS": 3.155406288566588
+    "CC": 0.5437211826026729,
+    "SIM": 0.4241425142162091,
+    "NSS": 3.1530962294185674
   },
-  "checkpoint_epoch": 138,
-  "evaluated_at": "2026-10-03T15:21:00"
+  "checkpoint_epoch": 97,
+  "evaluated_at": "2026-10-04T15:56:33"
 }

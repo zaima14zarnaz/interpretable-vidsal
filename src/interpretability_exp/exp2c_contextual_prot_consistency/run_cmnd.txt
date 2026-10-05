@@ -1,0 +1,6 @@
+python contextual_prototype_consistency.py \
+  --patch-data /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/patch_data.json \
+  --overlap-percent 15 \
+  --top-percent 10.0 \
+  --bottom-percent 70.0 \
+  --report-limit 0

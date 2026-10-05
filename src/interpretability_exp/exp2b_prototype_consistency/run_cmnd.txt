@@ -1,0 +1,21 @@
+nohup python prototype_consistency_sal.py \
+  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth \
+  --dataset-dir /data/quantization/zaima/videosal_datasets/dhf1k/val \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal \
+  --window-len 32 \
+  --stride 1 \
+  --batch-size 2 \
+  --device cuda:1 \
+  --overwrite-results > out.log 2>&1 &
+
+
+python overlap_analysis.py \
+  --patch-data /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/patch_data.json \
+  --saliency-bins 10 \
+  --prototype-presence-percent 30 \
+  --strength-field cosine_similarity \
+  --overwrite-results 
+
+python top_saliency_prototypes.py \
+  --patch-data /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/patch_data.json \
+  --top-percent 5.0 
