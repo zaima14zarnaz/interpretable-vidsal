@@ -141,9 +141,22 @@ def iter_patch_records(path, chunk_size=1 << 20):
 
 
 def require_int(value, label, minimum=0):
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    if isinstance(value, bool):
+        raise ValueError(f'{label} must be an integer >= {minimum}.')
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError(f'{label} must be an integer >= {minimum}.')
+        value = int(value)
+    if not isinstance(value, int) or value < minimum:
         raise ValueError(f'{label} must be an integer >= {minimum}.')
     return value
+
+
+def detail_prototype_index(item):
+    for key in ('prototype_index', 'prot_idx'):
+        if key in item:
+            return require_int(item[key], 'prototype index')
+    raise ValueError('Prototype detail must contain prototype_index or prot_idx.')
 
 
 def ranked_prototype_ids(record):
@@ -158,7 +171,7 @@ def ranked_prototype_ids(record):
             if len(set(ranks)) != len(ranks):
                 raise ValueError('Duplicate prototype ranks.')
             details = sorted(details, key=lambda item: item['rank'])
-        extracted = [require_int(item.get('prototype_index'), 'prototype index') for item in details]
+        extracted = [detail_prototype_index(item) for item in details]
         if ids is not None and ids != extracted:
             raise ValueError('Ranked prototype details and ordered index list disagree.')
         ids = extracted

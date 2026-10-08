@@ -1,6 +1,62 @@
-python contextual_prototype_consistency.py \
-  --patch-data /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/patch_data.json \
-  --overlap-percent 15 \
-  --top-percent 10.0 \
+Step 1:
+nohup python generate_candidate_pairs.py \
+  --patch-data /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/patch_data_corrected.json \
+  --overlap-percent 75 \
+  --top-percent 5.0 \
+  --top-k 8 \
   --bottom-percent 70.0 \
-  --report-limit 0
+  --min-frame-occurrence 100 \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency \
+  --patch-cache /data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/patch_archive.bin \
+  --pair-workers 4 \
+  --progress-every 50000 \
+  --report-limit 0 > out.log 2>&1 &
+
+# To find valid rules from the first 1000 vaid candidate pairs with opposing activation signature sources (low, high/low+high), 
+# in a single pass, run this file. 
+python find_rules.py \
+  --candidate-pairs "/data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/candidate_pairs_subset_2.csv" \
+  --activation-signatures "/data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/activation_signatures_subset_2.csv" \
+  --patch-data /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/patch_data_corrected.json \
+  --output-dir "/data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/" \
+  --max-pairs 1000 \
+  --discovery-fraction 0.5 \
+  --split-seed 42 \
+  --pair-selection-seed 7777 \
+  --subset-size 2 \
+  --consistency-threshold 0.95 
+
+# To find frames that include patches with both activation signatures 
+# from a single valid candidate pair, run this file. 
+Step 2:
+# Single pair -> .../contextual_prot_consistency/S000042_S000107/frame_data.csv
+python find_candidate_pair_frames.py \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency \
+  --patch-cache /data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/patch_archive.bin \
+  --patch-data /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/patch_data_corrected.json \
+  --patch-sign-a S000088 \
+  --patch-sign-b S000612 \
+  --activation-signatures /data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/activation_signatures.csv \
+  --report-limit 0 \
+  --workers 1
+
+# To check rule correspondence for the single rule whose frames were extracted
+# in step 2 and generate a contact sheet with 5 examples of this rule, run this file.
+Step 3:
+python find_patterns.py \
+  --input-dir /data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/S000098_S000160/ \
+  --discovery-fraction 0.5 \
+  --split-seed 42 \
+  --consistency-threshold 0.95 \
+  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth \
+  --src-dir /home/z/zaimazarnaz/research1/ExplainableSaliency/src \
+  --frame-index-mode index0 \
+  --frames-per-video 1 \
+  --contact-top-percent 3 \
+  --contact-video-start 90 \
+  --contact-min-cc 0.60 \
+  --contact-min-sim 0.40 \
+  --display-blur-sigma 2 \
+  --display-gamma 1 \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/contextual_prot_consistency/S000098_S000160/ 
+

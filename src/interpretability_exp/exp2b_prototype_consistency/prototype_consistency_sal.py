@@ -18,7 +18,7 @@ assignment_probability (hard-eval one-hot forward activations). Ties break on
 ascending prototype ID. actual_active_prototype_count still counts prototypes
 with forward_activation above the model validity epsilon. The model's top_k is
 unchanged.
-Each exported slot stores prot_idx, rank, and cosine_similarity rounded to
+Each exported slot stores prototype_index, rank, and cosine_similarity rounded to
 four decimal places. Assignment scores are used only for ranking and are not saved.
 """
 from __future__ import annotations
@@ -186,8 +186,8 @@ def top_active_prototypes(measurements, row):
     forward = measurements['forward_activation'][row]
     active_count = int((forward > VALIDITY_EPS).sum())
     cosine = measurements['cos_sim'][row]
-    return [{'prot_idx': prototype, 'rank': rank,
-             'cos_sim': export_cosine_similarity(cosine[prototype])}
+    return [{'prototype_index': prototype, 'rank': rank,
+             'cosine_similarity': export_cosine_similarity(cosine[prototype])}
             for rank, prototype in enumerate(selected, 1)], active_count
 
 
@@ -296,7 +296,7 @@ def collect_patch_data(model, loader, adapter, out):
                     'box_model_xyxy': bounds(patch, grid_hw, resize_to),
                     'box_native_xyxy': bounds(patch, grid_hw, rgb.shape[-2:]),
                     'patch_pred_saliency': score, 'patch_gt_saliency': float(ground_truth[b, patch]),
-                    'top_20_activated_prototype_indices': [item['prot_idx'] for item in prototypes],
+                    'top_20_activated_prototype_indices': [item['prototype_index'] for item in prototypes],
                     'top_20_activated_prototypes': prototypes,
                 }
                 if not first_record:
@@ -387,7 +387,7 @@ def main():
             'saliency_binning': 'assigned later by overlap_analysis.py from patch_pred_saliency',
             'top_k': TOP_K,
             'prototype_ranking': 'descending forward_activation when multiple are active; otherwise descending assignment_probability',
-            'prototype_tie_break': 'ascending prot_idx',
+            'prototype_tie_break': 'ascending prototype_index',
             'exported_top_k_rule': f'up to {TOP_K} ranked prototype slots per patch in top_20_activated_prototypes',
             'model_assignment_mode': str(getattr(concept, 'visual_assignment_mode', 'unknown')),
             'model_top_k_export_slots': int(getattr(concept, 'top_k', 0)),
