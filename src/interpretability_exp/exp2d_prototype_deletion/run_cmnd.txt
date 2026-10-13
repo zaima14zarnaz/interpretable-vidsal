@@ -1,0 +1,13 @@
+# To select the target prototypes for delection from activations from regions
+# with top 5% and bottom 70% saliency. 
+python select_target_prototypes.py \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/deletion_exp
+
+# To get metrics discrepencies after deleting the prototypes specific to the top 5% salient 
+# regions in the validation split (prototype IDs differ for each stage), run:
+python eval_prot_delection.py
+
+# To delete random/top assigned x% prototypes and get eval metrics results from baseline and 
+# prototype deleted checkpoint
+python eval_percentage_prototype_deletion.py --percentage 25 50 75 100 
+

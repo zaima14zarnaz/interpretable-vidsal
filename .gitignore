@@ -5,3 +5,4 @@ src/baselines/
 __pycache__/
 *.pyc
 .git/objects/
+src/interpretability_exp/exp2d_prototype_deletion/evaluation_outputs/
