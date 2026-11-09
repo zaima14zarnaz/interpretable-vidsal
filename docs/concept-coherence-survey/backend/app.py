@@ -154,7 +154,7 @@ def create_app(settings: Settings | None = None):
             if not patch.is_dir():
                 continue
             files = {}
-            for kind, filename in [('patch', 'patch.png'), ('frame', 'target_frame_boxed.jpg')]:
+            for kind, filename in [('patch', 'patch.png'), ('frame', 'target_frame_boxed.png')]:
                 p = (patch / filename).resolve()
                 if not p.is_relative_to(cfg.data_root) or not p.is_file():
                     raise RuntimeError(f'Missing or unsafe study image: {patch / filename}')
