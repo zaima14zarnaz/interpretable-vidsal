@@ -1,0 +1,1 @@
+python export_prot_matches.py --out-dir /data/quantization/zaima/videosal_datasets/dhf1k/prototype_consistency_sal/prot_matches/

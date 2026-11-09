@@ -142,7 +142,7 @@ def main() -> None:
     parser.add_argument(
         "--csv",
         type=Path,
-        default=script_dir / "training_outputs" / "val_metrics.csv",
+        default=script_dir / "training_outputs" / "val_metrics_hw2.csv",
         help="Path to val_metrics.csv (default: training_outputs/val_metrics.csv)",
     )
     parser.add_argument(

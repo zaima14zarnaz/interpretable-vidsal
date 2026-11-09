@@ -80,7 +80,7 @@ def build_model(
         num_concepts=512,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=16,
+        top_k=8,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -148,7 +148,7 @@ def build_val_loader() -> Tuple[DataLoader, DatasetLoader]:
     val_dataset = DatasetLoader(
         VAL_DATASET_DIR,
         window_len=WINDOW_LEN,
-        stride=1,
+        stride=32,
     )
 
     loader_kwargs = {
@@ -231,8 +231,8 @@ def evaluate_checkpoint(
             "  Val metrics   | "
             f"CC: {val_metrics['CC']:.4f} | "
             f"SIM: {val_metrics['SIM']:.4f} | "
-            f"AUC: {val_metrics['AUC']:.4f} | "
-            f"sAUC: {val_metrics['sAUC']:.4f} | "
+            # f"AUC: {val_metrics['AUC']:.4f} | "
+            # f"sAUC: {val_metrics['sAUC']:.4f} | "
             f"NSS: {val_metrics['NSS']:.4f}"
         )
     print(f"  Saved results: {results_path}")

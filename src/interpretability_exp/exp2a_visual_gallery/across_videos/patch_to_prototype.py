@@ -18,6 +18,13 @@ Top-k cosine matches are explicitly distinct from actual forward activations.
 
 Write results to the same directory that holds group_*/target.jpg seeds (or set
 --target-groups-dir separately). Re-run with --overwrite-results to refresh exports.
+With --activations-only (alias --reuse-groups), reuse a previous run in
+--output-dir: load candidate_features_and_scores.pt, candidate_metadata.json,
+and exported group membership (target_groups.json, falling back to each
+group's patch_metadata.json), skip model loading, dataset scanning, and group
+formation, and only regenerate per-group prototype_summary.csv,
+activation_heatmap.svg, and patch_prototype_activations.csv. --top-k and
+--prototype-high-cosine apply to the regenerated summaries.
 """
 from __future__ import annotations
 
@@ -490,15 +497,42 @@ def source_metadata(dataset, dataset_index, video_id, rgb_window, patch, grid_hw
             'is_salient_region': is_salient}
 
 
+def align_rgb_window_to_target_last(rgb, target_offset, window_len):
+    """Return a length-``window_len`` clip whose last frame is the target frame.
+
+    Stage-4 visual concepts are assigned only on the last feature time. Search
+    uses each loader window's last RGB frame, so target references must be
+    evaluated the same way. Early seed frames (offset < window_len-1) are
+    left-padded by repeating the earliest kept frame.
+    """
+    if rgb.ndim != 5 or rgb.shape[0] != 1:
+        raise ValueError(f'Expected rgb batch [1,T,C,H,W], got {tuple(rgb.shape)}.')
+    if not 0 <= int(target_offset) < int(rgb.shape[1]):
+        raise ValueError(f'target_offset {target_offset} outside rgb length {rgb.shape[1]}.')
+    kept = rgb[:, : int(target_offset) + 1]
+    pad_n = int(window_len) - int(kept.shape[1])
+    if pad_n < 0:
+        kept = kept[:, -int(window_len) :]
+        pad_n = 0
+    if pad_n:
+        pad = kept[:, :1].expand(1, pad_n, -1, -1, -1).clone()
+        aligned = torch.cat([pad, kept], dim=1)
+    else:
+        aligned = kept
+    if aligned.shape[1] != int(window_len):
+        raise RuntimeError(f'Aligned window has length {aligned.shape[1]}, expected {window_len}.')
+    return aligned
+
+
 @torch.inference_mode()
 def load_target_references(model, dataset, adapter, settings, specs, window_len):
     """Compute targets in full-frame temporal context, never from cropped JPGs."""
     concept = model.concept_creations['stage4']
     resize_to = tuple(adapter.resolve_backbone_spatial_hw(model))
     references, captured = [], {}
-    capture_time = {'offset': 0}
+    # Concepts use features[:, :, -1:] only; always capture that assignment time.
     def capture(module, args):
-        captured['grid'] = args[0][:, :, capture_time['offset']].detach().float().cpu()
+        captured['grid'] = args[0][:, :, -1].detach().float().cpu()
     hook = concept.register_forward_pre_hook(capture)
     try:
         model.eval()
@@ -510,13 +544,16 @@ def load_target_references(model, dataset, adapter, settings, specs, window_len)
             if (torch.is_tensor(padding_valid) and padding_valid.shape[1] > target_offset
                     and not bool(padding_valid[0, target_offset])):
                 raise ValueError(f'{spec["group_name"]}: target frame is padding.')
-            resized = adapter.preprocess_rgb_video_like_backbone(rgb, resize_to)
-            capture_time['offset'] = target_offset
-            out = model(batch.to(model.input_device), return_details=True,
+            # Keep the original loader offset for metadata/export, but evaluate
+            # concepts on a window whose last RGB frame is the seed frame.
+            aligned = align_rgb_window_to_target_last(rgb, target_offset, window_len)
+            resized = adapter.preprocess_rgb_video_like_backbone(aligned, resize_to)
+            out = model(aligned.to(model.input_device), return_details=True,
                         return_concept_losses=False)
             grid = captured.pop('grid')
             stage = out['concept_out']['stage4']
-            shape = stage['visual_metadata']['feature_shape']
+            meta = stage['visual_metadata']
+            shape = meta['feature_shape']
             grid_hw = (int(shape['H']), int(shape['W']))
             if (tuple(grid.shape[-2:]) != grid_hw or tuple(selected['feature_grid_hw']) != grid_hw
                     or tuple(selected['model_input_hw']) != resize_to):
@@ -527,7 +564,8 @@ def load_target_references(model, dataset, adapter, settings, specs, window_len)
                 raise ValueError(f'{spec["group_name"]}: selector crop coordinates disagree with its patch index.')
             if selected.get('native_image_hw') is not None and list(rgb.shape[-2:]) != selected['native_image_hw']:
                 raise ValueError(f'{spec["group_name"]}: source frame resolution changed.')
-            actual_crop = image_from_tensor(resized[0, target_offset]).crop(box)
+            # Aligned window ends on the seed frame.
+            actual_crop = image_from_tensor(resized[0, -1]).crop(box)
             with Image.open(spec['target_path']) as image:
                 selected_crop = image.convert('RGB')
                 if selected_crop.size != actual_crop.size:
@@ -537,16 +575,22 @@ def load_target_references(model, dataset, adapter, settings, specs, window_len)
             if mae > 0.05:
                 raise ValueError(f'{spec["group_name"]}: target.jpg does not match the source cell '
                                  f'(RGB MAE={mae:.4f}). Check source metadata/preprocessing.')
-            meta = stage['visual_metadata']
+            # visual_metadata time_idx is relative to concept T (=1 last-frame mode),
+            # not the RGB window offset.
+            concept_time = int(shape['T']) - 1
             row = ((meta['batch_idx'].cpu() == 0) &
-                   (meta['time_idx'].cpu() == target_offset) &
+                   (meta['time_idx'].cpu() == concept_time) &
                    (meta['patch_idx'].cpu() == patch)).nonzero(as_tuple=False).flatten()
             if row.numel() != 1:
-                raise ValueError('Target patch must have exactly one concept row at the selected time step.')
+                raise ValueError(
+                    f'{spec["group_name"]}: expected one concept row for patch {patch} at '
+                    f'concept time {concept_time}, got {int(row.numel())} '
+                    f'(rgb_offset={target_offset}, feature_shape={shape}).'
+                )
             row = int(row[0])
             y, x = divmod(patch, grid_hw[1])
             feature = grid[0, :, y, x]
-            descriptor, structure, std = crop_descriptor(resized[0, target_offset], patch, grid_hw,
+            descriptor, structure, std = crop_descriptor(resized[0, -1], patch, grid_hw,
                                                          settings.descriptor_size)
             if not torch.isfinite(feature).all() or feature.norm() < 1e-8 or structure.norm() < 1e-8:
                 raise ValueError(f'{spec["group_name"]}: target has invalid/zero features or flat RGB structure.')
@@ -561,7 +605,9 @@ def load_target_references(model, dataset, adapter, settings, specs, window_len)
                 raise ValueError('Resolved window does not align with the selected source frame index.')
             source.update({'is_target_reference': True, 'source_group_id': spec['group_id'],
                            'source_group_name': spec['group_name'], 'selected_target_path': spec['target_path'],
-                           'selector_metadata': selected, 'selected_jpeg_source_mae': mae})
+                           'selector_metadata': selected, 'selected_jpeg_source_mae': mae,
+                           'concept_assignment_rgb_offset': window_len - 1,
+                           'loader_rgb_offset': int(target_offset)})
             references.append({'feature': F.normalize(feature, dim=0), 'rgb': descriptor,
                                'structure': structure, **{k: v[row].clone() for k, v in measurements.items()},
                                'metadata': source})
@@ -1170,6 +1216,126 @@ def export_results(pool,groups,dataset,adapter,model,settings,root,manifest,*,ov
     return result
 
 
+def load_saved_candidate_pool(root):
+    """Load a previous run's pooled tensors + metadata from --output-dir."""
+    root = Path(root)
+    tensors_path = root / 'candidate_features_and_scores.pt'
+    metadata_path = root / 'candidate_metadata.json'
+    for path in (tensors_path, metadata_path):
+        if not path.is_file():
+            raise SystemExit(
+                f'--activations-only needs a previous run in {root}; missing {path.name}. '
+                'Run the normal scan first.'
+            )
+    tensors = torch.load(tensors_path, map_location='cpu', weights_only=False)
+    if not isinstance(tensors, dict):
+        raise SystemExit(f'{tensors_path} must contain a dict of pooled tensors.')
+    required = ('feature', 'rgb', 'structure', 'cosine', 'logits',
+                'probabilities', 'activation', 'valid_active')
+    missing = [name for name in required if name not in tensors]
+    if missing:
+        raise SystemExit(f'{tensors_path} is missing pooled tensors: {missing}.')
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    if not isinstance(metadata, list) or not metadata:
+        raise SystemExit(f'{metadata_path} must contain a nonempty list of candidate records.')
+    rows = int(tensors['cosine'].shape[0])
+    if rows != len(metadata) or any(int(tensors[name].shape[0]) != rows for name in required):
+        raise SystemExit('Saved candidate tensors and candidate_metadata.json rows disagree.')
+    return {**tensors, 'metadata': metadata}
+
+
+def load_exported_groups(root, metadata):
+    """Recover formed group membership (candidate indices) from a prior export."""
+    root = Path(root)
+    groups = []
+    target_file = root / 'target_groups.json'
+    if target_file.is_file():
+        reports = json.loads(target_file.read_text(encoding='utf-8'))
+        if isinstance(reports, list):
+            for report in reports:
+                if isinstance(report, dict) and report.get('group_formed') and report.get('members'):
+                    groups.append([int(index) for index in report['members']])
+    if not groups:
+        # Fallback: per-group patch_metadata.json lists candidate_index in patch order.
+        for group_dir in sorted(root.glob('group_*')):
+            patch_file = group_dir / 'patch_metadata.json'
+            if not group_dir.is_dir() or not patch_file.is_file():
+                continue
+            records = json.loads(patch_file.read_text(encoding='utf-8'))
+            members = [int(record['candidate_index']) for record in records
+                       if isinstance(record, dict) and 'candidate_index' in record]
+            if members:
+                groups.append(members)
+    if not groups:
+        raise SystemExit(
+            f'No formed groups found in {root} (target_groups.json / patch_metadata.json). '
+            'Run the normal scan first.'
+        )
+    used = set()
+    for members in groups:
+        if any(not 0 <= index < len(metadata) for index in members):
+            raise SystemExit('Exported group membership points outside the saved candidate pool.')
+        if len(set(members)) != len(members) or used.intersection(members):
+            raise SystemExit('Exported groups must be disjoint, without duplicate patches.')
+        used.update(members)
+    return groups
+
+
+def settings_for_reuse(args, root):
+    """Reuse a prior run's Settings; --top-k/--prototype-high-cosine still apply."""
+    stored = {}
+    summary_path = Path(root) / 'experiment_summary.json'
+    if summary_path.is_file():
+        summary = json.loads(summary_path.read_text(encoding='utf-8'))
+        if isinstance(summary, dict) and isinstance(summary.get('settings'), dict):
+            stored = summary['settings']
+    values = {key: stored[key] for key in asdict(Settings()) if key in stored}
+    settings = Settings(**values)
+    settings.top_k = args.top_k
+    settings.prototype_high_cosine = args.prototype_high_cosine
+    settings.validate()
+    return settings
+
+
+def export_activations_only(pool, groups, settings, root):
+    """Regenerate activation summaries for reused groups; no scan/grouping."""
+    root = Path(root)
+    all_rows = []
+    for members in groups:
+        reference = pool['metadata'][members[0]]
+        group_number = reference['source_group_id']
+        group_dir = root / reference['source_group_name']
+        group_dir.mkdir(parents=True, exist_ok=True)
+        summary, ranks = prototype_summary(pool, members, settings)
+        write_csv(group_dir / 'prototype_summary.csv', summary)
+        write_heatmap(pool, members, summary, group_dir / 'activation_heatmap.svg',
+                      min(settings.top_k, ranks.shape[1]))
+        for local_index, candidate_index in enumerate(members):
+            source = pool['metadata'][candidate_index]
+            prototype_order = torch.argsort(pool['cosine'][candidate_index], descending=True, stable=True)
+            for prototype in prototype_order.tolist():
+                all_rows.append({'group': group_number, 'patch': local_index,
+                                 'candidate_index': candidate_index,
+                                 'is_target_reference': local_index == 0,
+                                 'video_id': source['video_id'],
+                                 'dataset_index': source['dataset_index'],
+                                 'prototype_index': prototype,
+                                 'rank': int(ranks[local_index, prototype]),
+                                 'cosine_similarity': float(pool['cosine'][candidate_index, prototype]),
+                                 'scaled_logit': float(pool['logits'][candidate_index, prototype]),
+                                 'soft_assignment_probability': float(pool['probabilities'][candidate_index, prototype]),
+                                 'forward_activation': float(pool['activation'][candidate_index, prototype]),
+                                 'actual_valid_active': bool(pool['valid_active'][candidate_index, prototype]),
+                                 'in_top8': bool(ranks[local_index, prototype] <= min(8, ranks.shape[1])),
+                                 'in_top10': bool(ranks[local_index, prototype] <= min(10, ranks.shape[1])),
+                                 'in_requested_top_k': bool(ranks[local_index, prototype] <= min(settings.top_k, ranks.shape[1]))})
+        print(f"{reference['source_group_name']}: reused {len(members)} grouped patches; "
+              f"regenerated prototype_summary.csv and activation_heatmap.svg", flush=True)
+    write_csv(root / 'patch_prototype_activations.csv', all_rows)
+    print(f'Regenerated patch_prototype_activations.csv ({len(all_rows)} rows) in {root}', flush=True)
+    return {'groups': len(groups), 'activation_rows': len(all_rows)}
+
+
 def verify_checkpoint_parameters(model,checkpoint):
     ckpt = torch.load(checkpoint,map_location='cpu',weights_only=False)
     state = ckpt.get('model_state_dict',ckpt)
@@ -1182,8 +1348,15 @@ def verify_checkpoint_parameters(model,checkpoint):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--gallery-script',default=str(Path(__file__).with_name('prototype_to_patch.py')))
-    parser.add_argument('--checkpoint',required=True)
-    parser.add_argument('--dataset-dir',required=True)
+    parser.add_argument('--checkpoint',default=None,
+                        help='Required unless --activations-only is used.')
+    parser.add_argument('--dataset-dir',default=None,
+                        help='Required unless --activations-only is used.')
+    parser.add_argument('--activations-only','--reuse-groups',dest='activations_only',
+                        action='store_true',
+                        help='Reuse grouped patches from a previous run in --output-dir; '
+                             'skip model/dataset scan and group formation, and only '
+                             'regenerate prototype summaries, heatmaps, and activations CSV.')
     parser.add_argument('--target-groups-dir',default=None,
                         help='Read group_<integer>/target.jpg here (default: same as --output-dir).')
     parser.add_argument('--output-dir',default=TARGET_GROUPS_DIR,
@@ -1220,6 +1393,18 @@ def parse_args():
 def main():
     args = parse_args()
     root = Path(args.output_dir).expanduser().resolve()
+    if args.activations_only:
+        # Reuse mode: no checkpoint, model, dataset, scan, or group formation.
+        settings = settings_for_reuse(args, root)
+        pool = load_saved_candidate_pool(root)
+        groups = load_exported_groups(root, pool['metadata'])
+        settings.num_groups = len(groups)
+        result = export_activations_only(pool, groups, settings, root)
+        print(f"Activations-only: regenerated top-{settings.top_k} activations for "
+              f"{result['groups']} reused groups in {root}", flush=True)
+        return
+    if not args.checkpoint or not args.dataset_dir:
+        raise SystemExit('--checkpoint and --dataset-dir are required unless --activations-only is used.')
     target_root = Path(args.target_groups_dir).expanduser().resolve() if args.target_groups_dir else root
     specs = discover_target_groups(target_root)
     validate_output_workspace(root, [spec['group_name'] for spec in specs],

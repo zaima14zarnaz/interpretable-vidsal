@@ -4,6 +4,11 @@ Concept-guided FiLM-and-mask multi-scale spatiotemporal saliency decoder for the
 Stages are decoded coarse-to-fine (stage4 -> stage1). Each stage fuses full
 [B, C, T, H, W] feature and concept volumes through FiLM modulation.
 
+With shared activations enabled, all valid top-k IDs, vectors, and sparse soft
+weights from concept creation participate in priorities and prototype mixtures.
+Padded or intervention-deleted slots retain zero weight. Softmax operations use
+FP32 under AMP to retain small selected weights.
+
 Stages 3 and 4 score every valid concept-patch activation with unary scores and a
 low-rank factorized antisymmetric concept-patch comparison modulated by an
 explicit learned spatial-relevance kernel. Every directed pair interaction is
@@ -141,7 +146,10 @@ def _gather_active_visual_activations(
     visual_metadata: Dict[str, Any],
 ) -> torch.Tensor:
     """
-    Gather per-patch activations for each patch's active concept indices.
+    Gather the upstream sparse top-k weights at their actual selected indices.
+
+    Validity comes from concept creation or an inference intervention. Do not
+    threshold small weights or force invalid/deleted/padded slots to be valid.
 
     Returns:
         [B, T, K, H, W] activations aligned with concept_creation outputs.
@@ -155,7 +163,8 @@ def _gather_active_visual_activations(
             f"expected {expected} (=B*T*H*W), got {visual_activations.shape[0]}"
         )
 
-    activations = visual_activations.view(B, T, H, W, num_concepts)
+    # Match FP32 top-k assignments under AMP and avoid premature FP16 underflow.
+    activations = visual_activations.float().view(B, T, H, W, num_concepts)
     if active_indices.dim() == 5:
         gathered = torch.gather(activations, dim=-1, index=active_indices)
         gathered = gathered.permute(0, 1, 4, 2, 3).contiguous()
@@ -174,7 +183,7 @@ def _build_shared_visual_modality_from_concept_out(
     shared_patch_proj: nn.Linear,
     concept_proto_proj: nn.Linear,
 ) -> Dict[str, torch.Tensor]:
-    """Build decoder prioritization inputs from concept_creation activations."""
+    """Use every valid upstream top-k slot, with its original assignment weight."""
     required = (
         "visual_activations",
         "active_visual_prototype_indices",
@@ -647,8 +656,13 @@ def _masked_softmax(
     else:
         mask = validity_mask
     mask = mask.bool()
-    masked_logits = logits.masked_fill(~mask, _MASKED_LOGIT_FILL)
+    # Priorities can span many patch/prototype slots. Normalize in FP32 so AMP
+    # does not discard small selected weights. Invalid slots remain exactly zero.
+    masked_logits = logits.float().masked_fill(~mask, -torch.inf)
+    has_valid = mask.any(dim=dim, keepdim=True)
+    masked_logits = torch.where(has_valid, masked_logits, torch.zeros_like(masked_logits))
     weights = torch.softmax(masked_logits, dim=dim)
+    weights = weights.clamp_min(torch.finfo(weights.dtype).tiny)
     weights = weights * mask.to(dtype=weights.dtype)
     normalizer = weights.sum(dim=dim, keepdim=True)
     weights = weights / normalizer.clamp_min(_GROUPING_EPS)
@@ -936,7 +950,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         similarity_maps = similarity_hwk.permute(0, 1, 4, 2, 3).contiguous()
 
         valid_spatial = validity.permute(0, 1, 4, 2, 3)
-        assignment_logits = similarity_maps / self.assignment_temperature
+        assignment_logits = similarity_maps.float() / self.assignment_temperature
         assignment_logits = assignment_logits.masked_fill(
             ~valid_spatial, _MASKED_LOGIT_FILL
         )
@@ -958,13 +972,16 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
                 ],
                 dim=2,
             )
-            assignment = torch.softmax(assignment_logits, dim=2)
+            assignment = torch.softmax(assignment_logits.float(), dim=2)
+            assignment = assignment.clamp_min(torch.finfo(assignment.dtype).tiny)
+            assignment = assignment / assignment.sum(dim=2, keepdim=True)
             activations = assignment[:, :, :K]
         else:
             activations = torch.nan_to_num(
-                torch.softmax(assignment_logits, dim=2),
+                torch.softmax(assignment_logits.float(), dim=2),
                 nan=0.0,
             )
+            activations = activations.clamp_min(torch.finfo(activations.dtype).tiny)
         activations = activations * valid_spatial.to(dtype=activations.dtype)
         return {
             "similarity_maps": similarity_maps,
@@ -1692,6 +1709,8 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         concept_out: Optional[Dict[str, Any]],
     ) -> Dict[str, torch.Tensor]:
         if self.use_shared_concept_activations:
+            # concept_creation supplies the actual top-k IDs/vectors/weights.
+            # Reuse all valid slots; do not revert to argmax or reassign the bank.
             if concept_out is None:
                 raise ValueError(
                     "concept_out is required when use_shared_concept_activations=True"

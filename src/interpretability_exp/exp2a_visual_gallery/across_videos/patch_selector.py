@@ -15,6 +15,8 @@ or PyTorch is needed (Pillow only):
 
 Grid dimensions must match the stage4 concept input in patch_to_prototype.py.
 Each crop is a nominal spatial grid cell, not its full backbone receptive field.
+A contact_sheet.png of every patch in feature-grid order, with the patch index
+below each cell, is written beside the individual JPG exports.
 No features, prototype scores, or semantic labels are computed here.
 """
 from __future__ import annotations
@@ -27,13 +29,13 @@ import json
 from pathlib import Path
 import sys
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 
 # ------------------------- EDIT THESE SETTINGS -------------------------
-frame_dir = "/data/quantization/zaima/videosal_datasets/dhf1k/train/001/images/0001.png"  # A single frame FILE, despite the name.
+frame_dir = "/data/quantization/zaima/videosal_datasets/dhf1k/train/174/images/0001.png"  # A single frame FILE, despite the name.
 OUT_DIR_ROOT = "/data/quantization/zaima/videosal_datasets/dhf1k/patches/"
-CHECKPOINT = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261001_040032/epoch_068.pth"  # e.g. "/path/to/epoch_125.pth"; needed for automatic mode.
+CHECKPOINT = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"  # e.g. "/path/to/epoch_125.pth"; needed for automatic mode.
 GALLERY_SCRIPT = str(Path(__file__).with_name("prototype_to_patch.py"))
 WINDOW_LEN = 32
 
@@ -44,9 +46,10 @@ MODEL_INPUT_HW = None
 
 # Optional overrides. Default video name: parent directory, or parent of
 # an images/frames/rgb directory. Default frame number: filename without suffix.
-VIDEO_FNAME = "001"
+VIDEO_FNAME = "174"
 FRAME_NO = "0001"
 STAGE = 4
+CONTACT_SHEET_NAME = "contact_sheet.png"
 # ----------------------------------------------------------------------
 
 
@@ -59,6 +62,54 @@ def bounds(patch_index, grid_hw, image_hw):
     row, column = divmod(patch_index, gw)
     return (round(column * width / gw), round(row * height / gh),
             round((column + 1) * width / gw), round((row + 1) * height / gh))
+
+
+def _contact_sheet_font(size=14):
+    for name in ("DejaVuSans.ttf", "Arial.ttf", "LiberationSans-Regular.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def save_contact_sheet(crops, path, grid_hw, *, gap=6, label_h=22, margin=8):
+    """Arrange every patch in the feature-grid layout with its index below."""
+    gh, gw = grid_hw
+    if len(crops) != gh * gw:
+        raise ValueError(f"Expected {gh * gw} crops for a {gh}x{gw} grid, got {len(crops)}.")
+    cell_h = max(image.height for image in crops)
+    cell_w = max(image.width for image in crops)
+    tile_h = cell_h + label_h
+    canvas = Image.new(
+        "RGB",
+        (margin * 2 + gw * cell_w + (gw - 1) * gap,
+         margin * 2 + gh * tile_h + (gh - 1) * gap),
+        "white",
+    )
+    draw = ImageDraw.Draw(canvas)
+    font = _contact_sheet_font()
+    for patch_index, crop in enumerate(crops):
+        row, column = divmod(patch_index, gw)
+        x = margin + column * (cell_w + gap)
+        y = margin + row * (tile_h + gap)
+        tile = crop.copy()
+        tile.thumbnail((cell_w, cell_h), Image.Resampling.BILINEAR)
+        canvas.paste(tile, (x + (cell_w - tile.width) // 2, y + (cell_h - tile.height) // 2))
+        label = str(patch_index)
+        text_box = draw.textbbox((0, 0), label, font=font)
+        text_w = text_box[2] - text_box[0]
+        text_h = text_box[3] - text_box[1]
+        draw.text(
+            (x + (cell_w - text_w) // 2, y + cell_h + max(0, (label_h - text_h) // 2)),
+            label,
+            fill="black",
+            font=font,
+        )
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(path)
+    return path
 
 
 def load_adapter(path):
@@ -101,8 +152,10 @@ def model_frame_and_grid(image, args):
     hook = model.concept_creations["stage4"].register_forward_pre_hook(capture_grid)
     try:
         with torch.inference_mode():
+            # Current ExplainableVidSalModel.forward has no reference-cache
+            # option; every call computes features fresh.
             output = model(rgb.to(model.input_device), return_details=True,
-                           return_concept_losses=False, use_reference_cache=False)
+                           return_concept_losses=False)
             if "grid_hw" not in captured:
                 raise RuntimeError("Stage4 concept input hook did not run.")
             shape = output["concept_out"]["stage4"]["visual_metadata"]["feature_shape"]
@@ -170,12 +223,14 @@ def export_patches(image, model_image, grid_hw, input_hw, args, provenance):
         **provenance,
     }
     patches = []
+    crops = []
     gh, gw = grid_hw
     for patch_index in range(gh * gw):
         row, column = divmod(patch_index, gw)
         patch_id = f"{patch_index:04d}"
         model_box = bounds(patch_index, grid_hw, input_hw)
         native_box = bounds(patch_index, grid_hw, native_hw)
+        crop = model_image.crop(model_box)
         record = {
             **source,
             "patch_id": patch_id,
@@ -191,12 +246,20 @@ def export_patches(image, model_image, grid_hw, input_hw, args, provenance):
         # The later grouping script can read Image.open(path).getexif()[270].
         exif = Image.Exif()
         exif[270] = json.dumps(record, ensure_ascii=True, separators=(",", ":"))
-        model_image.crop(model_box).save(out_dir / record["patch_filename"],
-                                        quality=95, subsampling=0, exif=exif)
+        crop.save(out_dir / record["patch_filename"],
+                  quality=95, subsampling=0, exif=exif)
         patches.append(record)
+        crops.append(crop)
+    contact_sheet_path = out_dir / CONTACT_SHEET_NAME
+    save_contact_sheet(crops, contact_sheet_path, grid_hw)
     metadata_dir = out_dir / "metadata.json"  # Requested metadata FILE location.
-    metadata_dir.write_text(json.dumps({**source, "patch_count": len(patches),
-                                         "patches": patches}, indent=2) + "\n", encoding="utf-8")
+    metadata_dir.write_text(json.dumps({
+        **source,
+        "patch_count": len(patches),
+        "contact_sheet": CONTACT_SHEET_NAME,
+        "contact_sheet_path": str(contact_sheet_path),
+        "patches": patches,
+    }, indent=2) + "\n", encoding="utf-8")
     # CSV counterpart: array-valued columns are JSON strings.
     with (out_dir / "metadata.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(patches[0]))
@@ -205,6 +268,7 @@ def export_patches(image, model_image, grid_hw, input_hw, args, provenance):
             writer.writerow({k: json.dumps(v) if isinstance(v, (list, dict)) else v
                              for k, v in record.items()})
     print(f"Saved all {len(patches)} stage4 patches ({gh} x {gw}) to {out_dir}")
+    print(f"Contact sheet: {contact_sheet_path}")
     print(f"Metadata: {metadata_dir} and {out_dir / 'metadata.csv'}")
     print("Copy one selected JPG per group into group_{group_id}; keep the original exports.")
     return out_dir

@@ -1,8 +1,12 @@
 """
 Visual concept creation for explainable video saliency.
 
-``VisualConceptCreation`` assigns patch-level appearance concepts from
-normalized backbone features.
+``VisualConceptCreation`` assigns sparse soft weights to the actual top-k
+appearance prototypes matched to normalized last-frame backbone features.
+The selected weights drive both the concept representation and decoder.
+Existing straight_through/soft constructor settings alias topk_soft; explicit
+hard_eval retains the old one-hot forward for comparison. No learned parameter
+names or shapes are changed.
 
 Temporal transition/persistence concepts are disabled in the visual branch;
 legacy output keys are returned as None for compatibility with older training
@@ -10,6 +14,7 @@ and decoding code.
 """
 
 from typing import Any, Dict, Optional, Tuple, Union
+import math
 
 import torch
 import torch.nn as nn
@@ -42,7 +47,7 @@ class VisualConceptCreation(nn.Module):
         concept_dim: int = 256,
         num_concepts: int = 32,
         hidden_dim: int = 512,
-        top_k: int = 10,
+        top_k: int = 8,
         tau_alpha: float = 0.07,
         tau_concept: float = 0.1,
         diversity_margin: float = 0.2,
@@ -61,7 +66,7 @@ class VisualConceptCreation(nn.Module):
         concept_residual_weight: float = 0.1,
         num_visual_concepts: Optional[int] = None,
         visual_concept_residual_weight: float = 0.1,
-        visual_assignment_mode: str = "straight_through",
+        visual_assignment_mode: str = "topk_soft",
         visual_assignment_temperature: float = 0.07,
         visual_entropy_weight: float = 0.01,
         visual_usage_weight: float = 0.1,
@@ -76,6 +81,8 @@ class VisualConceptCreation(nn.Module):
         self.concept_dim = concept_dim
         self.num_concepts = num_concepts
         self.hidden_dim = hidden_dim
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1:
+            raise ValueError("top_k must be a positive integer.")
         self.top_k = top_k
         self.tau_alpha = tau_alpha
         self.tau_concept = tau_concept
@@ -85,7 +92,17 @@ class VisualConceptCreation(nn.Module):
             num_visual_concepts if num_visual_concepts is not None else num_concepts
         )
         self.visual_concept_residual_weight = visual_concept_residual_weight
-        self.visual_assignment_mode = visual_assignment_mode
+        # Existing model.py passes "straight_through" by default. Treat legacy
+        # names as aliases so the new forward works without editing model.py.
+        # Record the effective mode truthfully; hard_eval remains explicit top-1.
+        self.visual_assignment_mode_requested = visual_assignment_mode
+        self.visual_assignment_mode = (
+            "topk_soft" if visual_assignment_mode in ("straight_through", "soft")
+            else visual_assignment_mode
+        )
+        if (not math.isfinite(float(visual_assignment_temperature))
+                or visual_assignment_temperature <= 0):
+            raise ValueError("visual_assignment_temperature must be positive and finite.")
         self.visual_assignment_temperature = visual_assignment_temperature
         self.visual_entropy_weight = visual_entropy_weight
         self.visual_usage_weight = visual_usage_weight
@@ -208,9 +225,15 @@ class VisualConceptCreation(nn.Module):
         H: int,
         W: int,
         validity_eps: float = 1e-6,
+        selected_indices: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Select top-K active concept prototypes independently at each patch.
+        Gather selected prototypes independently at each patch.
+
+        For topk_soft, selected_indices comes from the original similarity
+        ranking: every selected slot is valid regardless of its small weight.
+        Legacy hard_eval uses activation thresholding. Bank-size padding stays
+        invalid in both modes.
 
         Returns:
             active_prototypes: [B, T, H, W, K, concept_dim]
@@ -227,10 +250,16 @@ class VisualConceptCreation(nn.Module):
         num_concepts = int(prototypes.shape[0])
         K = min(int(top_k), num_concepts)
 
-        topk_vals, topk_idx = activations.topk(K, dim=-1)
+        if selected_indices is None:
+            topk_vals, topk_idx = activations.topk(K, dim=-1)
+            validity = topk_vals > validity_eps
+        else:
+            if selected_indices.shape != (num_patches, K):
+                raise ValueError("selected_indices must have shape [B*T*H*W, min(top_k, bank_size)].")
+            topk_idx = selected_indices
+            validity = torch.ones_like(topk_idx, dtype=torch.bool)
         proto_n = F.normalize(prototypes, dim=-1)
         active = proto_n[topk_idx]
-        validity = topk_vals > validity_eps
 
         if K < top_k:
             pad_k = top_k - K
@@ -248,43 +277,57 @@ class VisualConceptCreation(nn.Module):
         self, raw_similarity: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
-        Differentiable visual concept assignment with optional straight-through hardening.
+        Sparse soft assignments over the actual top-k cosine matches.
 
-        Training with ``straight_through`` uses hard one-hot activations in the forward
-        pass while routing gradients through soft softmax probabilities.
+        Training and evaluation use the same weighted forward for topk_soft.
+        Gradients flow through the selected weights, embeddings, and vectors;
+        top-k index selection is discrete. "straight_through" and "soft" are
+        compatibility aliases for topk_soft. Explicit hard_eval retains top-1.
+        Full-bank probabilities are retained for the existing regularizers,
+        while visual_activations is the sparse evidence used by prediction.
         """
         if self.visual_assignment_mode not in (
+            "topk_soft",
             "straight_through",
             "soft",
             "hard_eval",
         ):
             raise ValueError(
                 "visual_assignment_mode must be one of "
-                "'straight_through', 'soft', or 'hard_eval', "
+                "'topk_soft', 'straight_through', 'soft', or 'hard_eval', "
                 f"got {self.visual_assignment_mode!r}"
             )
 
         temperature = max(float(self.visual_assignment_temperature), 1e-8)
-        visual_logits = raw_similarity / temperature
+        # Keep weights in FP32 under AMP: small selected weights must not become
+        # zeros through FP16 underflow before the decoder gathers them.
+        similarity = raw_similarity.float() if raw_similarity.dtype in (torch.float16, torch.bfloat16) else raw_similarity
+        visual_logits = similarity / temperature
         visual_probs = F.softmax(visual_logits, dim=-1)
         visual_indices = visual_logits.argmax(dim=-1)
-        hard_one_hot = F.one_hot(
-            visual_indices,
-            num_classes=self.num_visual_concepts,
-        ).to(dtype=visual_probs.dtype)
-
-        if self.visual_assignment_mode == "soft":
-            visual_activations = visual_probs
-        elif self.visual_assignment_mode == "hard_eval" or not self.training:
-            visual_activations = hard_one_hot
+        topk_indices = None
+        if self.visual_assignment_mode == "hard_eval":
+            visual_activations = F.one_hot(
+                visual_indices, num_classes=self.num_visual_concepts,
+            ).to(dtype=visual_probs.dtype)
         else:
-            visual_activations = hard_one_hot - visual_probs.detach() + visual_probs
+            k = min(self.top_k, int(visual_logits.shape[-1]))
+            topk_logits, topk_indices = visual_logits.topk(k, dim=-1)
+            weights = F.softmax(topk_logits, dim=-1)
+            # Only repair numerical underflow at the dtype's smallest normal
+            # positive value. This is not a support/validity threshold.
+            weights = weights.clamp_min(torch.finfo(weights.dtype).tiny)
+            weights = weights / weights.sum(dim=-1, keepdim=True)
+            visual_activations = torch.zeros_like(visual_logits).scatter(
+                dim=-1, index=topk_indices, src=weights,
+            )
 
         return {
             "visual_logits": visual_logits,
             "visual_probs": visual_probs,
             "visual_activations": visual_activations,
             "visual_indices": visual_indices,
+            "topk_indices": topk_indices,
         }
 
     def _visual_concept_loss(
@@ -550,6 +593,7 @@ class VisualConceptCreation(nn.Module):
             T=T,
             H=H,
             W=W,
+            selected_indices=assignment_out["topk_indices"],
         )
 
         # Optional diagnostic snapshots (no-op unless capture_diagnostic_trace).

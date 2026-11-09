@@ -1,0 +1,29 @@
+{
+  "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth",
+  "checkpoint_epoch": 97,
+  "train_dir": "/data/quantization/zaima/videosal_datasets/dhf1k/train",
+  "val_dir": "/data/quantization/zaima/videosal_datasets/dhf1k/val",
+  "window_len": 32,
+  "stride": 32,
+  "batch_size": 2,
+  "top_k": 8,
+  "num_prototypes": 512,
+  "device": "cuda:0",
+  "evaluated_at": "2026-11-03T21:04:47",
+  "splits": [
+    {
+      "split": "train",
+      "window_count": 10529,
+      "patch_count": 884436,
+      "assignment_slots": 7075488
+    },
+    {
+      "split": "val",
+      "window_count": 1834,
+      "patch_count": 154056,
+      "assignment_slots": 1232448
+    }
+  ],
+  "csv": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp2a_visual_gallery/prototype_activation_freq_outputs/prototype_activation_freq_20261103_210446.csv",
+  "plot": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp2a_visual_gallery/prototype_activation_freq_outputs/prototype_activation_freq_20261103_210446.png"
+}

@@ -11,3 +11,6 @@ python eval_prot_delection.py
 # prototype deleted checkpoint
 python eval_percentage_prototype_deletion.py --percentage 25 50 75 100 
 
+python eval_scale_bank_comparison.py \
+  --shared-checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth
+

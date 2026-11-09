@@ -6,3 +6,8 @@ __pycache__/
 *.pyc
 .git/objects/
 src/interpretability_exp/exp2d_prototype_deletion/evaluation_outputs/
+*.log
+
+src/interpretability_exp/exp3_prototype_deletion/evaluation_outputs/
+src/interpretability_exp/exp3_prototype_deletion/regional_prot_delete/evaluation_outputs/
+src/interpretability_exp/exp3_prototype_deletion/regional_prot_delete/sal_maps/

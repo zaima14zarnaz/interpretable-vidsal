@@ -102,6 +102,10 @@ STAGE2_BACKBONE_FUSION_ENABLED = True
 PRIORITY_MAP_LOSS_WEIGHT = 0.1
 PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
 
+# Epochs 1..N: zero dense/CC/SIM/NSS/KL, side-stage, and priority-map loss weights.
+# From epoch N+1 onward, restore the values configured in LOSS_LAMBDA below.
+INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 50
+
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
 
@@ -247,8 +251,30 @@ def _optimizer_step(
 
 
 def _effective_loss_lambda(epoch: Optional[int] = None) -> dict:
-    """Disable branch-specific auxiliary losses when a branch is ablated."""
+    """Apply ablation flags and the dense-loss warmup schedule for this epoch.
+
+    For epochs 1..INTERPRETABILITY_LOSS_WARMUP_EPOCHS, zero the main dense/ranking saliency
+    losses (dense, KL, CC, NSS, SIM), side-stage deep supervision, and priority
+    map losses. From epoch INTERPRETABILITY_LOSS_WARMUP_EPOCHS+1 onward, restore LOSS_LAMBDA.
+    When epoch is None, keep the configured LOSS_LAMBDA values (subject to
+    branch ablation flags below).
+    """
     loss_lambda = dict(LOSS_LAMBDA)
+    loss_lambda["side_stage_weights"] = dict(LOSS_LAMBDA["side_stage_weights"])
+    if epoch is not None and epoch <= INTERPRETABILITY_LOSS_WARMUP_EPOCHS:
+        for key in (
+            "lambda_dense",
+            "lambda_kl",
+            "lambda_cc",
+            "lambda_nss",
+            "lambda_similarity",
+            "priority_map_loss_weight",
+            "priority_loss_weight",
+        ):
+            loss_lambda[key] = 0.0
+        loss_lambda["side_stage_weights"] = {
+            stage: 0.0 for stage in loss_lambda["side_stage_weights"]
+        }
     if not TEMPORAL_CONCEPTS_ON:
         for key in ("lambda_align", "lambda_sparse", "lambda_div", "lambda_gate"):
             loss_lambda[key] = 0.0
@@ -1296,6 +1322,13 @@ def main() -> None:
         f"priority_map_loss_weight={PRIORITY_MAP_LOSS_WEIGHT} | "
         f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
     )
+    print(
+        "Dense-loss warmup | "
+        f"epochs 1-{INTERPRETABILITY_LOSS_WARMUP_EPOCHS}: "
+        "lambda_dense/kl/cc/nss/similarity, side_stage_weights, "
+        "priority_map_loss_weight, and priority_loss_weight = 0; "
+        f"from epoch {INTERPRETABILITY_LOSS_WARMUP_EPOCHS + 1}: restore LOSS_LAMBDA values"
+    )
 
     train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=1, random_train_sampling=True)
     val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=32, random_train_sampling=False)
@@ -1348,7 +1381,7 @@ def main() -> None:
         num_concepts=512,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=8,
+        top_k=1,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -1435,6 +1468,16 @@ def main() -> None:
 
     for epoch in range(1, num_epochs + 1):
         print(f"\nEpoch {epoch}/{num_epochs}")
+        if epoch == 1 and INTERPRETABILITY_LOSS_WARMUP_EPOCHS > 0:
+            print(
+                f"  Dense/CC/SIM/NSS/KL + side-stage + priority losses "
+                f"disabled for epochs 1-{INTERPRETABILITY_LOSS_WARMUP_EPOCHS}."
+            )
+        if epoch == INTERPRETABILITY_LOSS_WARMUP_EPOCHS + 1:
+            print(
+                "  Restoring dense/CC/SIM/NSS/KL + side-stage + priority "
+                "losses to LOSS_LAMBDA values."
+            )
 
         val_every_n_epochs = VAL_EVERY_N_EPOCHS
         if epoch >= 48:
