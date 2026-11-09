@@ -24,7 +24,7 @@ def setup(tmp_path):
             folder = root / f'group_{group}' / f'patch_{i}'
             folder.mkdir(parents=True)
             (folder / 'patch.png').write_bytes(PNG)
-            (folder / 'target_frame_boxed.jpg').write_bytes(PNG)
+            (folder / 'target_frame_boxed.png').write_bytes(PNG)
     cfg = Settings(root, root / 'annotations', {'one@example.edu', 'two@example.edu'},
                    ['https://researcher.github.io'], auth_mode='console')
     app = create_app(cfg)
@@ -209,3 +209,50 @@ def test_export_failure_retry_and_formula_protection(setup,capsys,monkeypatch):
     assert r.status_code==200 and r.json()['complete']
     rows=list(csv.DictReader(io.StringIO(client.get('/api/export/annotations.csv',headers=h).text)))
     assert rows[1]['description'].startswith("'=")
+
+
+def test_preview_mode_startup_sessions_and_exports(tmp_path):
+    root = tmp_path / 'gallery'
+    for group, count in [('7', 2), ('19', 3)]:
+        for i in range(count):
+            folder = root / f'group_{group}' / f'patch_{i}'
+            folder.mkdir(parents=True)
+            (folder / 'patch.png').write_bytes(PNG)
+            (folder / 'target_frame_boxed.png').write_bytes(PNG)
+    annotation_root = root / 'annotations'
+    # No ALLOWED_EMAILS or SMTP settings required for preview.
+    cfg = Settings(root, annotation_root, set(), [], auth_mode='preview')
+    app = create_app(cfg)
+    client = TestClient(app)
+    assert cfg.annotation_root == (annotation_root / 'preview').resolve()
+    public = client.get('/api/config').json()
+    assert public == {'auth_mode': 'preview', 'frame_context': True, 'protocol': 'coherence-v1'}
+    assert 'email' not in public and 'smtp' not in public and 'path' not in str(public).lower()
+    assert client.post('/api/auth/request-code', json={'email': 'one@example.edu'}).status_code == 404
+    first = client.post('/api/auth/preview-session')
+    second = client.post('/api/auth/preview-session')
+    assert first.status_code == 200 and second.status_code == 200
+    a, b = first.json(), second.json()
+    assert a['participant_id'] != b['participant_id']
+    assert a['token'] != b['token']
+    assert a['email'].startswith('preview+') and a['is_test_data'] is True
+    h1 = {'Authorization': 'Bearer ' + a['token']}
+    h2 = {'Authorization': 'Bearer ' + b['token']}
+    assert client.get('/api/study', headers=h1).json()['participant_id'] == a['participant_id']
+    assert client.get('/api/study', headers=h2).json()['completed_samples'] == 0
+    complete_sample(client, h1, 'S001')
+    state, _, _ = complete_sample(client, h1, 'S002')
+    assert state['complete'] and state['is_test_data'] is True
+    folder = cfg.annotation_root / f"participant_{a['participant_id']}"
+    assert folder.is_dir()
+    assert not (annotation_root / f"participant_{a['participant_id']}").exists()
+    metadata = json.loads((folder / 'metadata.json').read_text())
+    assert metadata['is_test_data'] is True
+    assert metadata['auth_mode'] == 'preview'
+    assert list(csv.DictReader((folder / 'annotations.csv').open()))
+
+
+def test_preview_endpoint_disabled_outside_preview(setup):
+    _, _, client = setup
+    assert client.get('/api/config').json()['auth_mode'] == 'console'
+    assert client.post('/api/auth/preview-session').status_code == 404

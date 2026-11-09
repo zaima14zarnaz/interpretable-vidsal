@@ -31,5 +31,5 @@ for g in range(1,4):
         frame.paste(patch,(x,y));fd.rectangle((x-2,y-2,x+130,y+130),outline='red',width=3)
         folder=args.destination/f'group_{g}'/f'patch_{p}'
         folder.mkdir(parents=True)
-        patch.save(folder/'patch.png');frame.save(folder/'target_frame_boxed.jpg')
+        patch.save(folder/'patch.png');frame.save(folder/'target_frame_boxed.png')
 print(f'Created 3 synthetic groups at {args.destination.resolve()}')

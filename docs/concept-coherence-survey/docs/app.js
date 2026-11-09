@@ -5,13 +5,27 @@
   let token = sessionStorage.getItem("survey-token") || "";
   let study, sample, imageURLs = [], busy = false, loading = false, submitting = false, changed = false, leaseLost = false;
   let saveTimer, heartbeat, lastClock = performance.now(), clockRunning = false, tickQueue = Promise.resolve();
-  let saveQueue = Promise.resolve(), viewerURL, viewerSequence = 0;
-  const screens = ["login", "instructions", "workspace", "complete"];
+  let saveQueue = Promise.resolve(), viewerURL, viewerSequence = 0, authMode = "smtp", bootstrapping = false;
+  const screens = ["connection-error", "login", "instructions", "workspace", "complete"];
   const announce = (text = "") => { $("notice").textContent = text; $("notice").hidden = !text; };
   function screen(id) { screens.forEach(x => $(x).hidden = x !== id); window.scrollTo({top: 0}); }
   function savedStatus(text) { $("save-status").textContent = text; }
-  function setAccount() { $("account-label").textContent = study?.email || ""; $("sign-out").hidden = !token; }
+  function setAccount() {
+    const preview = authMode === "preview";
+    $("account-label").textContent = preview ? (study ? "Preview participant" : "") : (study?.email || "");
+    $("sign-out").hidden = !token;
+    $("preview-banner").hidden = !preview;
+  }
   function localKey() { return `survey-draft:${study.participant_id}:${sample.sample_alias}`; }
+  function isConnectionFailure(error) {
+    return !error.status && /cannot reach the study server/i.test(error.message || "");
+  }
+  function showConnectionError(detail) {
+    stopClock();
+    $("connection-detail").textContent = detail || "Check that the backend is running and that this page points to the correct API address, then retry.";
+    announce();
+    screen("connection-error");
+  }
   async function api(path, options = {}) {
     let response;
     try {
@@ -32,7 +46,61 @@
     if (busy) return;
     busy = true; const buttons = [...form.querySelectorAll("button")]; buttons.forEach(b => b.disabled = true);
     announce();
-    return action().catch(e => announce(e.message)).finally(() => {busy = false; buttons.forEach(b => b.disabled = false);});
+    return action().catch(e => {
+      if (isConnectionFailure(e)) showConnectionError(e.message);
+      else announce(e.message);
+    }).finally(() => {busy = false; buttons.forEach(b => b.disabled = false);});
+  }
+  function configureLogin() {
+    const preview = authMode === "preview";
+    $("preview-login").hidden = !preview;
+    $("email-form").hidden = preview;
+    $("code-form").hidden = true;
+    $("email-privacy").hidden = preview;
+    $("login-title").textContent = preview ? "Preview the survey" : "Sign in to begin";
+    $("login-copy").textContent = preview
+      ? "No email or verification code is required. Each browser keeps its own anonymous preview progress."
+      : "Use the email address invited by the study organizer. Your progress is saved as you work.";
+    setAccount();
+  }
+  async function beginPreview(forceNew = false) {
+    if (busy) return;
+    busy = true;
+    [$("start-preview"), $("new-preview"), $("complete-new-preview")].forEach(b => { if (b) b.disabled = true; });
+    announce();
+    try {
+      if (forceNew) {
+        try { if (token) await post("/api/auth/logout"); } catch (_) { /* Always allow starting a fresh preview locally. */ }
+        token = "";
+        sessionStorage.removeItem("survey-token");
+        study = null;
+        sample = null;
+      } else if (token) {
+        try {
+          study = await api("/api/study");
+          setAccount();
+          prepare();
+          return;
+        } catch (e) {
+          if (isConnectionFailure(e)) throw e;
+          if (e.status !== 401) throw e;
+          token = "";
+          sessionStorage.removeItem("survey-token");
+        }
+      }
+      const result = await post("/api/auth/preview-session");
+      token = result.token;
+      sessionStorage.setItem("survey-token", token);
+      study = result;
+      setAccount();
+      prepare();
+    } catch (e) {
+      if (isConnectionFailure(e)) showConnectionError(e.message);
+      else announce(e.message);
+    } finally {
+      busy = false;
+      [$("start-preview"), $("new-preview"), $("complete-new-preview")].forEach(b => { if (b) b.disabled = false; });
+    }
   }
   $("email-form").onsubmit = e => {
     e.preventDefault();
@@ -49,8 +117,13 @@
       token = result.token; sessionStorage.setItem("survey-token", token); study = result; setAccount(); prepare();
     });
   };
+  $("start-preview").onclick = () => beginPreview(false);
+  $("new-preview").onclick = () => beginPreview(true);
+  $("complete-new-preview").onclick = () => beginPreview(true);
+  $("retry-connection").onclick = () => bootstrap();
   function prepare() {
     announce(); setAccount();
+    $("complete-new-preview").hidden = authMode !== "preview";
     if (study.complete) { finish(); return; }
     $("study-size").textContent = `This study contains ${study.total_samples} groups. You have submitted ${study.completed_samples}.`;
     $("context-instructions").textContent = study.frame_context ? "You may open a boxed full frame to locate a patch. The red rectangle marks its location. Full-frame views are recorded; judge the pattern inside the patch." : "This study uses patches only. Full-frame context is disabled.";
@@ -152,7 +225,10 @@
       $("reload-images").hidden = true; savedStatus("Loading patches…");
       await Promise.all(pending);
       $("submit-answer").disabled = false; beginClock(); savedStatus(changed ? "Recovered draft" : "Ready");
-    } catch (e) { announce(e.message); $("reload-images").hidden = false; }
+    } catch (e) {
+      if (isConnectionFailure(e)) showConnectionError(e.message);
+      else { announce(e.message); $("reload-images").hidden = false; }
+    }
     finally { loading = false; }
   }
   $("begin").onclick = () => loadGroup(); $("reload-images").onclick = () => loadGroup();
@@ -183,6 +259,7 @@
       sessionStorage.removeItem(localKey()); changed = false; study = result;
       if (study.complete) finish(); else await loadGroup();
     } catch (error) {
+      if (isConnectionFailure(error)) { showConnectionError(error.message); return; }
       if (error.status === 409) leaseLost = true;
       announce(error.message + " You can retry; duplicate submissions do not create duplicate records.");
       if (!leaseLost) beginClock();
@@ -214,7 +291,12 @@
     stopClock(); clearTimeout(saveTimer); screen("complete"); announce();
     $("done-count").textContent = study.completed_samples;
     $("done-time").textContent = `${Math.round(study.metadata.total_annotation_time_seconds / 60)} min`;
-    $("participant-ref").textContent = `Participant reference: ${study.participant_id}`; sample = null;
+    $("participant-ref").textContent = `Participant reference: ${study.participant_id}`;
+    $("complete-copy").textContent = study.is_test_data
+      ? "Your preview annotation set has been saved as test data."
+      : "Your full annotation set has been saved successfully.";
+    $("complete-new-preview").hidden = authMode !== "preview";
+    sample = null;
   }
   async function download(name) {
     try {
@@ -227,8 +309,9 @@
     clearTimeout(saveTimer);
     try { await saveDraft(); await queueTick(); } catch(_) { /* Unsynced edits remain in sessionStorage. */ }
     try { await post("/api/auth/logout"); } catch(_) { /* Always allow an expired/offline session to sign out locally. */ }
-    stopClock(); token = ""; study = null; sample = null; sessionStorage.removeItem("survey-token"); setAccount(); screen("login");
-    $("code-form").hidden = true; $("email-form").hidden = false; $("code").value = "";
+    stopClock(); token = ""; study = null; sample = null; sessionStorage.removeItem("survey-token"); setAccount();
+    configureLogin(); screen("login");
+    $("code").value = "";
   };
   function focusChange() {
     if (!sample || loading || submitting || leaseLost) return;
@@ -241,8 +324,41 @@
   window.addEventListener("pagehide", () => {if (clockRunning) queueTick(true).catch(() => {});});
   window.addEventListener("online", () => {if (changed) saveDraft().catch(e => announce(e.message));});
   window.addEventListener("beforeunload", e => { if(changed) {e.preventDefault(); e.returnValue = "";} });
-  if (token) api("/api/study").then(result => {study = result; prepare();}).catch(e => {
-    if (e.status === 401) {token = ""; sessionStorage.removeItem("survey-token");}
-    announce(e.message); setAccount();
-  });
+  async function bootstrap() {
+    if (bootstrapping) return;
+    bootstrapping = true;
+    announce();
+    try {
+      const config = await api("/api/config");
+      authMode = config.auth_mode || "smtp";
+      configureLogin();
+      if (token) {
+        try {
+          study = await api("/api/study");
+          prepare();
+          return;
+        } catch (e) {
+          if (isConnectionFailure(e)) { showConnectionError(e.message); return; }
+          if (e.status === 401) {
+            token = "";
+            sessionStorage.removeItem("survey-token");
+            study = null;
+          } else {
+            announce(e.message);
+          }
+        }
+      }
+      setAccount();
+      screen("login");
+    } catch (e) {
+      if (isConnectionFailure(e)) showConnectionError(e.message);
+      else {
+        announce(e.message);
+        screen("login");
+      }
+    } finally {
+      bootstrapping = false;
+    }
+  }
+  bootstrap();
 })();

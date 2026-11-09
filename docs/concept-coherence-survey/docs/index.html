@@ -10,14 +10,26 @@
 </head>
 <body>
   <header class="topbar"><a class="brand" href="./"><span class="brand-mark" aria-hidden="true">◫</span> Visual Pattern Study</a><div class="account"><span id="account-label"></span><button id="sign-out" class="text-button" hidden>Sign out</button></div></header>
+  <div id="preview-banner" class="preview-banner" hidden>Preview mode — test annotations</div>
   <main>
     <div id="notice" class="notice" role="alert" hidden></div>
+    <section id="connection-error" class="narrow connection-panel" hidden>
+      <span class="eyebrow">CONNECTION</span>
+      <h1>Cannot reach the study server.</h1>
+      <p class="lede" id="connection-detail">Check that the backend is running and that this page points to the correct API address, then retry.</p>
+      <button id="retry-connection" class="primary">Retry connection</button>
+    </section>
     <section id="login" class="login-layout">
       <div class="introduction"><span class="eyebrow">INDEPENDENT ANNOTATION</span><h1>What do these<br>patches share?</h1><p class="lede">Look for visual patterns across small image regions. Describe what you see, then tell us how clearly the patches belong together.</p><div class="intro-points"><div><span>01</span> Observe the patches</div><div><span>02</span> Describe a shared pattern</div><div><span>03</span> Rate clarity and identify outliers</div></div><p class="muted">There may be no clear shared pattern. That is a valid response.</p></div>
-      <div class="panel login-panel"><span class="eyebrow">PARTICIPANT ACCESS</span><h2>Sign in to begin</h2><p>Use the email address invited by the study organizer. Your progress is saved as you work.</p>
+      <div class="panel login-panel"><span class="eyebrow">PARTICIPANT ACCESS</span><h2 id="login-title">Sign in to begin</h2><p id="login-copy">Use the email address invited by the study organizer. Your progress is saved as you work.</p>
+        <div id="preview-login" hidden>
+          <button id="start-preview" class="primary wide" type="button">Start preview <span aria-hidden="true">→</span></button>
+          <button id="new-preview" class="text-button" type="button">Start a new preview</button>
+          <p class="privacy">Preview mode creates an anonymous test participant in this browser. Records are stored separately from the real study and marked as test data.</p>
+        </div>
         <form id="email-form"><label for="email">Email address</label><input id="email" type="email" autocomplete="email" placeholder="you@university.edu" required maxlength="254"><button class="primary wide" type="submit">Send sign-in code <span aria-hidden="true">→</span></button></form>
         <form id="code-form" hidden><label for="code">Six-digit verification code</label><input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="000000"><button class="primary wide" type="submit">Verify and continue</button><button id="change-email" class="text-button" type="button">Use a different email</button></form>
-        <p class="privacy">Your email identifies your annotation record. Responses, timing, and any full-frame views are stored by the study organizer.</p>
+        <p id="email-privacy" class="privacy">Your email identifies your annotation record. Responses, timing, and any full-frame views are stored by the study organizer.</p>
       </div>
     </section>
     <section id="instructions" class="narrow" hidden><span class="eyebrow">BEFORE YOU START</span><h1>A few things to know.</h1><div class="panel instructions-panel"><h2>Describe visible patterns</h2><p>A shared pattern might involve color, texture, lines, edges, shapes, objects, or their arrangement. Different objects can share the same visual pattern.</p><h2>Make your own judgment</h2><p>Groups may be strongly related, weakly related, or unrelated. Do not assume every patch belongs. Use “No clear shared pattern” when appropriate.</p><h2>Work independently</h2><p>Do not discuss responses with other participants. Base your answers on visible evidence; do not infer movement from a still image.</p><h2>One group at a time</h2><p id="study-size"></p><p>You will describe the pattern first, then rate clarity and identify outliers. Submitted groups are locked. Drafts are saved automatically; sign in with the same email to resume.</p><p id="context-instructions"></p><p class="muted">Timing starts when the first group opens. You may take breaks; active tab time and total elapsed time are recorded separately.</p><button id="begin" class="primary">Begin annotation <span aria-hidden="true">→</span></button></div></section>
@@ -33,7 +45,7 @@
         <div class="submit-area"><p class="muted">Submitting locks this group's answers.</p><button id="submit-answer" class="primary wide" type="submit">Submit and continue →</button></div></div>
       </form></section></div>
     </section>
-    <section id="complete" class="narrow completion" hidden><div class="completion-mark" aria-hidden="true">✓</div><span class="eyebrow">ANNOTATION COMPLETE</span><h1>Thank you for your observations.</h1><p>Your full annotation set has been saved successfully.</p><div class="completion-stats"><div><strong id="done-count"></strong><span>groups completed</span></div><div><strong id="done-time"></strong><span>active annotation time</span></div></div><p class="muted" id="participant-ref"></p><div class="download-buttons"><button id="download-csv" class="secondary">Download my CSV</button><button id="download-json" class="secondary">Download my metadata</button></div></section>
+    <section id="complete" class="narrow completion" hidden><div class="completion-mark" aria-hidden="true">✓</div><span class="eyebrow">ANNOTATION COMPLETE</span><h1>Thank you for your observations.</h1><p id="complete-copy">Your full annotation set has been saved successfully.</p><div class="completion-stats"><div><strong id="done-count"></strong><span>groups completed</span></div><div><strong id="done-time"></strong><span>active annotation time</span></div></div><p class="muted" id="participant-ref"></p><div class="download-buttons"><button id="download-csv" class="secondary">Download my CSV</button><button id="download-json" class="secondary">Download my metadata</button></div><button id="complete-new-preview" class="text-button" type="button" hidden>Start a new preview</button></section>
   </main>
   <footer>Visual pattern annotation · Work independently · Your responses are saved privately</footer>
   <dialog id="image-dialog"><div class="dialog-heading"><h2 id="image-title">Patch</h2><button id="close-dialog" class="secondary" aria-label="Close image viewer">Close ×</button></div><div id="viewer-status" role="status"></div><img id="viewer-image" alt=""><p id="viewer-caption" class="muted"></p></dialog>

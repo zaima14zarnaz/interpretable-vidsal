@@ -123,12 +123,16 @@ def create_app(settings: Settings | None = None):
     cfg.annotation_root = cfg.annotation_root.resolve()
     if not cfg.data_root.is_dir():
         raise RuntimeError(f'Dataset directory does not exist: {cfg.data_root}')
-    if not cfg.allowed_emails:
-        raise RuntimeError('Set ALLOWED_EMAILS to the invited participant emails before starting.')
-    if cfg.auth_mode not in {'smtp', 'console'}:
-        raise RuntimeError('AUTH_MODE must be smtp or console.')
-    if cfg.auth_mode == 'smtp' and (not cfg.smtp_host or not cfg.smtp_from):
-        raise RuntimeError('Configure SMTP_HOST and SMTP_FROM, or use console mode for local testing.')
+    if cfg.auth_mode not in {'smtp', 'console', 'preview'}:
+        raise RuntimeError('AUTH_MODE must be smtp, console, or preview.')
+    if cfg.auth_mode == 'preview':
+        # Isolate every preview record under ANNOTATION_ROOT/preview/ so real study state is untouched.
+        cfg.annotation_root = (cfg.annotation_root / 'preview').resolve()
+    else:
+        if not cfg.allowed_emails:
+            raise RuntimeError('Set ALLOWED_EMAILS to the invited participant emails before starting.')
+        if cfg.auth_mode == 'smtp' and (not cfg.smtp_host or not cfg.smtp_from):
+            raise RuntimeError('Configure SMTP_HOST and SMTP_FROM, or use console mode for local testing.')
     if cfg.smtp_security not in {'starttls', 'ssl'}:
         raise RuntimeError('SMTP_SECURITY must be starttls or ssl.')
     cfg.annotation_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -240,9 +244,28 @@ def create_app(settings: Settings | None = None):
             row = c.execute('SELECT p.* FROM sessions s JOIN participants p ON p.id=s.participant '
                             'WHERE s.hash=? AND s.expires>?',
                             (digest(authorization[7:]), time.time())).fetchone()
-        if not row or row['email'] not in cfg.allowed_emails:
+        if not row:
+            raise HTTPException(401, 'Your session has expired. Sign in again to resume.')
+        if cfg.auth_mode == 'preview':
+            if not str(row['email']).startswith('preview+') or not str(row['email']).endswith('@preview.local'):
+                raise HTTPException(401, 'Your session has expired. Sign in again to resume.')
+        elif row['email'] not in cfg.allowed_emails:
             raise HTTPException(401, 'Your session has expired. Sign in again to resume.')
         return dict(row)
+
+    def issue_session(c, participant_row, now):
+        token = secrets.token_urlsafe(32)
+        c.execute('DELETE FROM sessions WHERE expires<?', (now,))
+        c.execute('INSERT INTO sessions VALUES (?,?,?)', (digest(token), participant_row['id'], now + 86400))
+        return {'token': token, **study_state(c, dict(participant_row))}
+
+    def create_assignment():
+        assignment = [{'group': g['id'], 'patches': [x['id'] for x in g['patches']]} for g in manifest]
+        rng = random.SystemRandom()
+        rng.shuffle(assignment)
+        for item in assignment:
+            rng.shuffle(item['patches'])
+        return assignment
 
     def get_participant(c, pid):
         return dict(c.execute('SELECT * FROM participants WHERE id=?', (pid,)).fetchone())
@@ -322,7 +345,8 @@ def create_app(settings: Settings | None = None):
                               'Last unsent interval may be lost on abrupt browser termination.',
             elapsed_time_definition='Wall time from first sample start to final submission, including breaks.',
             frame_context_enabled=cfg.frame_context, randomized_assignment=assignment,
-            annotations_csv_sha256=hashlib.sha256(csv_text.encode()).hexdigest())
+            annotations_csv_sha256=hashlib.sha256(csv_text.encode()).hexdigest(),
+            auth_mode=cfg.auth_mode, is_test_data=(cfg.auth_mode == 'preview'))
         atomic_write(folder / 'annotations.csv', csv_text)
         # Metadata last: its CSV checksum can detect a partial export after a crash.
         atomic_write(folder / 'metadata.json', json.dumps(metadata, indent=2))
@@ -331,7 +355,8 @@ def create_app(settings: Settings | None = None):
     def study_state(c, p):
         count = c.execute('SELECT COUNT(*) FROM samples WHERE participant=? AND answer IS NOT NULL', (p['id'],)).fetchone()[0]
         result = dict(participant_id=p['id'], email=p['email'], total_samples=len(manifest),
-                      completed_samples=count, complete=count == len(manifest), frame_context=cfg.frame_context)
+                      completed_samples=count, complete=count == len(manifest), frame_context=cfg.frame_context,
+                      auth_mode=cfg.auth_mode, is_test_data=(cfg.auth_mode == 'preview'))
         if result['complete']:
             result['metadata'] = export(c, p)
         return result
@@ -340,8 +365,28 @@ def create_app(settings: Settings | None = None):
     def health():
         return {'ok': True}
 
+    @app.get('/api/config')
+    def public_config():
+        """Minimal public settings for the frontend. Never includes emails, secrets, or paths."""
+        return {'auth_mode': cfg.auth_mode, 'frame_context': cfg.frame_context, 'protocol': PROTOCOL}
+
+    @app.post('/api/auth/preview-session')
+    def preview_session():
+        if cfg.auth_mode != 'preview':
+            raise HTTPException(404, 'Preview sign-in is unavailable in this deployment.')
+        now = time.time()
+        with db() as c:
+            pid = secrets.token_hex(12)
+            email = f'preview+{pid}@preview.local'
+            c.execute('INSERT INTO participants VALUES (?,?,?,?,?,?)',
+                      (pid, email, now, None, None, json.dumps(create_assignment())))
+            p = c.execute('SELECT * FROM participants WHERE id=?', (pid,)).fetchone()
+            return issue_session(c, p, now)
+
     @app.post('/api/auth/request-code')
     def request_code(body: EmailInput, request: Request):
+        if cfg.auth_mode == 'preview':
+            raise HTTPException(404, 'Email sign-in is unavailable in preview mode.')
         email = body.email
         now = time.time()
         code = f'{secrets.randbelow(1000000):06d}'
@@ -389,6 +434,8 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/api/auth/verify')
     def verify(body: VerifyInput):
+        if cfg.auth_mode == 'preview':
+            raise HTTPException(404, 'Email sign-in is unavailable in preview mode.')
         now = time.time()
         failure = False
         with db() as c:
@@ -403,19 +450,11 @@ def create_app(settings: Settings | None = None):
                 c.execute('DELETE FROM codes WHERE email=?', (body.email,))
                 p = c.execute('SELECT * FROM participants WHERE email=?', (body.email,)).fetchone()
                 if not p:
-                    assignment = [{'group': g['id'], 'patches': [x['id'] for x in g['patches']]} for g in manifest]
-                    rng = random.SystemRandom()
-                    rng.shuffle(assignment)
-                    for item in assignment:
-                        rng.shuffle(item['patches'])
                     pid = secrets.token_hex(12)
                     c.execute('INSERT INTO participants VALUES (?,?,?,?,?,?)',
-                              (pid, body.email, now, None, None, json.dumps(assignment)))
+                              (pid, body.email, now, None, None, json.dumps(create_assignment())))
                     p = c.execute('SELECT * FROM participants WHERE id=?', (pid,)).fetchone()
-                token = secrets.token_urlsafe(32)
-                c.execute('DELETE FROM sessions WHERE expires<?', (now,))
-                c.execute('INSERT INTO sessions VALUES (?,?,?)', (digest(token), p['id'], now+86400))
-                result = {'token': token, **study_state(c, dict(p))}
+                result = issue_session(c, p, now)
         # Commit failed-attempt counters before returning an authentication error.
         if failure:
             raise HTTPException(401, 'Invalid or expired code. Request a new code if needed.')
@@ -522,7 +561,7 @@ def create_app(settings: Settings | None = None):
         path = (cfg.data_root / patch[kind]['path']).resolve()
         if not path.is_relative_to(cfg.data_root):
             raise HTTPException(404, 'Image not found.')
-        return FileResponse(path, media_type='image/png' if kind == 'patch' else 'image/jpeg')
+        return FileResponse(path, media_type='image/png')
 
     @app.get('/api/export/{filename}')
     def download(filename: Literal['annotations.csv', 'metadata.json'], p=Depends(identity)):

@@ -30,10 +30,10 @@ Defaults are already set to your paths:
     group_0/
         patch_0/
             patch.png
-            target_frame_boxed.jpg
+            target_frame_boxed.png
         patch_1/
             patch.png
-            target_frame_boxed.jpg
+            target_frame_boxed.png
     group_1/
         ...
     annotations/
@@ -79,7 +79,24 @@ The server process needs read permission for source images and write permission 
 
 ## 2. Test the real dataset locally
 
-If you want to test before configuring SMTP, temporarily set `AUTH_MODE=console`. Codes then print in the server terminal instead of being emailed. **Use console mode only for local testing.** Restore `AUTH_MODE=smtp` before inviting participants.
+### Preview mode (no email / SMTP)
+
+Use this to walk through the full survey UI without invited emails. Preview participants, sessions, drafts, and exports are isolated under `ANNOTATION_ROOT/preview/` and marked `is_test_data`. Real study records are never modified.
+
+```bash
+cd docs/concept-coherence-survey   # if needed
+AUTH_MODE=preview \
+DATA_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5 \
+ANNOTATION_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5/annotations \
+ALLOWED_ORIGINS=https://zaima14zarnaz.github.io \
+python -m uvicorn backend.app:create_app --factory --host 127.0.0.2 --port 8000
+```
+
+Open the backend URL (or your GitHub Pages frontend with `apiBase` pointing at the HTTPS tunnel) and click **Start preview**. Use **Start a new preview** to create a separate anonymous participant without deleting previous preview exports.
+
+### Console mode (email codes in the terminal)
+
+If you want to test before configuring SMTP, temporarily set `AUTH_MODE=console`. Codes then print in the server terminal instead of being emailed. **Use console mode only for local testing.** Restore `AUTH_MODE=smtp` before inviting participants. `ALLOWED_EMAILS` is still required in console mode.
 
 ```bash
 python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000
