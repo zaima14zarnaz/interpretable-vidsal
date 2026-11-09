@@ -325,3 +325,5 @@ group_22: 37 matching candidates; 38 members including target; formed=True
 group_23: 1 matching candidates; 2 members including target; formed=False
 group_24: 0 matching candidates; 1 members including target; formed=False
 group_25: 0 matching candidates; 1 members including target; formed=False
+Found 19/26 target groups. Open /data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v4/index.html
+Thresholds were not relaxed. See target_groups.json; try --no-salient-patches-only or relax --min-stage4-cosine / RGB gates to broaden the search.
