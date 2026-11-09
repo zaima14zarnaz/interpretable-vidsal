@@ -73,20 +73,21 @@
     $("preview-login").hidden = !preview;
     $("email-form").hidden = preview;
     $("code-form").hidden = true;
-    $("email-privacy").hidden = preview;
+    $("email-privacy").hidden = false;
+    $("entry-steps").hidden = false;
     $("email").required = !preview;
     $("email-submit").innerHTML = emailOnly
       ? 'Enter survey <span aria-hidden="true">→</span>'
       : 'Send sign-in code <span aria-hidden="true">→</span>';
     $("login-title").textContent = preview ? "Preview the survey" : (emailOnly ? "Enter the survey" : "Sign in to begin");
     $("login-copy").textContent = preview
-      ? "No email or verification code is required. Each browser keeps its own anonymous preview progress."
+      ? "Anonymous test annotations for checking the full survey flow."
+      : "Describe shared visual patterns across image patches.";
+    $("email-privacy").textContent = preview
+      ? "Preview records are stored separately and marked as test data. Start a new preview to repeat without deleting prior tests."
       : emailOnly
-        ? "Enter your email to begin. Returning with the same address resumes your saved progress."
-        : "Use the email address invited by the study organizer. A verification code will be sent.";
-    $("email-privacy").textContent = emailOnly
-      ? "Your email identifies your annotation record. No verification code is required. Responses, timing, and any full-frame views are stored by the study organizer."
-      : "Your email identifies your annotation record. Responses, timing, and any full-frame views are stored by the study organizer.";
+        ? "Use the same email to resume saved progress. Responses, timing, and any full-frame views are stored by the study organizer."
+        : "An invited email receives a verification code. Responses, timing, and any full-frame views are stored by the study organizer.";
     setAccount();
   }
   async function beginPreview(forceNew = false) {

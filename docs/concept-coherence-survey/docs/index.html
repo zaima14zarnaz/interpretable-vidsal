@@ -19,17 +19,33 @@
       <p class="lede" id="connection-detail">Check that the backend is running and that this page points to the correct API address, then retry.</p>
       <button id="retry-connection" class="primary">Retry connection</button>
     </section>
-    <section id="login" class="login-layout">
-      <div class="introduction"><span class="eyebrow">INDEPENDENT ANNOTATION</span><h1>What do these<br>patches share?</h1><p class="lede">Look for visual patterns across small image regions. Describe what you see, then tell us how clearly the patches belong together.</p><div class="intro-points"><div><span>01</span> Observe the patches</div><div><span>02</span> Describe a shared pattern</div><div><span>03</span> Rate clarity and identify outliers</div></div><p class="muted">There may be no clear shared pattern. That is a valid response.</p></div>
-      <div class="panel login-panel"><span class="eyebrow">PARTICIPANT ACCESS</span><h2 id="login-title">Enter the survey</h2><p id="login-copy">Enter your email to begin. Your progress is saved under that address so you can return later.</p>
+    <section id="login" class="entry-screen">
+      <div class="entry-card">
+        <span class="eyebrow">VISUAL PATTERN STUDY</span>
+        <h1 id="login-title" class="entry-heading">Enter the survey</h1>
+        <p id="login-copy" class="entry-lede">Describe shared visual patterns across image patches.</p>
+        <ol class="entry-steps" id="entry-steps">
+          <li>Inspect patches</li>
+          <li>Describe the pattern</li>
+          <li>Rate consistency</li>
+        </ol>
         <div id="preview-login" hidden>
-          <button id="start-preview" class="primary wide" type="button">Start preview <span aria-hidden="true">→</span></button>
+          <button id="start-preview" class="primary wide entry-action" type="button">Start preview <span aria-hidden="true">→</span></button>
           <button id="new-preview" class="text-button" type="button">Start a new preview</button>
           <p class="privacy">Preview mode creates an anonymous test participant in this browser. Records are stored separately from the real study and marked as test data.</p>
         </div>
-        <form id="email-form"><label for="email">Email address</label><input id="email" type="text" autocomplete="email" placeholder="you@university.edu" required maxlength="254"><button id="email-submit" class="primary wide" type="submit">Enter survey <span aria-hidden="true">→</span></button></form>
-        <form id="code-form" hidden><label for="code">Six-digit verification code</label><input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="000000"><button class="primary wide" type="submit">Verify and continue</button><button id="change-email" class="text-button" type="button">Use a different email</button></form>
-        <p id="email-privacy" class="privacy">Your email identifies your annotation record. No verification code is required. Responses, timing, and any full-frame views are stored by the study organizer.</p>
+        <form id="email-form" class="entry-form">
+          <label class="form-label" for="email">Email address</label>
+          <input id="email" class="form-input" type="text" autocomplete="email" placeholder="you@university.edu" required maxlength="254">
+          <button id="email-submit" class="primary wide entry-action" type="submit">Enter survey <span aria-hidden="true">→</span></button>
+        </form>
+        <form id="code-form" class="entry-form" hidden>
+          <label class="form-label" for="code">Six-digit verification code</label>
+          <input id="code" class="form-input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="000000">
+          <button class="primary wide entry-action" type="submit">Verify and continue</button>
+          <button id="change-email" class="text-button" type="button">Use a different email</button>
+        </form>
+        <p id="email-privacy" class="entry-helper">Use the same email to resume saved progress. Responses, timing, and any full-frame views are stored by the study organizer.</p>
       </div>
     </section>
     <section id="instructions" class="narrow" hidden><span class="eyebrow">BEFORE YOU START</span><h1>A few things to know.</h1><div class="panel instructions-panel"><h2>Describe visible patterns</h2><p>A shared pattern might involve color, texture, lines, edges, shapes, objects, or their arrangement. Different objects can share the same visual pattern.</p><h2>Make your own judgment</h2><p>Groups may be strongly related, weakly related, or unrelated. Do not assume every patch belongs. Use “No clear shared pattern” when appropriate.</p><h2>Work independently</h2><p>Do not discuss responses with other participants. Base your answers on visible evidence; do not infer movement from a still image.</p><h2>One group at a time</h2><p id="study-size"></p><p>You will describe the pattern first, then rate clarity and identify outliers. Submitted groups are locked. Drafts are saved automatically; sign in with the same email to resume.</p><p id="context-instructions"></p><p class="muted">Timing starts when the first group opens. You may take breaks; active tab time and total elapsed time are recorded separately.</p><button id="begin" class="primary">Begin annotation <span aria-hidden="true">→</span></button></div></section>
