@@ -5,11 +5,27 @@
   let token = sessionStorage.getItem("survey-token") || "";
   let study, sample, imageURLs = [], busy = false, loading = false, submitting = false, changed = false, leaseLost = false;
   let saveTimer, heartbeat, lastClock = performance.now(), clockRunning = false, tickQueue = Promise.resolve();
-  let saveQueue = Promise.resolve(), viewerURL, viewerSequence = 0, authMode = "smtp", bootstrapping = false;
+  let saveQueue = Promise.resolve(), viewerURL, viewerSequence = 0, authMode = "email_only", bootstrapping = false;
   const screens = ["connection-error", "login", "instructions", "workspace", "complete"];
+  const MODE_KEY = "survey-auth-mode";
   const announce = (text = "") => { $("notice").textContent = text; $("notice").hidden = !text; };
   function screen(id) { screens.forEach(x => $(x).hidden = x !== id); window.scrollTo({top: 0}); }
   function savedStatus(text) { $("save-status").textContent = text; }
+  function clearLocalSession() {
+    token = ""; study = null; sample = null;
+    sessionStorage.removeItem("survey-token");
+  }
+  function rememberAuthMode(mode) {
+    sessionStorage.setItem(MODE_KEY, mode);
+  }
+  function discardIncompatibleSession(mode) {
+    const previous = sessionStorage.getItem(MODE_KEY);
+    if (previous && previous !== mode && token) {
+      clearLocalSession();
+      announce("Signed out because the study authentication mode changed. Enter again to continue.");
+    }
+    rememberAuthMode(mode);
+  }
   function setAccount() {
     const preview = authMode === "preview";
     $("account-label").textContent = preview ? (study ? "Preview participant" : "") : (study?.email || "");
@@ -53,14 +69,24 @@
   }
   function configureLogin() {
     const preview = authMode === "preview";
+    const emailOnly = authMode === "email_only";
     $("preview-login").hidden = !preview;
     $("email-form").hidden = preview;
     $("code-form").hidden = true;
     $("email-privacy").hidden = preview;
-    $("login-title").textContent = preview ? "Preview the survey" : "Sign in to begin";
+    $("email").required = !preview;
+    $("email-submit").innerHTML = emailOnly
+      ? 'Enter survey <span aria-hidden="true">→</span>'
+      : 'Send sign-in code <span aria-hidden="true">→</span>';
+    $("login-title").textContent = preview ? "Preview the survey" : (emailOnly ? "Enter the survey" : "Sign in to begin");
     $("login-copy").textContent = preview
       ? "No email or verification code is required. Each browser keeps its own anonymous preview progress."
-      : "Use the email address invited by the study organizer. Your progress is saved as you work.";
+      : emailOnly
+        ? "Enter your email to begin. Returning with the same address resumes your saved progress."
+        : "Use the email address invited by the study organizer. A verification code will be sent.";
+    $("email-privacy").textContent = emailOnly
+      ? "Your email identifies your annotation record. No verification code is required. Responses, timing, and any full-frame views are stored by the study organizer."
+      : "Your email identifies your annotation record. Responses, timing, and any full-frame views are stored by the study organizer.";
     setAccount();
   }
   async function beginPreview(forceNew = false) {
@@ -91,6 +117,7 @@
       const result = await post("/api/auth/preview-session");
       token = result.token;
       sessionStorage.setItem("survey-token", token);
+      rememberAuthMode(authMode);
       study = result;
       setAccount();
       prepare();
@@ -105,7 +132,18 @@
   $("email-form").onsubmit = e => {
     e.preventDefault();
     withBusy(e.currentTarget, async () => {
-      await post("/api/auth/request-code", {email: $("email").value.trim()});
+      const email = $("email").value.trim();
+      if (authMode === "email_only") {
+        const result = await post("/api/auth/email-session", {email});
+        token = result.token;
+        sessionStorage.setItem("survey-token", token);
+        rememberAuthMode(authMode);
+        study = result;
+        setAccount();
+        prepare();
+        return;
+      }
+      await post("/api/auth/request-code", {email});
       $("email-form").hidden = true; $("code-form").hidden = false; $("code").focus();
       announce("If your email is invited, a code has been sent. It expires in 10 minutes. Check your spam folder too.");
     });
@@ -114,7 +152,7 @@
   $("code-form").onsubmit = e => {
     e.preventDefault(); withBusy(e.currentTarget, async () => {
       const result = await post("/api/auth/verify", {email: $("email").value.trim(), code: $("code").value.trim()});
-      token = result.token; sessionStorage.setItem("survey-token", token); study = result; setAccount(); prepare();
+      token = result.token; sessionStorage.setItem("survey-token", token); rememberAuthMode(authMode); study = result; setAccount(); prepare();
     });
   };
   $("start-preview").onclick = () => beginPreview(false);
@@ -309,7 +347,7 @@
     clearTimeout(saveTimer);
     try { await saveDraft(); await queueTick(); } catch(_) { /* Unsynced edits remain in sessionStorage. */ }
     try { await post("/api/auth/logout"); } catch(_) { /* Always allow an expired/offline session to sign out locally. */ }
-    stopClock(); token = ""; study = null; sample = null; sessionStorage.removeItem("survey-token"); setAccount();
+    stopClock(); clearLocalSession(); setAccount();
     configureLogin(); screen("login");
     $("code").value = "";
   };
@@ -330,22 +368,23 @@
     announce();
     try {
       const config = await api("/api/config");
-      authMode = config.auth_mode || "smtp";
+      authMode = config.auth_mode || "email_only";
+      discardIncompatibleSession(authMode);
       configureLogin();
       if (token) {
         try {
           study = await api("/api/study");
-          prepare();
-          return;
+          if (study.auth_mode && study.auth_mode !== authMode) {
+            clearLocalSession();
+            announce("Signed out because the study authentication mode changed. Enter again to continue.");
+          } else {
+            prepare();
+            return;
+          }
         } catch (e) {
           if (isConnectionFailure(e)) { showConnectionError(e.message); return; }
-          if (e.status === 401) {
-            token = "";
-            sessionStorage.removeItem("survey-token");
-            study = null;
-          } else {
-            announce(e.message);
-          }
+          if (e.status === 401) clearLocalSession();
+          else announce(e.message);
         }
       }
       setAccount();

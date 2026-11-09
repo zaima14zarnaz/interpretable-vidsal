@@ -43,7 +43,7 @@ class Settings:
     allowed_emails: set[str] = field(default_factory=set)
     origins: list[str] = field(default_factory=list)
     group_ids: set[str] = field(default_factory=set)
-    auth_mode: str = 'smtp'
+    auth_mode: str = 'email_only'
     smtp_host: str = ''
     smtp_port: int = 587
     smtp_user: str = ''
@@ -59,7 +59,7 @@ class Settings:
         split = lambda name: {x.strip() for x in os.getenv(name, '').split(',') if x.strip()}
         return cls(root, Path(os.getenv('ANNOTATION_ROOT', str(root / 'annotations'))),
                    {x.lower() for x in split('ALLOWED_EMAILS')}, sorted(split('ALLOWED_ORIGINS')),
-                   split('GROUP_IDS'), os.getenv('AUTH_MODE', 'smtp'),
+                   split('GROUP_IDS'), os.getenv('AUTH_MODE', 'email_only'),
                    os.getenv('SMTP_HOST', ''), int(os.getenv('SMTP_PORT', '587')),
                    os.getenv('SMTP_USER', ''), os.getenv('SMTP_PASSWORD', ''),
                    os.getenv('SMTP_FROM', ''), os.getenv('SMTP_SECURITY', 'starttls'),
@@ -100,6 +100,19 @@ class EmailInput(BaseModel):
         return value
 
 
+class EmailSessionInput(BaseModel):
+    """Any nonempty entry; trimmed and lowercased. No domain or invitation checks."""
+    email: str = Field(min_length=1, max_length=254)
+
+    @field_validator('email')
+    @classmethod
+    def normalize(cls, value):
+        value = value.strip().lower()
+        if not value:
+            raise ValueError('Enter an email address.')
+        return value
+
+
 class VerifyInput(EmailInput):
     code: str = Field(pattern=r'^\d{6}$')
 
@@ -123,18 +136,23 @@ def create_app(settings: Settings | None = None):
     cfg.annotation_root = cfg.annotation_root.resolve()
     if not cfg.data_root.is_dir():
         raise RuntimeError(f'Dataset directory does not exist: {cfg.data_root}')
-    if cfg.auth_mode not in {'smtp', 'console', 'preview'}:
-        raise RuntimeError('AUTH_MODE must be smtp, console, or preview.')
+    if cfg.auth_mode not in {'smtp', 'console', 'preview', 'email_only'}:
+        raise RuntimeError('AUTH_MODE must be smtp, console, preview, or email_only.')
     if cfg.auth_mode == 'preview':
         # Isolate every preview record under ANNOTATION_ROOT/preview/ so real study state is untouched.
         cfg.annotation_root = (cfg.annotation_root / 'preview').resolve()
+    elif cfg.auth_mode == 'email_only':
+        pass  # No ALLOWED_EMAILS or SMTP required.
     else:
         if not cfg.allowed_emails:
             raise RuntimeError('Set ALLOWED_EMAILS to the invited participant emails before starting.')
         if cfg.auth_mode == 'smtp' and (not cfg.smtp_host or not cfg.smtp_from):
-            raise RuntimeError('Configure SMTP_HOST and SMTP_FROM, or use console mode for local testing.')
-    if cfg.smtp_security not in {'starttls', 'ssl'}:
+            raise RuntimeError('Configure SMTP_HOST and SMTP_FROM, or use console/email_only mode for local testing.')
+    if cfg.auth_mode == 'smtp' and cfg.smtp_security not in {'starttls', 'ssl'}:
         raise RuntimeError('SMTP_SECURITY must be starttls or ssl.')
+    if cfg.auth_mode != 'smtp' and cfg.smtp_security not in {'starttls', 'ssl'}:
+        # Keep a safe default for unused SMTP settings loaded from .env.
+        cfg.smtp_security = 'starttls'
     cfg.annotation_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     state = cfg.annotation_root / '.study_state'
     state.mkdir(exist_ok=True, mode=0o700)
@@ -249,6 +267,8 @@ def create_app(settings: Settings | None = None):
         if cfg.auth_mode == 'preview':
             if not str(row['email']).startswith('preview+') or not str(row['email']).endswith('@preview.local'):
                 raise HTTPException(401, 'Your session has expired. Sign in again to resume.')
+        elif cfg.auth_mode == 'email_only':
+            pass  # Any active session in this deployment identifies the participant.
         elif row['email'] not in cfg.allowed_emails:
             raise HTTPException(401, 'Your session has expired. Sign in again to resume.')
         return dict(row)
@@ -346,7 +366,8 @@ def create_app(settings: Settings | None = None):
             elapsed_time_definition='Wall time from first sample start to final submission, including breaks.',
             frame_context_enabled=cfg.frame_context, randomized_assignment=assignment,
             annotations_csv_sha256=hashlib.sha256(csv_text.encode()).hexdigest(),
-            auth_mode=cfg.auth_mode, is_test_data=(cfg.auth_mode == 'preview'))
+            auth_mode=cfg.auth_mode, is_test_data=(cfg.auth_mode == 'preview'),
+            email_verified=(cfg.auth_mode in {'smtp', 'console'}))
         atomic_write(folder / 'annotations.csv', csv_text)
         # Metadata last: its CSV checksum can detect a partial export after a crash.
         atomic_write(folder / 'metadata.json', json.dumps(metadata, indent=2))
@@ -356,7 +377,8 @@ def create_app(settings: Settings | None = None):
         count = c.execute('SELECT COUNT(*) FROM samples WHERE participant=? AND answer IS NOT NULL', (p['id'],)).fetchone()[0]
         result = dict(participant_id=p['id'], email=p['email'], total_samples=len(manifest),
                       completed_samples=count, complete=count == len(manifest), frame_context=cfg.frame_context,
-                      auth_mode=cfg.auth_mode, is_test_data=(cfg.auth_mode == 'preview'))
+                      auth_mode=cfg.auth_mode, is_test_data=(cfg.auth_mode == 'preview'),
+                      email_verified=(cfg.auth_mode in {'smtp', 'console'}))
         if result['complete']:
             result['metadata'] = export(c, p)
         return result
@@ -383,10 +405,24 @@ def create_app(settings: Settings | None = None):
             p = c.execute('SELECT * FROM participants WHERE id=?', (pid,)).fetchone()
             return issue_session(c, p, now)
 
+    @app.post('/api/auth/email-session')
+    def email_session(body: EmailSessionInput):
+        if cfg.auth_mode != 'email_only':
+            raise HTTPException(404, 'Email-only sign-in is unavailable in this deployment.')
+        now = time.time()
+        with db() as c:
+            p = c.execute('SELECT * FROM participants WHERE email=?', (body.email,)).fetchone()
+            if not p:
+                pid = secrets.token_hex(12)
+                c.execute('INSERT INTO participants VALUES (?,?,?,?,?,?)',
+                          (pid, body.email, now, None, None, json.dumps(create_assignment())))
+                p = c.execute('SELECT * FROM participants WHERE id=?', (pid,)).fetchone()
+            return issue_session(c, p, now)
+
     @app.post('/api/auth/request-code')
     def request_code(body: EmailInput, request: Request):
-        if cfg.auth_mode == 'preview':
-            raise HTTPException(404, 'Email sign-in is unavailable in preview mode.')
+        if cfg.auth_mode in {'preview', 'email_only'}:
+            raise HTTPException(404, 'Verification-code sign-in is unavailable in this deployment.')
         email = body.email
         now = time.time()
         code = f'{secrets.randbelow(1000000):06d}'
@@ -434,8 +470,8 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/api/auth/verify')
     def verify(body: VerifyInput):
-        if cfg.auth_mode == 'preview':
-            raise HTTPException(404, 'Email sign-in is unavailable in preview mode.')
+        if cfg.auth_mode in {'preview', 'email_only'}:
+            raise HTTPException(404, 'Verification-code sign-in is unavailable in this deployment.')
         now = time.time()
         failure = False
         with db() as c:

@@ -256,3 +256,69 @@ def test_preview_endpoint_disabled_outside_preview(setup):
     _, _, client = setup
     assert client.get('/api/config').json()['auth_mode'] == 'console'
     assert client.post('/api/auth/preview-session').status_code == 404
+    assert client.post('/api/auth/email-session', json={'email': 'one@example.edu'}).status_code == 404
+
+
+def _gallery(tmp_path, groups=(('7', 2), ('19', 3))):
+    root = tmp_path / 'gallery'
+    for group, count in groups:
+        for i in range(count):
+            folder = root / f'group_{group}' / f'patch_{i}'
+            folder.mkdir(parents=True)
+            (folder / 'patch.png').write_bytes(PNG)
+            (folder / 'target_frame_boxed.png').write_bytes(PNG)
+    return root
+
+
+def test_email_only_entry_resume_and_isolation(tmp_path):
+    root = _gallery(tmp_path)
+    cfg = Settings(root, root / 'annotations', set(), [], auth_mode='email_only')
+    client = TestClient(create_app(cfg))
+    assert client.get('/api/config').json()['auth_mode'] == 'email_only'
+    assert client.post('/api/auth/request-code', json={'email': 'a@example.edu'}).status_code == 404
+    assert client.post('/api/auth/preview-session').status_code == 404
+
+    # Any nonempty entry is accepted after trim/lowercase; no domain/invitation checks.
+    odd = client.post('/api/auth/email-session', json={'email': '  Mixed.Case@Example.EDU '})
+    assert odd.status_code == 200, odd.text
+    data = odd.json()
+    assert data['email'] == 'mixed.case@example.edu'
+    assert data['email_verified'] is False
+    assert data['auth_mode'] == 'email_only'
+    assert data['is_test_data'] is False
+    h1 = {'Authorization': 'Bearer ' + data['token']}
+
+    # Returning with the same normalized email resumes the same participant.
+    again = client.post('/api/auth/email-session', json={'email': 'mixed.case@example.edu'}).json()
+    assert again['participant_id'] == data['participant_id']
+    assert again['token'] != data['token']
+
+    complete_sample(client, h1, 'S001')
+    resumed = client.get('/api/study', headers={'Authorization': 'Bearer ' + again['token']}).json()
+    assert resumed['completed_samples'] == 1
+    assert resumed['participant_id'] == data['participant_id']
+
+    other = client.post('/api/auth/email-session', json={'email': 'other@example.edu'}).json()
+    assert other['participant_id'] != data['participant_id']
+    h2 = {'Authorization': 'Bearer ' + other['token']}
+    assert client.get('/api/study', headers=h2).json()['completed_samples'] == 0
+
+    state, _, _ = complete_sample(client, h1, 'S002')
+    assert state['complete']
+    folder = cfg.annotation_root / f"participant_{data['participant_id']}"
+    assert folder.is_dir()
+    assert 'preview' not in folder.parts[-2:]
+    metadata = json.loads((folder / 'metadata.json').read_text())
+    assert metadata['email'] == 'mixed.case@example.edu'
+    assert metadata['email_verified'] is False
+    assert metadata['auth_mode'] == 'email_only'
+    assert metadata['is_test_data'] is False
+
+
+def test_email_only_startup_skips_allowlist_and_smtp(tmp_path):
+    root = _gallery(tmp_path)
+    cfg = Settings(root, root / 'annotations', set(), [], auth_mode='email_only',
+                   smtp_host='', smtp_from='')
+    app = create_app(cfg)
+    assert app.state.settings.auth_mode == 'email_only'
+    assert app.state.settings.annotation_root == (root / 'annotations').resolve()

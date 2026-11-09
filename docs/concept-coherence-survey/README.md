@@ -5,7 +5,7 @@ Each sample is a **concept group**, not an individual patch. Every invited parti
 
 ## What participants do
 
-1. Sign in with their invited email and a six-digit email verification code.
+1. Enter their email and click **Enter survey** (no verification code).
 2. Read neutral study instructions.
 3. Inspect the patches in one group, optionally opening the boxed full frames.
 4. Describe the shared pattern, or enter **No clear shared pattern**.
@@ -59,32 +59,36 @@ Edit `.env`:
 ```dotenv
 DATA_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5
 ANNOTATION_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5/annotations
-ALLOWED_EMAILS=first-annotator@university.edu,second-annotator@university.edu,third-annotator@university.edu
 GROUP_IDS=
 ALLOW_FRAME_CONTEXT=true
 ALLOWED_ORIGINS=https://YOUR-GITHUB-USERNAME.github.io
-
-AUTH_MODE=smtp
-SMTP_HOST=YOUR-SMTP-HOST
-SMTP_PORT=587
-SMTP_SECURITY=starttls
-SMTP_USER=YOUR-SMTP-USERNAME
-SMTP_PASSWORD=YOUR-SMTP-APP-PASSWORD
-SMTP_FROM=YOUR-SENDER-EMAIL
+AUTH_MODE=email_only
 ```
 
-Use your institution's SMTP settings or a mail service's SMTP credentials. Port 465 usually uses `SMTP_SECURITY=ssl`; port 587 usually uses `starttls`. These values belong **only in the server's `.env`**, never in `docs/config.js` or a public repository. The app sends a verification email only when an invited participant requests a code. Codes expire after 10 minutes, are single-use, and lock after five failed attempts. New-code requests are rate-limited. Sessions last 24 hours; participants can verify again to resume.
+**Default `AUTH_MODE=email_only`:** participants type any email, click **Enter survey**, and continue immediately. No verification codes, invitation allowlist, domain checks, or SMTP. The email is stored in participant metadata with `email_verified=false`. Returning with the same normalized email resumes that participant. Different emails create separate records under `ANNOTATION_ROOT/participant_<id>/`.
 
-The server process needs read permission for source images and write permission for the annotation directory. For a small study use one Uvicorn worker, as below. SQLite should be on a filesystem that reliably supports its locking semantics; avoid unreliable multi-host network mounts. Back up the private annotation directory.
+Legacy modes: `preview` (anonymous test data under `ANNOTATION_ROOT/preview/`), `console` / `smtp` (verification codes; require `ALLOWED_EMAILS`, and `smtp` also needs SMTP settings). SMTP credentials belong **only in the server's `.env`**, never in `docs/config.js`.
+
+Sessions last 24 hours; participants can enter the same email again to resume. The server process needs read permission for source images and write permission for the annotation directory. For a small study use one Uvicorn worker, as below. SQLite should be on a filesystem that reliably supports its locking semantics; avoid unreliable multi-host network mounts. Back up the private annotation directory.
 
 ## 2. Test the real dataset locally
 
-### Preview mode (no email / SMTP)
-
-Use this to walk through the full survey UI without invited emails. Preview participants, sessions, drafts, and exports are isolated under `ANNOTATION_ROOT/preview/` and marked `is_test_data`. Real study records are never modified.
+### Email-only mode (default)
 
 ```bash
-cd docs/concept-coherence-survey   # if needed
+cd /home/z/zaimazarnaz/research1/ExplainableSaliency/docs/concept-coherence-survey
+AUTH_MODE=email_only \
+DATA_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5 \
+ANNOTATION_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5/annotations \
+ALLOWED_ORIGINS=https://zaima14zarnaz.github.io \
+python -m uvicorn backend.app:create_app --factory --host 127.0.0.2 --port 8000
+```
+
+Open the backend URL or the GitHub Pages frontend and enter any email. No code is sent.
+
+### Preview mode (anonymous test annotations)
+
+```bash
 AUTH_MODE=preview \
 DATA_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5 \
 ANNOTATION_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k/visual_gallery/concepts_v5/annotations \
@@ -92,23 +96,17 @@ ALLOWED_ORIGINS=https://zaima14zarnaz.github.io \
 python -m uvicorn backend.app:create_app --factory --host 127.0.0.2 --port 8000
 ```
 
-Open the backend URL (or your GitHub Pages frontend with `apiBase` pointing at the HTTPS tunnel) and click **Start preview**. Use **Start a new preview** to create a separate anonymous participant without deleting previous preview exports.
+Click **Start preview**. Use **Start a new preview** for a fresh anonymous participant. Preview exports stay under `ANNOTATION_ROOT/preview/` and are marked `is_test_data`.
 
-### Console mode (email codes in the terminal)
+### Console / SMTP code flows (legacy)
 
-If you want to test before configuring SMTP, temporarily set `AUTH_MODE=console`. Codes then print in the server terminal instead of being emailed. **Use console mode only for local testing.** Restore `AUTH_MODE=smtp` before inviting participants. `ALLOWED_EMAILS` is still required in console mode.
+`AUTH_MODE=console` prints codes in the terminal; `AUTH_MODE=smtp` emails them. Both require `ALLOWED_EMAILS`.
 
 ```bash
 python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000` on that server. If accessing it from your laptop, use an SSH tunnel:
-
-```bash
-ssh -L 8000:127.0.0.1:8000 YOUR-USERNAME@YOUR-SERVER
-```
-
-Then open `http://127.0.0.1:8000` on your laptop. Keep `docs/config.js` set to `apiBase: ""` for this same-origin test. A full test with your real email will create a real participant record, so use a separate `ANNOTATION_ROOT` for pilots. Keep group selection and frame-context policy identical for all final participants.
+Keep `docs/config.js` `apiBase: ""` for same-origin testing against that process.
 
 ## 3. Give the backend an HTTPS address
 
