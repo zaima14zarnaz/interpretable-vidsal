@@ -1,30 +1,32 @@
 """
-Concept-guided FiLM-and-mask multi-scale spatiotemporal saliency decoder for the last frame in a window.
+Prototype-guided multiscale spatiotemporal saliency decoder for the last frame.
 
-Stages are decoded coarse-to-fine (stage4 -> stage1). Each stage fuses full
-[B, C, T, H, W] feature and concept volumes through FiLM modulation.
+Stages decode coarse-to-fine (stage4 -> stage1). Every stage uses the same
+feature path: projection -> concept-derived FiLM -> previous-decoder fusion
+-> refinement -> residual spatial masking of the last temporal slice.
+Stages 3/4 construct masks with unary + pairwise contextual prototype scores;
+stages 1/2 construct masks with unary scores only. No stage constructs a
+prototype-conditioned feature update or blends a prototype mixture into features.
 
-With shared activations enabled, all valid top-k IDs, vectors, and sparse soft
-weights from concept creation participate in priorities and prototype mixtures.
-Padded or intervention-deleted slots retain zero weight. Softmax operations use
-FP32 under AMP to retain small selected weights.
+Scoring tokens contain only normalized prototype identity, position encoding,
+and activation strength. They contain neither patch embeddings nor explicit
+patch-prototype feature interactions. Activation strengths remain feature-derived:
+they are reused from concept creation in shared mode, or computed by matching
+FiLM features to selected prototypes in non-shared mode.
 
-Stages 3 and 4 score every valid concept-patch activation with unary scores and a
-low-rank factorized antisymmetric concept-patch comparison modulated by an
-explicit learned spatial-relevance kernel. Every directed pair interaction is
-defined implicitly through query/key projections and a symmetric Fourier spatial
-kernel, while its activation-weighted aggregate is computed exactly via augmented
-global query/key summaries in O(N) memory and computation. A fixed convex blend
-of a priority-gated prototype-conditioned branch is then applied to the last
-temporal slice, either before decoder refinement (``pre_refine``) or after
-prev-decoder fusion and refine1/refine2 (``post_refine``), controlled by
-``prototype_application_position`` and ``prototype_bottleneck_strength``.
+All valid upstream top-k slots and original weights participate in shared mode.
+Invalid, padded, or intervention-deleted slots retain zero weight. Priority
+normalization is computed in FP32. Stage-2 backbone fusion remains configurable.
 
-Stages 1 and 2 use unary-only prototype importance (no pairwise context) to build
-a residual spatial mask applied to the last temporal slice after prev-decoder
-upsample/fuse and refine1/refine2, controlled by ``fine_unary_mask_strength``.
-Stage 2 does not add its backbone feature volume to the decoder stream. Temporal
-aggregation and bilinear resizing of patch logits produce the main saliency map.
+For compatibility with existing callers, prototype_bottleneck_strength now
+controls the residual mask strength at stages 3/4. fine_unary_mask_strength
+controls it at stages 1/2. prototype_application_position remains an accepted
+legacy argument; masks are always applied after fusion and refinement.
+The changed scoring-token dimensions require retraining the priority networks.
+
+Main and side prediction heads use only their last decoder slice. The learned
+cross-time weighting and additive temporal-context branch have been removed.
+Temporal backbone features and 3D decoder refinement are still processed upstream.
 """
 
 from __future__ import annotations
@@ -180,7 +182,6 @@ def _gather_active_visual_activations(
 def _build_shared_visual_modality_from_concept_out(
     concept_out: Dict[str, Any],
     *,
-    shared_patch_proj: nn.Linear,
     concept_proto_proj: nn.Linear,
 ) -> Dict[str, torch.Tensor]:
     """Use every valid upstream top-k slot, with its original assignment weight."""
@@ -189,7 +190,6 @@ def _build_shared_visual_modality_from_concept_out(
         "active_visual_prototype_indices",
         "active_visual_prototypes",
         "visual_validity_mask",
-        "visual_patch_embeddings",
         "visual_metadata",
     )
     missing = [key for key in required if key not in concept_out]
@@ -200,21 +200,18 @@ def _build_shared_visual_modality_from_concept_out(
         )
 
     visual_metadata = concept_out["visual_metadata"]
-    B, _, T, H, W = _feature_shape_from_metadata(visual_metadata)
     activations = _gather_active_visual_activations(
         concept_out["visual_activations"],
         concept_out["active_visual_prototype_indices"],
         concept_out["visual_validity_mask"],
         visual_metadata,
     )
-    patch_embeddings = concept_out["visual_patch_embeddings"].view(B, T, H, W, -1)
     projected_prototypes = concept_proto_proj(
         concept_out["active_visual_prototypes"]
     )
     return {
         "activations": activations,
         "validity_mask": concept_out["visual_validity_mask"],
-        "projected_features": shared_patch_proj(patch_embeddings),
         "projected_prototypes": projected_prototypes,
         "similarity_maps": None,
     }
@@ -687,26 +684,11 @@ def _sinusoidal_2d_encoding(
 
 
 class SpatioTemporalConceptGatedFusionBlock(nn.Module):
-    """
-    Feature-first 3D fusion over [B, C, T, H, W] volumes.
+    """FiLM, decoder fusion, refinement, then last-slice residual spatial mask.
 
-    Dense features form the base signal. Concept volumes first modulate dense
-    features through FiLM.
-
-    ``priority_mode="pairwise"`` (stages 3/4): every valid concept-patch
-    activation is scored from a token that encodes normalized patch-prototype
-    interaction, prototype identity, position, and activation strength using
-    unary terms and a low-rank factorized antisymmetric concept-patch
-    comparison modulated by an explicit learned spatial-relevance kernel.
-    A 1x1x1 conv-GroupNorm-ReLU branch then produces a prototype-conditioned
-    last-frame update. The last temporal slice is a fixed convex blend
-    controlled by ``prototype_bottleneck_strength`` (``pre_refine`` or
-    ``post_refine``).
-
-    ``priority_mode="unary_mask"`` (stages 1/2): unary-only importance builds a
-    residual spatial mask applied to the last temporal slice after prev-decoder
-    upsample/fuse and refine1/refine2, controlled by ``fine_unary_mask_strength``.
-    Pairwise modules are not constructed or executed.
+    Pairwise mode uses unary + contextual prototype scoring; unary_mask mode
+    uses unary scoring only. Both use identical mask application. Priority
+    tokens comprise prototype identity, position, and activation strength only.
     """
 
     def __init__(
@@ -787,9 +769,10 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         self.factorized_rank = int(factorized_rank)
         self.pos_num_frequencies = int(pos_num_frequencies)
         self.pos_dim = 4 * self.pos_num_frequencies
-        self.token_dim = 2 * self.mask_embed_dim + self.pos_dim + 1
+        self.token_dim = self.mask_embed_dim + self.pos_dim + 1
         self.prototype_bottleneck_strength = float(prototype_bottleneck_strength)
-        self.prototype_application_position = str(prototype_application_position)
+        # Legacy placement is accepted, but masks always follow refinement.
+        self.prototype_application_position = "post_refine"
         self.fine_unary_mask_strength = float(fine_unary_mask_strength)
         self.include_backbone_in_fusion = bool(include_backbone_in_fusion)
         priority_hidden = max(int(decoder_channels), 32)
@@ -823,11 +806,12 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         self.prev_scale = nn.Parameter(torch.tensor(1.0))
 
         if self.priority_mode in ("pairwise", "unary_mask"):
-            self.feature_token_proj = nn.Linear(decoder_channels, self.mask_embed_dim)
-            if self.use_shared_concept_activations:
-                self.shared_patch_proj = nn.Linear(concept_dim, self.mask_embed_dim)
-            else:
-                self.shared_patch_proj = None
+            # Used only for feature-derived assignment in non-shared mode,
+            # never as an input to unary or contextual scoring tokens.
+            self.feature_token_proj = (
+                None if self.use_shared_concept_activations
+                else nn.Linear(decoder_channels, self.mask_embed_dim)
+            )
             self.concept_proto_proj = nn.Linear(concept_dim, self.mask_embed_dim)
             self.unary_priority_mlp = nn.Sequential(
                 nn.Linear(self.token_dim, priority_hidden),
@@ -839,7 +823,6 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             self.null_prototype = nn.Parameter(torch.randn(self.concept_dim) * 0.02)
         else:
             self.feature_token_proj = None
-            self.shared_patch_proj = None
             self.concept_proto_proj = None
             self.unary_priority_mlp = None
             self.null_prototype = None
@@ -862,29 +845,11 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             )
             # sigmoid(-2.1972246) ≈ 0.1; begins near content-only comparison.
             self.raw_spatial_strength = nn.Parameter(torch.tensor(-2.1972246))
-            self.priority_application_proto_proj = nn.Linear(
-                concept_dim,
-                decoder_channels,
-                bias=False,
-            )
-            self.mask_feature_branch = Conv3DGNAct(
-                decoder_channels * 2,
-                decoder_channels,
-                kernel_size=1,
-                padding=0,
-            )
             self.raw_pairwise_strength = nn.Parameter(torch.tensor(0.0))
-            # Deprecated: retained only so older checkpoints that stored
-            # residual alpha via raw_strength can still load strictly.
-            # Fusion now uses fixed self.prototype_bottleneck_strength instead.
-            self.raw_strength = nn.Parameter(torch.tensor(-2.197))
         else:
             self.factor_query = None
             self.factor_key = None
-            self.priority_application_proto_proj = None
-            self.mask_feature_branch = None
             self.raw_pairwise_strength = None
-            self.raw_strength = None
             self.raw_spatial_frequency_weights = None
             self.raw_spatial_strength = None
 
@@ -988,88 +953,66 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             "activations": activations,
             "validity_mask": validity,
             "prototypes": active_prototypes,
-            "projected_features": projected_features,
             "projected_prototypes": projected_prototypes,
         }
 
     def _build_activation_tokens(
         self,
-        projected_features: torch.Tensor,
         projected_prototypes: torch.Tensor,
         activations: torch.Tensor,
         concept_id_offset: int = 0,
     ) -> Dict[str, torch.Tensor]:
-        """One priority token per concept-patch pair.
+        """One token per activation: [normalized prototype, position, strength].
 
-        Each token bundles a normalized patch-prototype interaction, prototype
-        identity, normalized patch coordinates ``ell_j``, and activation
-        strength ``a_ij``:
-
-        ``z_ij = [bar(v_j) odot bar(c_i), bar(c_i), ell_j, a_ij]``.
+        No patch feature vector or patch-prototype interaction enters the token.
+        Activations are still the original feature-derived assignment strengths.
         """
-        B, T, H, W, embed_dim = projected_features.shape
-        if projected_prototypes.dim() == 6:
-            K = int(projected_prototypes.shape[-2])
-        else:
+        if projected_prototypes.dim() != 6:
             raise ValueError(
-                "projected_prototypes must be [B,T,H,W,K,embed_dim] for per-patch "
-                f"concept selection, got {tuple(projected_prototypes.shape)}"
+                "projected_prototypes must be [B,T,H,W,K,embed_dim], "
+                f"got {tuple(projected_prototypes.shape)}"
             )
-        dtype = projected_features.dtype
-        device = projected_features.device
+        B, T, H, W, K, embed_dim = projected_prototypes.shape
+        if tuple(activations.shape) != (B, T, K, H, W):
+            raise ValueError(
+                f"activations must be {(B, T, K, H, W)}, "
+                f"got {tuple(activations.shape)}"
+            )
+        dtype = projected_prototypes.dtype
+        device = projected_prototypes.device
         N = K * H * W
-
         grid_y, grid_x = self._normalized_spatial_grid(
             H, W, device=device, dtype=dtype
         )
         pos_hw = _sinusoidal_2d_encoding(
             grid_x, grid_y, self.pos_num_frequencies
         )
-
-        normalized_features = F.normalize(
-            projected_features, dim=-1, eps=_PRIORITY_EPS
-        )
-        normalized_prototypes = F.normalize(
+        normalized_proto_flat = F.normalize(
             projected_prototypes, dim=-1, eps=_PRIORITY_EPS
-        )
-        normalized_feature_flat = (
-            normalized_features.unsqueeze(-2)
-            .expand(-1, -1, -1, -1, K, -1)
-            .reshape(B, T, N, embed_dim)
-        )
-        normalized_proto_flat = normalized_prototypes.reshape(B, T, N, embed_dim)
-        interaction_flat = normalized_feature_flat * normalized_proto_flat
+        ).reshape(B, T, N, embed_dim)
         pos_flat = (
             pos_hw.reshape(1, 1, H * W, self.pos_dim)
             .unsqueeze(-2)
             .expand(B, T, -1, K, -1)
             .reshape(B, T, N, self.pos_dim)
         )
-        act_flat = (
-            activations.permute(0, 1, 3, 4, 2)
-            .reshape(B, T, N, 1)
-        )
-        tokens = torch.cat(
-            [interaction_flat, normalized_proto_flat, pos_flat, act_flat],
-            dim=-1,
-        )
-
+        act_flat = activations.permute(0, 1, 3, 4, 2).reshape(B, T, N, 1)
+        tokens = torch.cat([normalized_proto_flat, pos_flat, act_flat], dim=-1)
         patch_index = torch.arange(H * W, device=device).repeat_interleave(K)
         concept_index = (
             torch.arange(K, device=device).repeat(H * W) + concept_id_offset
         )
-        x_coords = grid_x.reshape(-1).repeat_interleave(K)
-        y_coords = grid_y.reshape(-1).repeat_interleave(K)
         return {
             "tokens": tokens,
             "activations": act_flat.squeeze(-1),
             "patch_index": patch_index,
             "concept_index": concept_index,
-            "x_coords": x_coords,
-            "y_coords": y_coords,
+            "x_coords": grid_x.reshape(-1).repeat_interleave(K),
+            "y_coords": grid_y.reshape(-1).repeat_interleave(K),
             "num_concepts": activations.new_tensor(K, dtype=torch.long),
             "spatial_hw": (H, W),
         }
+
 
     @property
     def factor_scale(self) -> float:
@@ -1237,7 +1180,7 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         self,
         modality_outs: List[Dict[str, torch.Tensor]],
     ) -> Dict[str, torch.Tensor]:
-        """Score every valid concept-patch activation from interaction tokens."""
+        """Score valid activations from prototype, position, and strength tokens."""
         if not modality_outs:
             raise ValueError("at least one concept modality is required")
 
@@ -1248,7 +1191,6 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
         for modality in modality_outs:
             H, W = modality["activations"].shape[-2:]
             part = self._build_activation_tokens(
-                modality["projected_features"],
                 modality["projected_prototypes"],
                 modality["activations"],
                 concept_id_offset=concept_offset,
@@ -1343,54 +1285,6 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
             result["factorized_comparison_stats"] = factorized_stats
         return result
 
-    def _build_concept_conditioned_update(
-        self,
-        base_features: torch.Tensor,
-        concept_priorities: torch.Tensor,
-        patch_priority_distribution: torch.Tensor,
-        active_prototypes: torch.Tensor,
-        concept_validity: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Priority-weighted prototype mixture and concept-conditioned branch.
-
-        ``base_features`` is the last-frame volume used as the feature input to
-        the mask branch: ``film_last`` for ``pre_refine`` placement, or
-        ``decoded_base_last`` for ``post_refine`` placement.
-        """
-        conditional_weights = concept_priorities / patch_priority_distribution.unsqueeze(
-            2
-        ).clamp_min(_PRIORITY_EPS)
-        if concept_validity.dim() != 5:
-            raise ValueError(
-                "concept_validity must be [B,T,H,W,K] for per-patch concept "
-                f"selection, got {tuple(concept_validity.shape)}"
-            )
-        valid = concept_validity.permute(0, 1, 4, 2, 3).to(
-            dtype=conditional_weights.dtype
-        )
-        conditional_weights = conditional_weights * valid
-        if active_prototypes.dim() != 6:
-            raise ValueError(
-                "active_prototypes must be [B,T,H,W,K,D] for per-patch concept "
-                f"selection, got {tuple(active_prototypes.shape)}"
-            )
-        projected_prototypes = F.normalize(
-            self.priority_application_proto_proj(active_prototypes),
-            dim=-1,
-            eps=_PRIORITY_EPS,
-        )
-        concept_context = torch.einsum(
-            "btkhw,bthwkp->btphw",
-            conditional_weights,
-            projected_prototypes,
-        ).permute(0, 2, 1, 3, 4)
-        update_input = torch.cat([
-            concept_context,
-            base_features * concept_context,
-        ], dim=1)
-        concept_conditioned_update = self.mask_feature_branch(update_input)
-        return conditional_weights, concept_context, concept_conditioned_update
-
     def _assert_required_visual_prototypes(
         self,
         visual_validity_mask: torch.Tensor,
@@ -1419,286 +1313,89 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         feature_proj = self.feature_proj(features)
         concept_proj = self.concept_proj(concept_volume)
-
-        prev_up = None
-        if prev_decoder is not None:
-            prev_up = self.prev_upsample(
-                prev_decoder,
-                target_thw=feature_proj.shape[-3:],
-            )
-            prev_up = self.prev_proj(prev_up)
-
         film_params = self.film(concept_proj)
         gamma, beta = film_params.chunk(2, dim=1)
         gamma = 1.0 + 0.1 * torch.tanh(gamma)
         beta = 0.1 * beta
         film_features = feature_proj * gamma + beta
 
-        mask_outputs: Dict[str, Any] = {}
-        priority_out: Optional[Dict[str, Any]] = None
-        priority_mask_last: Optional[torch.Tensor] = None
-        visual_out: Optional[Dict[str, Any]] = None
-        film_last: Optional[torch.Tensor] = None
-        temporal_len = int(feature_proj.shape[2])
-
-        if self.priority_mode == "pairwise":
-            self._assert_required_visual_prototypes(visual_validity_mask)
-            film_last = film_features[:, :, -1:, :, :]
-            visual_out = self._resolve_visual_activations(
-                film_last,
-                active_visual_prototypes,
-                visual_validity_mask,
-                concept_out,
+        prev_up = None
+        if prev_decoder is not None:
+            prev_up = self.prev_upsample(
+                prev_decoder, target_thw=feature_proj.shape[-3:]
             )
-            priority_out = self._prioritize_concept_patch_activations([visual_out])
-            priority_mask_last = priority_out["priority_mask"]
-            if priority_mask_last.shape[1] != 1 or priority_mask_last.shape[2] != 1:
-                raise ValueError(
-                    "Last-frame patch-priority gate must be [B, 1, 1, H, W], "
-                    f"got {tuple(priority_mask_last.shape)}"
-                )
-
-        apply_pre = (
-            self.priority_mode == "pairwise"
-            and self.prototype_application_position == "pre_refine"
-        )
-        apply_post = (
-            self.priority_mode == "pairwise"
-            and self.prototype_application_position == "post_refine"
-        )
-
-        if apply_pre:
-            assert priority_out is not None and priority_mask_last is not None
-            assert visual_out is not None and film_last is not None
-            (
-                conditional_weights,
-                concept_context,
-                concept_conditioned_update_last,
-            ) = self._build_concept_conditioned_update(
-                film_last,
-                priority_out["concept_priorities"],
-                priority_out["patch_priority_distribution"],
-                active_visual_prototypes,
-                priority_out["concept_validity"],
-            )
-            prototype_branch_last = (
-                priority_mask_last * concept_conditioned_update_last
-            )
-            lambda_proto = self.prototype_bottleneck_strength
-            guided_last = (
-                (1.0 - lambda_proto) * film_last
-                + lambda_proto * prototype_branch_last
-            )
-            feature_proj = _scatter_last_frame_update(
-                film_features,
-                guided_last,
-            )
-            priority_mask = _scatter_last_frame_mask(
-                feature_proj.shape[0],
-                temporal_len,
-                priority_mask_last,
-                device=feature_proj.device,
-                dtype=feature_proj.dtype,
-            )
-            film_last_norm = film_last.detach().norm()
-            prototype_branch_norm = prototype_branch_last.detach().norm()
-            prototype_to_base_ratio = (
-                prototype_branch_norm / film_last_norm.clamp_min(1e-6)
-            )
-            mask_outputs.update(
-                {
-                    "priority_mask": priority_mask,
-                    "patch_priority_gate": priority_out["patch_priority_gate"],
-                    "patch_priority_distribution": priority_out[
-                        "patch_priority_distribution"
-                    ],
-                    "concept_priorities": priority_out["concept_priorities"],
-                    "concept_validity": priority_out["concept_validity"],
-                    "patch_priority_map": priority_out["patch_priority_map"],
-                    "conditional_concept_weights": conditional_weights,
-                    "priority_weighted_concept_context": concept_context,
-                    "unary_scores": priority_out["unary_scores"],
-                    "pairwise_context": priority_out["pairwise_context"],
-                    "factorized_comparison_stats": priority_out[
-                        "factorized_comparison_stats"
-                    ],
-                    "concept_patch_activations": visual_out["activations"],
-                    "prototype_application_position": self.prototype_application_position,
-                    "prototype_bottleneck_strength": film_features.new_tensor(
-                        self.prototype_bottleneck_strength
-                    ).detach(),
-                    "prototype_branch_norm": prototype_branch_norm,
-                    "film_last_norm": film_last_norm,
-                    "decoded_base_last_norm": film_last_norm,
-                    "prototype_to_film_norm_ratio": prototype_to_base_ratio,
-                    "prototype_to_base_norm_ratio": prototype_to_base_ratio,
-                    "priority_mode": "pairwise",
-                    "pairwise_context_used": True,
-                }
-            )
-            if torch.is_tensor(visual_out.get("similarity_maps")):
-                mask_outputs["visual_similarity_maps"] = visual_out["similarity_maps"]
-        else:
-            feature_proj = film_features
-
+            prev_up = self.prev_proj(prev_up)
         if self.include_backbone_in_fusion:
-            fused = feature_proj
+            fused = film_features
             if prev_up is not None:
                 fused = fused + self.prev_scale * prev_up
         else:
             if prev_up is None:
-                raise ValueError("A decoder stage without backbone fusion requires a previous stage")
-            # Keep stage-2 features for its prototype scoring, but do not inject
-            # them directly into the stage-2 decoder feature stream.
+                raise ValueError(
+                    "A decoder stage without backbone fusion requires a previous stage"
+                )
             fused = self.prev_scale * prev_up
-
         decoded = self.refine2(self.refine1(fused))
 
-        if apply_post:
-            assert priority_out is not None and priority_mask_last is not None
-            assert visual_out is not None
-            decoded_base = decoded
-            decoded_base_last = decoded_base[:, :, -1:, :, :]
-            (
-                conditional_weights,
-                concept_context,
-                concept_conditioned_update_last,
-            ) = self._build_concept_conditioned_update(
-                decoded_base_last,
-                priority_out["concept_priorities"],
-                priority_out["patch_priority_distribution"],
-                active_visual_prototypes,
-                priority_out["concept_validity"],
-            )
-            prototype_branch_last = (
-                priority_mask_last * concept_conditioned_update_last
-            )
-            lambda_proto = self.prototype_bottleneck_strength
-            guided_last = (
-                (1.0 - lambda_proto) * decoded_base_last
-                + lambda_proto * prototype_branch_last
-            )
-            decoded = _scatter_last_frame_update(
-                decoded_base,
-                guided_last,
-            )
-            priority_mask = _scatter_last_frame_mask(
-                decoded.shape[0],
-                int(decoded.shape[2]),
-                priority_mask_last,
-                device=decoded.device,
-                dtype=decoded.dtype,
-            )
-            decoded_base_last_norm = decoded_base_last.detach().norm()
-            prototype_branch_norm = prototype_branch_last.detach().norm()
-            prototype_to_base_ratio = (
-                prototype_branch_norm / decoded_base_last_norm.clamp_min(1e-6)
-            )
-            mask_outputs.update(
-                {
-                    "priority_mask": priority_mask,
-                    "patch_priority_gate": priority_out["patch_priority_gate"],
-                    "patch_priority_distribution": priority_out[
-                        "patch_priority_distribution"
-                    ],
-                    "concept_priorities": priority_out["concept_priorities"],
-                    "concept_validity": priority_out["concept_validity"],
-                    "patch_priority_map": priority_out["patch_priority_map"],
-                    "conditional_concept_weights": conditional_weights,
-                    "priority_weighted_concept_context": concept_context,
-                    "unary_scores": priority_out["unary_scores"],
-                    "pairwise_context": priority_out["pairwise_context"],
-                    "factorized_comparison_stats": priority_out[
-                        "factorized_comparison_stats"
-                    ],
-                    "concept_patch_activations": visual_out["activations"],
-                    "prototype_application_position": self.prototype_application_position,
-                    "prototype_bottleneck_strength": film_features.new_tensor(
-                        self.prototype_bottleneck_strength
-                    ).detach(),
-                    "prototype_branch_norm": prototype_branch_norm,
-                    "decoded_base_last_norm": decoded_base_last_norm,
-                    "film_last_norm": decoded_base_last_norm,
-                    "prototype_to_base_norm_ratio": prototype_to_base_ratio,
-                    "prototype_to_film_norm_ratio": prototype_to_base_ratio,
-                    "priority_mode": "pairwise",
-                    "pairwise_context_used": True,
-                }
-            )
-            if torch.is_tensor(visual_out.get("similarity_maps")):
-                mask_outputs["visual_similarity_maps"] = visual_out["similarity_maps"]
-
-        if self.priority_mode == "unary_mask":
+        mask_outputs: Dict[str, Any] = {}
+        if self.priority_mode in ("pairwise", "unary_mask"):
             self._assert_required_visual_prototypes(visual_validity_mask)
-            film_last = film_features[:, :, -1:, :, :]
             visual_out = self._resolve_visual_activations(
-                film_last,
+                film_features[:, :, -1:],
                 active_visual_prototypes,
                 visual_validity_mask,
                 concept_out,
             )
             priority_out = self._prioritize_concept_patch_activations([visual_out])
             priority_mask_last = priority_out["priority_mask"]
-            if priority_mask_last.shape[1] != 1 or priority_mask_last.shape[2] != 1:
+            expected_mask_shape = (
+                decoded.shape[0], 1, 1, decoded.shape[-2], decoded.shape[-1]
+            )
+            if tuple(priority_mask_last.shape) != expected_mask_shape:
                 raise ValueError(
-                    "Last-frame unary priority mask must be [B, 1, 1, H, W], "
+                    f"Last-frame priority mask must be {expected_mask_shape}, "
                     f"got {tuple(priority_mask_last.shape)}"
                 )
-            decoded_base = decoded
-            decoded_base_last = decoded_base[:, :, -1:, :, :]
-            mask_multiplier = (
-                (1.0 - self.fine_unary_mask_strength)
-                + self.fine_unary_mask_strength * priority_mask_last
+            # Same residual spatial masking at every stage; only the scoring
+            # rule and the configured strength differ between coarse/fine stages.
+            mask_strength = (
+                self.prototype_bottleneck_strength
+                if self.priority_mode == "pairwise"
+                else self.fine_unary_mask_strength
             )
+            decoded_base_last = decoded[:, :, -1:]
+            mask_multiplier = (1.0 - mask_strength) + mask_strength * priority_mask_last
             guided_last = decoded_base_last * mask_multiplier
-            decoded = _scatter_last_frame_update(
-                decoded_base,
-                guided_last,
-            )
+            decoded = _scatter_last_frame_update(decoded, guided_last)
             priority_mask = _scatter_last_frame_mask(
-                decoded.shape[0],
-                int(decoded.shape[2]),
-                priority_mask_last,
-                device=decoded.device,
-                dtype=decoded.dtype,
+                decoded.shape[0], int(decoded.shape[2]), priority_mask_last,
+                device=decoded.device, dtype=decoded.dtype,
             )
-            decoded_base_last_norm = decoded_base_last.detach().norm()
-            guided_last_norm = guided_last.detach().norm()
-            mask_outputs.update(
-                {
-                    "priority_mask": priority_mask,
-                    "patch_priority_gate": priority_out["patch_priority_gate"],
-                    "patch_priority_distribution": priority_out[
-                        "patch_priority_distribution"
-                    ],
-                    "concept_priorities": priority_out["concept_priorities"],
-                    "concept_validity": priority_out["concept_validity"],
-                    "patch_priority_map": priority_out["patch_priority_map"],
-                    "unary_scores": priority_out["unary_scores"],
-                    "concept_patch_activations": visual_out["activations"],
-                    "priority_mode": "unary_mask",
-                    "fine_unary_mask_strength": film_features.new_tensor(
-                        self.fine_unary_mask_strength
-                    ).detach(),
-                    "pairwise_context_used": False,
-                    "decoded_base_last_norm": decoded_base_last_norm,
-                    "film_last_norm": decoded_base_last_norm,
-                    "prototype_branch_norm": guided_last_norm,
-                    "prototype_to_base_norm_ratio": (
-                        guided_last_norm / decoded_base_last_norm.clamp_min(1e-6)
-                    ),
-                    "prototype_to_film_norm_ratio": (
-                        guided_last_norm / decoded_base_last_norm.clamp_min(1e-6)
-                    ),
-                    "prototype_application_position": "post_refine_unary_mask",
-                    "prototype_bottleneck_strength": film_features.new_tensor(
-                        self.fine_unary_mask_strength
-                    ).detach(),
-                }
-            )
+            base_norm = decoded_base_last.detach().norm()
+            guided_norm = guided_last.detach().norm()
+            norm_ratio = guided_norm / base_norm.clamp_min(1e-6)
+            mask_outputs.update(priority_out)
+            mask_outputs.update({
+                "priority_mask": priority_mask,
+                "concept_patch_activations": visual_out["activations"],
+                "prototype_application_position": "post_refine_spatial_mask",
+                "spatial_mask_strength": film_features.new_tensor(mask_strength).detach(),
+                "decoded_base_last_norm": base_norm,
+                "guided_last_norm": guided_norm,
+                "guided_to_base_norm_ratio": norm_ratio,
+                # Retain diagnostic aliases for existing report consumers.
+                "prototype_bottleneck_strength": film_features.new_tensor(mask_strength).detach(),
+                "prototype_branch_norm": guided_norm,
+                "film_last_norm": base_norm,
+                "prototype_to_base_norm_ratio": norm_ratio,
+                "prototype_to_film_norm_ratio": norm_ratio,
+            })
+            if self.priority_mode == "unary_mask":
+                mask_outputs["fine_unary_mask_strength"] = film_features.new_tensor(
+                    self.fine_unary_mask_strength
+                ).detach()
             if torch.is_tensor(visual_out.get("similarity_maps")):
                 mask_outputs["visual_similarity_maps"] = visual_out["similarity_maps"]
-
         return decoded, mask_outputs
 
     def _resolve_visual_activations(
@@ -1715,13 +1412,8 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
                 raise ValueError(
                     "concept_out is required when use_shared_concept_activations=True"
                 )
-            if self.shared_patch_proj is None:
-                raise RuntimeError(
-                    "shared_patch_proj is undefined despite shared activations being enabled"
-                )
             return _build_shared_visual_modality_from_concept_out(
                 concept_out,
-                shared_patch_proj=self.shared_patch_proj,
                 concept_proto_proj=self.concept_proto_proj,
             )
         return self._compute_soft_activations(
@@ -1732,17 +1424,14 @@ class SpatioTemporalConceptGatedFusionBlock(nn.Module):
 
 
 class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
-    """
-    Coarse-to-fine spatiotemporal decoder with concept-patch prioritization.
+    """Coarse-to-fine decoder with the same residual mask path at every stage.
 
-    Stages decode stage4 -> stage1. Each stage fuses full [B, C, T, H, W]
-    feature and concept volumes through FiLM. Stages 3 and 4 score every valid
-    last-frame concept-patch activation with unary + pairwise context and apply
-    a convex blend of a priority-gated prototype-conditioned branch on the last
-    temporal slice (``pre_refine`` or ``post_refine``). Stages 1 and 2 apply a
-    unary-only residual spatial mask after prev-decoder fuse and refine, scaled
-    by ``fine_unary_mask_strength``. Temporal aggregation and learned upsampling
-    produce the last-frame saliency map.
+    Stages 3/4 use unary + pairwise scores; stages 1/2 use unary-only scores.
+    All masks reweight refined decoder features on the last temporal slice.
+    Scoring tokens contain prototype identity, position, and activation strength.
+    Main and side heads use the last decoder slice without temporal aggregation.
+    FiLM, configurable stage-2 fusion, and 3D refinement are retained. Legacy
+    placement arguments do not move masks before refinement.
     """
 
     def __init__(
@@ -1754,15 +1443,15 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         dropout: float = 0.05,
         tau_pi: float = 0.1,
         output_activation: str = "sigmoid",
-        temporal_aggregation: str = "learned_all_frames",
+        temporal_aggregation: str = "last",
         use_side_logit_fusion: bool = True,
         use_shared_concept_activations: bool = False,
         assignment_temperature: float = 0.07,
         priority_temperature: float = 0.1,
         factorized_rank: int = 32,
         distance_gate_range: float = 0.5,
-        prototype_bottleneck_strength: float = 0.9,
-        prototype_application_position: str = "pre_refine",
+        prototype_bottleneck_strength: float = 1.0,
+        prototype_application_position: str = "post_refine",
         fine_unary_mask_strength: float = 0.6,
         stage2_backbone_fusion_enabled: bool = True,
     ):
@@ -1798,11 +1487,13 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         self.decoder_channels = decoder_channels
         self.dropout = dropout
         self.output_activation = output_activation
-        self.temporal_aggregation = temporal_aggregation
+        # Keep accepting legacy configuration values so callers need no edit;
+        # temporal averaging/context addition is removed for every value.
+        self.temporal_aggregation = "last"
         self.use_side_logit_fusion = bool(use_side_logit_fusion)
         self.use_shared_concept_activations = bool(use_shared_concept_activations)
         self.prototype_bottleneck_strength = float(prototype_bottleneck_strength)
-        self.prototype_application_position = str(prototype_application_position)
+        self.prototype_application_position = "post_refine"
         self.fine_unary_mask_strength = float(fine_unary_mask_strength)
         # Non-parameter ablation flag (not in state_dict). When False, stage2
         # uses fused = prev_scale * prev_up; mask scoring still uses FiLM features.
@@ -1821,7 +1512,6 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         self.patch_priority_stages = self.pairwise_priority_stages
 
         hidden_channels = max(decoder_channels // 2, 32)
-        attn_hidden = max(decoder_channels // 2, 1)
 
         def _priority_mode_for_stage(stage: str) -> str:
             if stage in _PAIRWISE_PRIORITY_STAGES:
@@ -1861,20 +1551,13 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
             f"{self.prototype_bottleneck_strength:.4f} | "
             f"prototype_application_position="
             f"{self.prototype_application_position} "
-            f"(pairwise at {self.pairwise_priority_stages}) | "
+            f"(spatial masks; unary + pairwise at {self.pairwise_priority_stages}) | "
             f"fine_unary_mask_strength="
             f"{self.fine_unary_mask_strength:.4f} "
             f"(unary_mask at {self.unary_mask_stages}) | "
             f"stage2_backbone_fusion_enabled="
             f"{self.stage2_backbone_fusion_enabled}"
         )
-
-        self.temporal_weight_head = nn.Sequential(
-            nn.Conv3d(decoder_channels, attn_hidden, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv3d(attn_hidden, 1, kernel_size=1),
-        )
-        self.temporal_context_gate = nn.Parameter(torch.tensor(-2.0))
 
         self.patch_logit_head = nn.Conv2d(decoder_channels, 1, kernel_size=1)
 
@@ -1950,27 +1633,16 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         self,
         decoded_volume: torch.Tensor,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Select the last decoder slice; no cross-time feature addition.
+
+        The helper name and tuple return are retained for existing callers.
+        """
         if decoded_volume.dim() != 5:
             raise ValueError(
                 f"decoded_volume must be [B,D,T,H,W], got {tuple(decoded_volume.shape)}"
             )
 
-        if self.temporal_aggregation == "learned_all_frames":
-            last = decoded_volume[:, :, -1]
-            scores = self.temporal_weight_head(decoded_volume)
-            weights = torch.softmax(scores, dim=2)
-            context = (decoded_volume * weights).sum(dim=2)
-            alpha = torch.sigmoid(self.temporal_context_gate)
-            feature_2d = last + alpha * context
-            return feature_2d, weights
-
-        if self.temporal_aggregation == "mean":
-            return decoded_volume.mean(dim=2), None
-
-        if self.temporal_aggregation == "last":
-            return decoded_volume[:, :, -1], None
-
-        raise ValueError(f"Unsupported temporal_aggregation: {self.temporal_aggregation}")
+        return decoded_volume[:, :, -1], None
 
     def _build_decoder_temporal_diagnostics(
         self,

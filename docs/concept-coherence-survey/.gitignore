@@ -1,9 +1,0 @@
-.env
-.venv/
-__pycache__/
-.pytest_cache/
-demo_data/
-annotations/
-*.sqlite3*
-*.key
-*.log

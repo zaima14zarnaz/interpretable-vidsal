@@ -77,7 +77,7 @@ def build_model(
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=128,
-        num_concepts=512,
+        num_concepts=128,  # must match train.py / checkpoint visual_concepts bank size
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
         top_k=8,

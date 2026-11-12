@@ -168,3 +168,22 @@ Traceback (most recent call last):
   File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/losses.py", line 23, in _to_float_tensor
     if x.numel() > 0 and x.max() > 2.0:
 KeyboardInterrupt
+/home/z/zaimazarnaz/miniconda3/envs/explainable_vidsal/lib/python3.10/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+Using single device: cuda:1 (gpu=1)
+Training phase: initial | epochs=200 | lr=5.0e-05 | weight_decay=1.0e-04
+Run checkpoints will be saved to: training_outputs/ckpts/20261110_213732
+Concept branches | visual_concept_on=True | temporal_concepts_on=False | priority_map_loss_weight=0.1 | visual_concept_logit_scale=1.0
+Dense-loss warmup | epochs 1-50: lambda_dense/kl/cc/nss/similarity, side_stage_weights, priority_map_loss_weight, and priority_loss_weight = 0; from epoch 51: restore LOSS_LAMBDA values
+Traceback (most recent call last):
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 1634, in <module>
+    main()
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/train.py", line 1333, in main
+    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=1, random_train_sampling=True)
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/pre_process/dataloader.py", line 95, in __init__
+    frame_names = self._list_image_names(images_dir)
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/pre_process/dataloader.py", line 148, in _list_image_names
+    image_files = [
+  File "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/pre_process/dataloader.py", line 148, in <listcomp>
+    image_files = [
+KeyboardInterrupt

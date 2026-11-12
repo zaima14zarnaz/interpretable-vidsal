@@ -32,6 +32,7 @@ from model.metrics import (
 from metrics import prepare_target_last_map
 from model.model import ExplainableVidSalModel
 from pre_process.dataloader import DatasetLoader
+from model.concept_creation import save_prototype_queues
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -104,7 +105,7 @@ PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
 
 # Epochs 1..N: zero dense/CC/SIM/NSS/KL, side-stage, and priority-map loss weights.
 # From epoch N+1 onward, restore the values configured in LOSS_LAMBDA below.
-INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 50
+INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 0
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -162,7 +163,7 @@ LOSS_LAMBDA = {
 
     # Temporarily reduce visual regularizers
     "lambda_visual_entropy": 0.005,
-    "lambda_visual_usage": 0.7,
+    "lambda_visual_usage": 3.0,
     "lambda_visual_equiv": 0.00,
     "lambda_temporal_attention_entropy": 0.0,
 
@@ -1150,6 +1151,7 @@ def train_one_epoch(
             del equiv_model_out
 
     mean_loss = running_loss / max(num_batches, 1)
+    save_prototype_queues(model)
     if calculate_metrics:
         return mean_loss, metric_averager.mean()
     else:
@@ -1378,10 +1380,10 @@ def main() -> None:
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=128,
-        num_concepts=512,
+        num_concepts=128,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=1,
+        top_k=8,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -1409,6 +1411,9 @@ def main() -> None:
         fine_unary_mask_strength=FINE_UNARY_MASK_STRENGTH,
         stage2_backbone_fusion_enabled=STAGE2_BACKBONE_FUSION_ENABLED,
     ).to_split_devices(backbone_device, head_device)
+
+
+
 
     checkpoint = None
     if loads_checkpoint:

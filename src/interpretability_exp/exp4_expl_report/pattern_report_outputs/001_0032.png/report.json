@@ -1,0 +1,4986 @@
+{
+  "schema_version": 2,
+  "status": "complete",
+  "created_at": "2026-11-12T19:15:00.337271+00:00",
+  "frame": {
+    "id": 0,
+    "dataset": "train",
+    "video": "001",
+    "dataset_index": 0,
+    "window_start": 0,
+    "target_index": 31,
+    "target_name": "0032.png",
+    "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/001/images/0032.png",
+    "thumb_path": "frames/frame_000000000.jpg",
+    "window_names": "[\"0001.png\", \"0002.png\", \"0003.png\", \"0004.png\", \"0005.png\", \"0006.png\", \"0007.png\", \"0008.png\", \"0009.png\", \"0010.png\", \"0011.png\", \"0012.png\", \"0013.png\", \"0014.png\", \"0015.png\", \"0016.png\", \"0017.png\", \"0018.png\", \"0019.png\", \"0020.png\", \"0021.png\", \"0022.png\", \"0023.png\", \"0024.png\", \"0025.png\", \"0026.png\", \"0027.png\", \"0028.png\", \"0029.png\", \"0030.png\", \"0031.png\", \"0032.png\"]",
+    "input_h": 360,
+    "input_w": 640
+  },
+  "replay": {
+    "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261111_182327/best_checkpoint.pth",
+    "checkpoint_sha256": "f9dc67d56312956f9f7f6a3942b01014b9368061b4d51c267ffaa60be0e11cca",
+    "evaluation_file": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/evaluation.py",
+    "evaluation_sha256": "facf896a387d1e02efc0417ef13452a8d16da127409f320265f9dd43a5e7c173",
+    "window_names": [
+      "0001.png",
+      "0002.png",
+      "0003.png",
+      "0004.png",
+      "0005.png",
+      "0006.png",
+      "0007.png",
+      "0008.png",
+      "0009.png",
+      "0010.png",
+      "0011.png",
+      "0012.png",
+      "0013.png",
+      "0014.png",
+      "0015.png",
+      "0016.png",
+      "0017.png",
+      "0018.png",
+      "0019.png",
+      "0020.png",
+      "0021.png",
+      "0022.png",
+      "0023.png",
+      "0024.png",
+      "0025.png",
+      "0026.png",
+      "0027.png",
+      "0028.png",
+      "0029.png",
+      "0030.png",
+      "0031.png",
+      "0032.png"
+    ],
+    "window_len": 32,
+    "grid": [
+      7,
+      12
+    ],
+    "device": "cuda:0",
+    "max_feature_difference": 0.0,
+    "max_score_difference": 0.0,
+    "max_rgb_descriptor_difference": 0.0
+  },
+  "protocol": {
+    "stage": "stage4",
+    "saliency_percentile": 0.97,
+    "percentile_definition": "ascending midrank of mean raw predicted saliency_map per stage4 grid cell within its own frame; ties preserved",
+    "top_k": 5,
+    "top_k_before_saliency_split": true,
+    "thresholds": [
+      0.0,
+      0.6,
+      0.2
+    ],
+    "cached_graph_thresholds": [
+      0.2,
+      0.6,
+      0.2
+    ],
+    "min_group_size": 2,
+    "heatmap_alpha": 0.5,
+    "patch_grid_cols": 6,
+    "heatmap_display": "jet_overlay_v1",
+    "llm_provider": "gemini",
+    "llm_model": "gemini-3.5-flash-lite",
+    "other_videos_only": true,
+    "max_matches_per_video": 1,
+    "video_identity": "(dataset, video)",
+    "top_k_after_video_deduplication": true,
+    "ranking": "stage4 cosine descending, RGB MAE ascending, RGB structure cosine descending, node ID ascending",
+    "source_graph": "/data/quantization/zaima/videosal_datasets/dhf1k/explanation_graphs/visual_graph_outputs",
+    "prototype_graph": "/data/quantization/zaima/videosal_datasets/dhf1k/explanation_graphs/prototype_graph_outputs",
+    "source_manifest_sha256": "d32b249fdb2e18283c503ae8c753441670598dfda499a7f4c3200bcfc88d4868",
+    "anchor_in_llm_inputs": true,
+    "queries_per_anchor": 1,
+    "query_scope": "anchor_plus_all_matches",
+    "empty_group_policy": "skip without refilling",
+    "small_group_policy": "skip anchors below minimum retrieved matches",
+    "edge_source": "exact_implicit_graph",
+    "image_context_mode": "padded_patch_red_box_v1",
+    "context_padding_fraction_per_side": 0.5,
+    "context_target": "original patch inside red box; surrounding pixels provide context only"
+  },
+  "anchors": [
+    {
+      "anchor": {
+        "id": 30,
+        "frame_id": 0,
+        "stage": "stage4",
+        "row": 2,
+        "col": 6,
+        "grid_h": 7,
+        "grid_w": 12,
+        "pred_score": 44.41280746459961,
+        "pred_percentile": 1.0,
+        "gt_score": 0.441463828086853,
+        "gt_percentile": 1.0,
+        "topk_ids": [
+          182,
+          121,
+          92,
+          235,
+          9,
+          215,
+          33,
+          208,
+          250,
+          6,
+          44,
+          205,
+          11,
+          58,
+          145,
+          185
+        ],
+        "topk_logits": [
+          8.537946701049805,
+          8.31473159790039,
+          8.31473159790039,
+          8.147321701049805,
+          7.979910850524902,
+          7.924107074737549,
+          7.8125,
+          7.7566962242126465,
+          6.808035850524902,
+          6.752232074737549,
+          6.724330425262451,
+          6.668526649475098,
+          6.640625,
+          6.640625,
+          6.612723350524902,
+          6.529017925262451
+        ],
+        "active_ids": [
+          9,
+          33,
+          92,
+          121,
+          182,
+          208,
+          215,
+          235
+        ],
+        "active_weights": [
+          0.10733786225318909,
+          0.0907919630408287,
+          0.15002503991127014,
+          0.15002503991127014,
+          0.18754473328590393,
+          0.08586419373750687,
+          0.10151208192110062,
+          0.1268991231918335
+        ],
+        "dataset": "train",
+        "video": "001",
+        "target_name": "0032.png",
+        "target_index": 31,
+        "window_start": 0,
+        "dataset_index": 0,
+        "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/001/images/0032.png",
+        "thumb_path": "frames/frame_000000000.jpg",
+        "input_h": 360,
+        "input_w": 640,
+        "replayed_pred_score": 44.41280746459961,
+        "replayed_pred_percentile": 1.0,
+        "crop_file": "crops/anchor_30.png",
+        "frame_file": "frame.png",
+        "crop_source": "replayed model-input RGB",
+        "api_context": {
+          "mode": "padded_patch_red_box_v1",
+          "file": "api_crops/anchor_30.png",
+          "padding_fraction_per_side": 0.5,
+          "frame_size": [
+            640,
+            360
+          ],
+          "original_patch_box": [
+            320,
+            103,
+            373,
+            154
+          ],
+          "context_crop_box": [
+            293,
+            77,
+            400,
+            180
+          ],
+          "context_size": [
+            107,
+            103
+          ],
+          "transmitted_size": [
+            107,
+            103
+          ],
+          "red_box_inclusive": [
+            27,
+            26,
+            79,
+            76
+          ],
+          "box_width": 2
+        }
+      },
+      "matches": [
+        {
+          "id": 118811,
+          "frame_id": 1414,
+          "stage": "stage4",
+          "row": 2,
+          "col": 11,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 0.2437898963689804,
+          "pred_percentile": 0.8795180722891566,
+          "gt_score": 0.0,
+          "gt_percentile": 0.40963855421686746,
+          "topk_ids": [
+            182,
+            121,
+            92,
+            235,
+            215,
+            9,
+            33,
+            208,
+            250,
+            205,
+            44,
+            6,
+            58,
+            11,
+            145,
+            185
+          ],
+          "topk_logits": [
+            8.59375,
+            8.426339149475098,
+            8.426339149475098,
+            8.370535850524902,
+            8.147321701049805,
+            7.533482074737549,
+            7.3660712242126465,
+            7.254464149475098,
+            6.863839149475098,
+            6.8359375,
+            6.8359375,
+            6.7801337242126465,
+            6.724330425262451,
+            6.696428298950195,
+            6.668526649475098,
+            6.668526649475098
+          ],
+          "active_ids": [
+            9,
+            33,
+            92,
+            121,
+            182,
+            208,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.06881943345069885,
+            0.05821105092763901,
+            0.16806373000144958,
+            0.16806373000144958,
+            0.19869162142276764,
+            0.0520637072622776,
+            0.1271446943283081,
+            0.1589420884847641
+          ],
+          "dataset": "train",
+          "video": "149",
+          "target_name": "0608.png",
+          "target_index": 607,
+          "window_start": 576,
+          "dataset_index": 1414,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/149/images/0608.png",
+          "thumb_path": "frames/frame_000001414.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6862545013427734,
+          "rgb_mae": 0.23080332577228546,
+          "rgb_structure_cosine": 0.22335919737815857,
+          "crop_file": "crops/node_118811.png",
+          "frame_file": "frames/frame_000001414.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_118811.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              352,
+              62,
+              384,
+              93
+            ],
+            "context_crop_box": [
+              336,
+              46,
+              384,
+              109
+            ],
+            "context_size": [
+              48,
+              63
+            ],
+            "transmitted_size": [
+              48,
+              63
+            ],
+            "red_box_inclusive": [
+              16,
+              16,
+              47,
+              46
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 430386,
+          "frame_id": 5123,
+          "stage": "stage4",
+          "row": 4,
+          "col": 6,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 52.368499755859375,
+          "pred_percentile": 1.0,
+          "gt_score": 0.3516867458820343,
+          "gt_percentile": 1.0,
+          "topk_ids": [
+            9,
+            182,
+            208,
+            33,
+            92,
+            121,
+            235,
+            215,
+            250,
+            6,
+            44,
+            11,
+            205,
+            58,
+            145,
+            21
+          ],
+          "topk_logits": [
+            8.31473159790039,
+            8.31473159790039,
+            8.258928298950195,
+            8.258928298950195,
+            8.091517448425293,
+            8.035714149475098,
+            7.924107074737549,
+            7.645089149475098,
+            6.640625,
+            6.5848212242126465,
+            6.501115798950195,
+            6.473214149475098,
+            6.473214149475098,
+            6.4453125,
+            6.4453125,
+            6.361607074737549
+          ],
+          "active_ids": [
+            9,
+            33,
+            92,
+            121,
+            182,
+            208,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.15068306028842926,
+            0.1425047665834427,
+            0.12053794413805008,
+            0.113995760679245,
+            0.15068306028842926,
+            0.1425047665834427,
+            0.07713339477777481,
+            0.101957306265831
+          ],
+          "dataset": "train",
+          "video": "568",
+          "target_name": "0224.png",
+          "target_index": 223,
+          "window_start": 192,
+          "dataset_index": 5123,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/568/images/0224.png",
+          "thumb_path": "frames/frame_000005123.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6591649055480957,
+          "rgb_mae": 0.2778789699077606,
+          "rgb_structure_cosine": 0.2497868835926056,
+          "crop_file": "crops/node_430386.png",
+          "frame_file": "frames/frame_000005123.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_430386.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              192,
+              123,
+              224,
+              154
+            ],
+            "context_crop_box": [
+              176,
+              107,
+              240,
+              170
+            ],
+            "context_size": [
+              64,
+              63
+            ],
+            "transmitted_size": [
+              64,
+              63
+            ],
+            "red_box_inclusive": [
+              16,
+              16,
+              47,
+              46
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 81269,
+          "frame_id": 967,
+          "stage": "stage4",
+          "row": 3,
+          "col": 5,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 42.929840087890625,
+          "pred_percentile": 1.0,
+          "gt_score": 0.4516433775424957,
+          "gt_percentile": 1.0,
+          "topk_ids": [
+            9,
+            208,
+            33,
+            182,
+            121,
+            92,
+            235,
+            215,
+            250,
+            44,
+            58,
+            6,
+            205,
+            11,
+            145,
+            21
+          ],
+          "topk_logits": [
+            8.649553298950195,
+            8.537946701049805,
+            8.537946701049805,
+            8.147321701049805,
+            7.868303298950195,
+            7.868303298950195,
+            7.7566962242126465,
+            7.3660712242126465,
+            6.668526649475098,
+            6.556919574737549,
+            6.529017925262451,
+            6.501115798950195,
+            6.4453125,
+            6.4453125,
+            6.3895087242126465,
+            6.333705425262451
+          ],
+          "active_ids": [
+            9,
+            33,
+            92,
+            121,
+            182,
+            208,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.2001524120569229,
+            0.17901553213596344,
+            0.09163645654916763,
+            0.09163645654916763,
+            0.12112797051668167,
+            0.17901553213596344,
+            0.05545639991760254,
+            0.08195924013853073
+          ],
+          "dataset": "train",
+          "video": "099",
+          "target_name": "0224.png",
+          "target_index": 223,
+          "window_start": 192,
+          "dataset_index": 967,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/099/images/0224.png",
+          "thumb_path": "frames/frame_000000967.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6488794088363647,
+          "rgb_mae": 0.1995612382888794,
+          "rgb_structure_cosine": 0.3028355538845062,
+          "crop_file": "crops/node_81269.png",
+          "frame_file": "frames/frame_000000967.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_81269.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              160,
+              93,
+              192,
+              123
+            ],
+            "context_crop_box": [
+              144,
+              78,
+              208,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 138306,
+          "frame_id": 1646,
+          "stage": "stage4",
+          "row": 3,
+          "col": 6,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 64.35391998291016,
+          "pred_percentile": 1.0,
+          "gt_score": 0.4970792829990387,
+          "gt_percentile": 1.0,
+          "topk_ids": [
+            9,
+            182,
+            33,
+            208,
+            121,
+            92,
+            235,
+            215,
+            250,
+            44,
+            6,
+            11,
+            205,
+            58,
+            185,
+            21
+          ],
+          "topk_logits": [
+            8.426339149475098,
+            8.370535850524902,
+            8.258928298950195,
+            8.091517448425293,
+            8.091517448425293,
+            8.091517448425293,
+            7.979910850524902,
+            7.645089149475098,
+            6.891740798950195,
+            6.7801337242126465,
+            6.752232074737549,
+            6.724330425262451,
+            6.696428298950195,
+            6.696428298950195,
+            6.612723350524902,
+            6.5848212242126465
+          ],
+          "active_ids": [
+            9,
+            33,
+            92,
+            121,
+            182,
+            208,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.165680393576622,
+            0.14014111459255219,
+            0.11853863298892975,
+            0.11853863298892975,
+            0.1566881239414215,
+            0.11853863298892975,
+            0.07585401833057404,
+            0.1060204952955246
+          ],
+          "dataset": "train",
+          "video": "173",
+          "target_name": "0416.png",
+          "target_index": 415,
+          "window_start": 384,
+          "dataset_index": 1646,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/173/images/0416.png",
+          "thumb_path": "frames/frame_000001646.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6292486786842346,
+          "rgb_mae": 0.2281019240617752,
+          "rgb_structure_cosine": 0.2066517472267151,
+          "crop_file": "crops/node_138306.png",
+          "frame_file": "frames/frame_000001646.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_138306.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              192,
+              93,
+              224,
+              123
+            ],
+            "context_crop_box": [
+              176,
+              78,
+              240,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 130831,
+          "frame_id": 1557,
+          "stage": "stage4",
+          "row": 3,
+          "col": 7,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 59.602081298828125,
+          "pred_percentile": 1.0,
+          "gt_score": 0.4167017638683319,
+          "gt_percentile": 1.0,
+          "topk_ids": [
+            9,
+            33,
+            208,
+            182,
+            121,
+            92,
+            235,
+            215,
+            250,
+            6,
+            44,
+            58,
+            205,
+            11,
+            145,
+            179
+          ],
+          "topk_logits": [
+            8.59375,
+            8.482142448425293,
+            8.31473159790039,
+            8.258928298950195,
+            7.924107074737549,
+            7.924107074737549,
+            7.8125,
+            7.421875,
+            6.724330425262451,
+            6.5848212242126465,
+            6.529017925262451,
+            6.473214149475098,
+            6.4453125,
+            6.4453125,
+            6.417410850524902,
+            6.3895087242126465
+          ],
+          "active_ids": [
+            9,
+            33,
+            92,
+            121,
+            182,
+            208,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.193881556391716,
+            0.17340673506259918,
+            0.09924629330635071,
+            0.09924629330635071,
+            0.13871559500694275,
+            0.1466764211654663,
+            0.06006170064210892,
+            0.088765449821949
+          ],
+          "dataset": "train",
+          "video": "163",
+          "target_name": "0672.png",
+          "target_index": 671,
+          "window_start": 640,
+          "dataset_index": 1557,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/163/images/0672.png",
+          "thumb_path": "frames/frame_000001557.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6256647109985352,
+          "rgb_mae": 0.22232241928577423,
+          "rgb_structure_cosine": 0.22158780694007874,
+          "crop_file": "crops/node_130831.png",
+          "frame_file": "frames/frame_000001557.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_130831.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              224,
+              93,
+              256,
+              123
+            ],
+            "context_crop_box": [
+              208,
+              78,
+              272,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        }
+      ],
+      "matched_video_count": 5,
+      "groups": {
+        "all": [
+          118811,
+          430386,
+          81269,
+          138306,
+          130831
+        ],
+        "salient": [
+          430386,
+          81269,
+          138306,
+          130831
+        ],
+        "non_salient": [
+          118811
+        ]
+      },
+      "query": {
+        "status": "complete",
+        "anchor_id": 30,
+        "node_ids": [
+          118811,
+          430386,
+          81269,
+          138306,
+          130831
+        ],
+        "includes_anchor": true,
+        "matched_patch_count": 5,
+        "image_context_mode": "padded_patch_red_box_v1",
+        "image_order": [
+          {
+            "role": "anchor",
+            "node_id": 30
+          },
+          {
+            "role": "match",
+            "node_id": 118811
+          },
+          {
+            "role": "match",
+            "node_id": 430386
+          },
+          {
+            "role": "match",
+            "node_id": 81269
+          },
+          {
+            "role": "match",
+            "node_id": 138306
+          },
+          {
+            "role": "match",
+            "node_id": 130831
+          }
+        ],
+        "prompt": "Each image is a context crop. The RED RECTANGLE marks the original target patch.\nCompare only the visual content INSIDE the rectangles. Use the surroundings\nonly to help identify what the boxed content depicts. Ignore the red outlines\nthemselves. Distinguish visible appearance from uncertain semantic inferences.\nThe first image is the ANCHOR PATCH; subsequent images are numbered matches.\n\nYour task is to identify the visual pattern shared by most of the given patches. Observe each patch, and report the visual pattern present in STRICTLY MORE THAN HALF of the 6 patches as the common visual pattern.\n\nEach image contains two regions:\n\n- **Target patch:** ONLY the content inside the red rectangle. This is the region you must describe and compare.\n- **Surrounding context:** The content outside the rectangle. Use it only to help recognize what the patch depicts.\n\nThe first image is the anchor. Subsequent images are labeled Match 1, Match 2, and so on. Use these labels in your answer.\n\n**Rules:**\n\n1. Describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.\n2. Context may help identify a boxed object part, but your description must remain specific to that part. For example, if the box contains dark hair and a small area of skin, describe those features\u2014not the person's face, clothing, or surroundings outside the box.\n3. If an object extends outside the box, describe only its visible portion inside the box. Do not attribute its unseen features to the patch.\n4. Identify shared colors, textures, edge orientations, shapes, contrasts, or semantic objects or parts. \n6. Ignore the red rectangles themselves. Do not count features outside the boxes as supporting evidence.\n7. If there is no clear pattern shared by most target patches, state this explicitly.\n\nBefore answering, check that every described feature belongs inside a target box.\n\nReturn ONLY one valid JSON object with the following schema (replace the placeholders):\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"A concise 1\u20133 sentence description.\",\n  \"Visual pattern title\": \"A short title, or None if there is no majority pattern.\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": []\n}\n\nUse arrays of exact image labels for Supporting patches and Non-supporting patches,\nfor example [\"Anchor\", \"Match 2\"]. Every label must appear in exactly one of these\ntwo arrays. Include one description for every image, in the given image order.\nIf no majority pattern is found, set Visual pattern title to \"None\", explain why\nin the common-pattern description, use an empty supporting array, and put all\nlabels in the non-supporting array. Never invent semantic identities; state\nuncertainty when a visible object or part cannot be confidently identified.",
+        "anchor_index": 1,
+        "submitted_image_count": 6,
+        "submitted_match_count": 5,
+        "submitted_image_files": [
+          "api_crops/anchor_30.png",
+          "api_crops/node_118811.png",
+          "api_crops/node_430386.png",
+          "api_crops/node_81269.png",
+          "api_crops/node_138306.png",
+          "api_crops/node_130831.png"
+        ],
+        "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"Dark hair, skin-toned regions, and reddish clothing/lighting within the rectangular border.\",\n        \"Semantic object or part\": \"A person's head and upper body.\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"Light skin tones, dark hair, and an open mouth showing teeth against a reddish and greenish background.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"Dark and reddish tones, indistinct facial features in dim lighting.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"Dark brown and black hair/skin tones with shadowed facial features.\",\n        \"Semantic object or part\": \"A person's head and face.\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"Dark hair framing light skin, with visible facial features like an eye, nose, and smiling mouth.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"Light skin tones, dark hair, and facial features under indoor lighting.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"All target patches depict a human face or head under various lighting conditions and angles.\",\n  \"Visual pattern title\": \"Human face\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 4\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": []\n}\n```",
+        "raw_response": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"Dark hair, skin-toned regions, and reddish clothing/lighting within the rectangular border.\",\n        \"Semantic object or part\": \"A person's head and upper body.\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"Light skin tones, dark hair, and an open mouth showing teeth against a reddish and greenish background.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"Dark and reddish tones, indistinct facial features in dim lighting.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"Dark brown and black hair/skin tones with shadowed facial features.\",\n        \"Semantic object or part\": \"A person's head and face.\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"Dark hair framing light skin, with visible facial features like an eye, nose, and smiling mouth.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"Light skin tones, dark hair, and facial features under indoor lighting.\",\n        \"Semantic object or part\": \"A person's face.\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"All target patches depict a human face or head under various lighting conditions and angles.\",\n  \"Visual pattern title\": \"Human face\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 4\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": []\n}\n```",
+                    "thoughtSignature": "Et0JCtoJAWkUfRPCyRu2YtN5TDaDz6GSxX8KjzQarD/pXqBKJeiL8HscwGNKwydj9F74qYJUPFuF5iSIqyidYbmyJrfhXSq2TA40j3hyZjuQCFpFIY3ov5MuLklaXmb3xJdlvwumLh0cOcli0smvnmcFUBoZUP8/Nef4ewyzm42Bl5G/x3QpjMLJu4lY5DCaqBYVGnyD9L/HFJ+S8rUPiMjppanIuFkM9QoKkgcgBTGO+VkkHOIjYV4niqxxGmbzYbov7qEQHz3CGbVb5eWXV0u5nK1x6PFF2fWfFifXLUO/09VgwXiMd4n7BMt+/DysbxC7RBX5y+Ba2aHA6ZfQj+6jE1T7p1wr4Sz19bYXP2u96L+V0a1XO87Xo9gYQLI39qKrYyT0iaSKECBZMBJ3zG29VLGymvdRW4Ts6fux0u/usW6gIsqo+Vq/73uyRnQGRJu+xVe6a90mWAvEnZ7aaz6eGnC+kAkZJQU4ZbHt9QeazVdBmOY9u87SNlZmTJUgRIjznj0P/9jnY1w7r/4Ann0I6BhYDTXUwyZNwM6c7yrGQHX9SwOrw/zw51WT/9IJYcih8bGAGz8I7rUsU1QRXxbnCD9OFNUgWKKgtrg2IxnQgdoYkm5nQISRaNrh1GEoHJ8/Q62CO1Tb0WL2VV607vJUdXIBXLa1XVG9FZah5++CzPLGRADUaolHy05MhDAR0M2TbmADuGLmuTXA+9YvCjmZ4DLezFCaIAsaRUVAOMkum9p0UkY3MZKciwUTeF37EwYuN+LMO8eWuvn4amZOxcBJv9dW6JjLHFZSryTNwTXl0whp2Uf8A8fA4ALlE9Tu8oDXXUGMCPGqpxoni2avojy4Fu4jKhKRpixJo+tA0Ejd+bibRWS93YgEtTT8L03jlS4Y2b8D3HL+maZ+1Fy/3OMLF7NsJGD/XXHZkQMq/znc2BN0uCwpFLOuFGgebypkMu0jmZbD/pLbfs17CkO+vn9s4C6/JJDCJwAtB6JEnx3N0f7S3SBlLbDWOCrmCkKHsvJx1iUJ1kMrmZcbOSucnRv/LtlMfYlQLYuYSxoMTdgA4+ImIo8qCh+LlTwYO21bsUJjYBqxflkQQ5Xwmzq9/aTsP1ilqL2pIW9HzPonTD3A1eXQbrKtadjzTM/6MJyGQo9X2s361b/B6X6BLAtUgRnchQhJTJXdh4dj5k1/o8AMY+HLkKfx9gsKwXOxl0rsZr8bCCOu1l1KOUFOWKHYu+kEqTb1uAotV6plHbV6CSUo+wCGBZQIpwYajkEDZ+hPTBWkjtV5+k9hZJw2vKQluEO4m+ZDC4dfNJPSqfVyYVhG1G3N77zL1mFfuIbzBp21XznRgk494JSoPPp7P9/+SZwfz/7vEqc/+L7hr7FYRVCFUVF+MYkFelLt6kOunjfmXfKlqdTTUFoHLLVGRESLYkHdUYfSLHrK0eDSa9ym3nTXMRXqTS2jGKHX1cAaXrxW3tBi3EAkD9Zm3dhvpXP4Q0kE02MrrzBA17ugtVLPZwEisa7uKDZWSNH6GSWr3aOnyj4YtDESpaXK8xjcz0M/cfN5jMbJu/FwiXCXBmOzux2wXHzsA+aMEdYom5ja5bxMVD+JZvfnGHC5vTv15RJkncrVguWmpgq0h8aWT29v26gxE2v0vxR0nGgpqiv1gW3s"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7396,
+            "candidatesTokenCount": 469,
+            "totalTokenCount": 8202,
+            "promptTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 6543
+              },
+              {
+                "modality": "TEXT",
+                "tokenCount": 853
+              }
+            ],
+            "thoughtsTokenCount": 337,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-3.5-flash-lite",
+          "responseId": "OBD2as7vLOOPytMP_fCl8A0"
+        },
+        "prompt_mode": "gemini_single_anchor_all_matches",
+        "response_model": "gemini-3.5-flash-lite",
+        "input_tokens": 7396,
+        "generated_tokens": 469,
+        "thinking_tokens": 337,
+        "finish_reason": "STOP",
+        "api_attempts": 1,
+        "possibly_truncated": false,
+        "api_image_payload": {
+          "image_count": 6,
+          "images": [
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/anchor_30.png",
+              "original_size": [
+                107,
+                103
+              ],
+              "transmitted_size": [
+                107,
+                103
+              ],
+              "original_bytes": 23634,
+              "transmitted_bytes": 5982,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_118811.png",
+              "original_size": [
+                48,
+                63
+              ],
+              "transmitted_size": [
+                48,
+                63
+              ],
+              "original_bytes": 5912,
+              "transmitted_bytes": 1640,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_430386.png",
+              "original_size": [
+                64,
+                63
+              ],
+              "transmitted_size": [
+                64,
+                63
+              ],
+              "original_bytes": 7672,
+              "transmitted_bytes": 2065,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_81269.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 9131,
+              "transmitted_bytes": 2637,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_138306.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 5824,
+              "transmitted_bytes": 1588,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_130831.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 7626,
+              "transmitted_bytes": 2130,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            }
+          ],
+          "original_request_bytes": 84077,
+          "transmitted_request_bytes": 25739,
+          "reduction_percent": 69.38639580384647
+        }
+      },
+      "prototype_overlap": {
+        "definition": "stage4 top-k prototype candidate IDs; not forward-valid participation",
+        "anchor_ids": [
+          6,
+          9,
+          11,
+          33,
+          44,
+          58,
+          92,
+          121,
+          145,
+          182,
+          185,
+          205,
+          208,
+          215,
+          235,
+          250
+        ],
+        "match_count": 5,
+        "matches_with_metadata": 5,
+        "common_to_all": [
+          6,
+          9,
+          11,
+          33,
+          44,
+          58,
+          92,
+          121,
+          182,
+          205,
+          208,
+          215,
+          235,
+          250
+        ],
+        "recurring": [
+          {
+            "id": 6,
+            "count": 5
+          },
+          {
+            "id": 9,
+            "count": 5
+          },
+          {
+            "id": 11,
+            "count": 5
+          },
+          {
+            "id": 21,
+            "count": 3
+          },
+          {
+            "id": 33,
+            "count": 5
+          },
+          {
+            "id": 44,
+            "count": 5
+          },
+          {
+            "id": 58,
+            "count": 5
+          },
+          {
+            "id": 92,
+            "count": 5
+          },
+          {
+            "id": 121,
+            "count": 5
+          },
+          {
+            "id": 145,
+            "count": 4
+          },
+          {
+            "id": 182,
+            "count": 5
+          },
+          {
+            "id": 185,
+            "count": 2
+          },
+          {
+            "id": 205,
+            "count": 5
+          },
+          {
+            "id": 208,
+            "count": 5
+          },
+          {
+            "id": 215,
+            "count": 5
+          },
+          {
+            "id": 235,
+            "count": 5
+          },
+          {
+            "id": 250,
+            "count": 5
+          }
+        ],
+        "per_match": [
+          {
+            "node_id": 118811,
+            "topk_ids": [
+              6,
+              9,
+              11,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              182,
+              185,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "with_anchor": [
+              6,
+              9,
+              11,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              182,
+              185,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 5
+              },
+              {
+                "id": 9,
+                "count": 5
+              },
+              {
+                "id": 11,
+                "count": 5
+              },
+              {
+                "id": 33,
+                "count": 5
+              },
+              {
+                "id": 44,
+                "count": 5
+              },
+              {
+                "id": 58,
+                "count": 5
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 145,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 185,
+                "count": 2
+              },
+              {
+                "id": 205,
+                "count": 5
+              },
+              {
+                "id": 208,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              },
+              {
+                "id": 250,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 430386,
+            "topk_ids": [
+              6,
+              9,
+              11,
+              21,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              182,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "with_anchor": [
+              6,
+              9,
+              11,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              182,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 5
+              },
+              {
+                "id": 9,
+                "count": 5
+              },
+              {
+                "id": 11,
+                "count": 5
+              },
+              {
+                "id": 21,
+                "count": 3
+              },
+              {
+                "id": 33,
+                "count": 5
+              },
+              {
+                "id": 44,
+                "count": 5
+              },
+              {
+                "id": 58,
+                "count": 5
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 145,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 205,
+                "count": 5
+              },
+              {
+                "id": 208,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              },
+              {
+                "id": 250,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 81269,
+            "topk_ids": [
+              6,
+              9,
+              11,
+              21,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              182,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "with_anchor": [
+              6,
+              9,
+              11,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              182,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 5
+              },
+              {
+                "id": 9,
+                "count": 5
+              },
+              {
+                "id": 11,
+                "count": 5
+              },
+              {
+                "id": 21,
+                "count": 3
+              },
+              {
+                "id": 33,
+                "count": 5
+              },
+              {
+                "id": 44,
+                "count": 5
+              },
+              {
+                "id": 58,
+                "count": 5
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 145,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 205,
+                "count": 5
+              },
+              {
+                "id": 208,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              },
+              {
+                "id": 250,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 138306,
+            "topk_ids": [
+              6,
+              9,
+              11,
+              21,
+              33,
+              44,
+              58,
+              92,
+              121,
+              182,
+              185,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "with_anchor": [
+              6,
+              9,
+              11,
+              33,
+              44,
+              58,
+              92,
+              121,
+              182,
+              185,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 5
+              },
+              {
+                "id": 9,
+                "count": 5
+              },
+              {
+                "id": 11,
+                "count": 5
+              },
+              {
+                "id": 21,
+                "count": 3
+              },
+              {
+                "id": 33,
+                "count": 5
+              },
+              {
+                "id": 44,
+                "count": 5
+              },
+              {
+                "id": 58,
+                "count": 5
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 185,
+                "count": 2
+              },
+              {
+                "id": 205,
+                "count": 5
+              },
+              {
+                "id": 208,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              },
+              {
+                "id": 250,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 130831,
+            "topk_ids": [
+              6,
+              9,
+              11,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              179,
+              182,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "with_anchor": [
+              6,
+              9,
+              11,
+              33,
+              44,
+              58,
+              92,
+              121,
+              145,
+              182,
+              205,
+              208,
+              215,
+              235,
+              250
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 5
+              },
+              {
+                "id": 9,
+                "count": 5
+              },
+              {
+                "id": 11,
+                "count": 5
+              },
+              {
+                "id": 33,
+                "count": 5
+              },
+              {
+                "id": 44,
+                "count": 5
+              },
+              {
+                "id": 58,
+                "count": 5
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 145,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 205,
+                "count": 5
+              },
+              {
+                "id": 208,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              },
+              {
+                "id": 250,
+                "count": 5
+              }
+            ]
+          }
+        ]
+      },
+      "pattern_analysis": {
+        "schema_version": 1,
+        "available": true,
+        "title": "Human face",
+        "description": "All target patches depict a human face or head under various lighting conditions and angles.",
+        "supporting_patches": [
+          "Anchor",
+          "Match 1",
+          "Match 2",
+          "Match 3",
+          "Match 4",
+          "Match 5"
+        ],
+        "supporting_count": 6,
+        "nonsupporting_patches": [],
+        "nonsupporting_count": 0,
+        "unknown_patches": [],
+        "patches": [
+          {
+            "index": 0,
+            "label": "Anchor",
+            "support": "supporting",
+            "low_level_visual_features": "Dark hair, skin-toned regions, and reddish clothing/lighting within the rectangular border.",
+            "semantic_object_or_part": "A person's head and upper body."
+          },
+          {
+            "index": 1,
+            "label": "Match 1",
+            "support": "supporting",
+            "low_level_visual_features": "Light skin tones, dark hair, and an open mouth showing teeth against a reddish and greenish background.",
+            "semantic_object_or_part": "A person's face."
+          },
+          {
+            "index": 2,
+            "label": "Match 2",
+            "support": "supporting",
+            "low_level_visual_features": "Dark and reddish tones, indistinct facial features in dim lighting.",
+            "semantic_object_or_part": "A person's face."
+          },
+          {
+            "index": 3,
+            "label": "Match 3",
+            "support": "supporting",
+            "low_level_visual_features": "Dark brown and black hair/skin tones with shadowed facial features.",
+            "semantic_object_or_part": "A person's head and face."
+          },
+          {
+            "index": 4,
+            "label": "Match 4",
+            "support": "supporting",
+            "low_level_visual_features": "Dark hair framing light skin, with visible facial features like an eye, nose, and smiling mouth.",
+            "semantic_object_or_part": "A person's face."
+          },
+          {
+            "index": 5,
+            "label": "Match 5",
+            "support": "supporting",
+            "low_level_visual_features": "Light skin tones, dark hair, and facial features under indoor lighting.",
+            "semantic_object_or_part": "A person's face."
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "anchor": {
+        "id": 29,
+        "frame_id": 0,
+        "stage": "stage4",
+        "row": 2,
+        "col": 5,
+        "grid_h": 7,
+        "grid_w": 12,
+        "pred_score": 21.025341033935547,
+        "pred_percentile": 0.9879518072289156,
+        "gt_score": 0.05326005816459656,
+        "gt_percentile": 0.9156626506024096,
+        "topk_ids": [
+          182,
+          121,
+          92,
+          235,
+          215,
+          9,
+          33,
+          208,
+          205,
+          44,
+          6,
+          111,
+          250,
+          29,
+          58,
+          23
+        ],
+        "topk_logits": [
+          8.59375,
+          8.537946701049805,
+          8.537946701049805,
+          8.426339149475098,
+          8.370535850524902,
+          7.003348350524902,
+          6.808035850524902,
+          6.7801337242126465,
+          6.668526649475098,
+          6.612723350524902,
+          6.5848212242126465,
+          6.5848212242126465,
+          6.5848212242126465,
+          6.556919574737549,
+          6.556919574737549,
+          6.556919574737549
+        ],
+        "active_ids": [
+          9,
+          33,
+          92,
+          121,
+          182,
+          208,
+          215,
+          235
+        ],
+        "active_weights": [
+          0.04019135609269142,
+          0.033060505986213684,
+          0.186466246843338,
+          0.186466246843338,
+          0.19716748595237732,
+          0.03215079754590988,
+          0.1577228605747223,
+          0.16677452623844147
+        ],
+        "dataset": "train",
+        "video": "001",
+        "target_name": "0032.png",
+        "target_index": 31,
+        "window_start": 0,
+        "dataset_index": 0,
+        "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/001/images/0032.png",
+        "thumb_path": "frames/frame_000000000.jpg",
+        "input_h": 360,
+        "input_w": 640,
+        "replayed_pred_score": 21.025341033935547,
+        "replayed_pred_percentile": 0.9879518072289156,
+        "crop_file": "crops/anchor_29.png",
+        "frame_file": "frame.png",
+        "crop_source": "replayed model-input RGB",
+        "api_context": {
+          "mode": "padded_patch_red_box_v1",
+          "file": "api_crops/anchor_29.png",
+          "padding_fraction_per_side": 0.5,
+          "frame_size": [
+            640,
+            360
+          ],
+          "original_patch_box": [
+            267,
+            103,
+            320,
+            154
+          ],
+          "context_crop_box": [
+            240,
+            77,
+            347,
+            180
+          ],
+          "context_size": [
+            107,
+            103
+          ],
+          "transmitted_size": [
+            107,
+            103
+          ],
+          "red_box_inclusive": [
+            27,
+            26,
+            79,
+            76
+          ],
+          "box_width": 2
+        }
+      },
+      "matches": [
+        {
+          "id": 180224,
+          "frame_id": 2145,
+          "stage": "stage4",
+          "row": 3,
+          "col": 8,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 5.063415050506592,
+          "pred_percentile": 0.927710843373494,
+          "gt_score": 0.008062376640737057,
+          "gt_percentile": 0.7590361445783133,
+          "topk_ids": [
+            92,
+            182,
+            121,
+            215,
+            235,
+            6,
+            205,
+            42,
+            29,
+            23,
+            44,
+            111,
+            161,
+            204,
+            12,
+            15
+          ],
+          "topk_logits": [
+            8.59375,
+            8.537946701049805,
+            8.537946701049805,
+            8.482142448425293,
+            8.482142448425293,
+            6.752232074737549,
+            6.752232074737549,
+            6.724330425262451,
+            6.724330425262451,
+            6.724330425262451,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.668526649475098,
+            6.668526649475098
+          ],
+          "active_ids": [
+            6,
+            23,
+            92,
+            121,
+            182,
+            205,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.030781958252191544,
+            0.0299349594861269,
+            0.19411417841911316,
+            0.18357867002487183,
+            0.18357867002487183,
+            0.030781958252191544,
+            0.17361479997634888,
+            0.17361479997634888
+          ],
+          "dataset": "train",
+          "video": "233",
+          "target_name": "0160.png",
+          "target_index": 159,
+          "window_start": 128,
+          "dataset_index": 2145,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/233/images/0160.png",
+          "thumb_path": "frames/frame_000002145.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6343991160392761,
+          "rgb_mae": 0.27523908019065857,
+          "rgb_structure_cosine": 0.24788419902324677,
+          "crop_file": "crops/node_180224.png",
+          "frame_file": "frames/frame_000002145.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_180224.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              256,
+              93,
+              288,
+              123
+            ],
+            "context_crop_box": [
+              240,
+              78,
+              304,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 127575,
+          "frame_id": 1518,
+          "stage": "stage4",
+          "row": 5,
+          "col": 3,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 0.06356321275234222,
+          "pred_percentile": 0.8554216867469879,
+          "gt_score": 0.0,
+          "gt_percentile": 0.37349397590361444,
+          "topk_ids": [
+            182,
+            92,
+            121,
+            235,
+            215,
+            228,
+            134,
+            104,
+            68,
+            66,
+            80,
+            138,
+            109,
+            53,
+            87,
+            23
+          ],
+          "topk_logits": [
+            8.537946701049805,
+            8.537946701049805,
+            8.537946701049805,
+            8.482142448425293,
+            8.482142448425293,
+            6.8359375,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.752232074737549
+          ],
+          "active_ids": [
+            68,
+            92,
+            104,
+            121,
+            182,
+            215,
+            228,
+            235
+          ],
+          "active_weights": [
+            0.0326618030667305,
+            0.18421751260757446,
+            0.0326618030667305,
+            0.18421751260757446,
+            0.18421751260757446,
+            0.17421895265579224,
+            0.03358595445752144,
+            0.17421895265579224
+          ],
+          "dataset": "train",
+          "video": "160",
+          "target_name": "0096.png",
+          "target_index": 95,
+          "window_start": 64,
+          "dataset_index": 1518,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/160/images/0096.png",
+          "thumb_path": "frames/frame_000001518.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6295638084411621,
+          "rgb_mae": 0.2388279289007187,
+          "rgb_structure_cosine": 0.3053012192249298,
+          "crop_file": "crops/node_127575.png",
+          "frame_file": "frames/frame_000001518.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_127575.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              96,
+              154,
+              128,
+              185
+            ],
+            "context_crop_box": [
+              80,
+              138,
+              144,
+              201
+            ],
+            "context_size": [
+              64,
+              63
+            ],
+            "transmitted_size": [
+              64,
+              63
+            ],
+            "red_box_inclusive": [
+              16,
+              16,
+              47,
+              46
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 275649,
+          "frame_id": 3281,
+          "stage": "stage4",
+          "row": 3,
+          "col": 9,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 7.527890682220459,
+          "pred_percentile": 0.927710843373494,
+          "gt_score": 0.0033978447318077087,
+          "gt_percentile": 0.8072289156626506,
+          "topk_ids": [
+            182,
+            92,
+            121,
+            235,
+            215,
+            205,
+            35,
+            6,
+            29,
+            23,
+            9,
+            15,
+            104,
+            42,
+            112,
+            155
+          ],
+          "topk_logits": [
+            8.59375,
+            8.59375,
+            8.537946701049805,
+            8.482142448425293,
+            8.426339149475098,
+            6.696428298950195,
+            6.668526649475098,
+            6.668526649475098,
+            6.640625,
+            6.640625,
+            6.640625,
+            6.640625,
+            6.640625,
+            6.640625,
+            6.640625,
+            6.640625
+          ],
+          "active_ids": [
+            6,
+            35,
+            92,
+            121,
+            182,
+            205,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.028442619368433952,
+            0.028442619368433952,
+            0.19502194225788116,
+            0.18443714082241058,
+            0.19502194225788116,
+            0.02924739010632038,
+            0.16495971381664276,
+            0.17442668974399567
+          ],
+          "dataset": "train",
+          "video": "362",
+          "target_name": "0416.png",
+          "target_index": 415,
+          "window_start": 384,
+          "dataset_index": 3281,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/362/images/0416.png",
+          "thumb_path": "frames/frame_000003281.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6266176700592041,
+          "rgb_mae": 0.2717936336994171,
+          "rgb_structure_cosine": 0.2963615655899048,
+          "crop_file": "crops/node_275649.png",
+          "frame_file": "frames/frame_000003281.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_275649.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              288,
+              93,
+              320,
+              123
+            ],
+            "context_crop_box": [
+              272,
+              78,
+              336,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 301025,
+          "frame_id": 3583,
+          "stage": "stage4",
+          "row": 4,
+          "col": 5,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 14.113551139831543,
+          "pred_percentile": 0.9759036144578314,
+          "gt_score": 0.2191760390996933,
+          "gt_percentile": 0.9879518072289156,
+          "topk_ids": [
+            182,
+            92,
+            121,
+            235,
+            215,
+            9,
+            205,
+            232,
+            23,
+            6,
+            29,
+            44,
+            250,
+            185,
+            12,
+            42
+          ],
+          "topk_logits": [
+            8.59375,
+            8.59375,
+            8.537946701049805,
+            8.426339149475098,
+            8.426339149475098,
+            6.863839149475098,
+            6.7801337242126465,
+            6.724330425262451,
+            6.724330425262451,
+            6.724330425262451,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.668526649475098,
+            6.668526649475098
+          ],
+          "active_ids": [
+            6,
+            9,
+            92,
+            121,
+            182,
+            205,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.030049294233322144,
+            0.03454793989658356,
+            0.19485558569431305,
+            0.18427982926368713,
+            0.19485558569431305,
+            0.03177381306886673,
+            0.16481900215148926,
+            0.16481900215148926
+          ],
+          "dataset": "train",
+          "video": "394",
+          "target_name": "0864.png",
+          "target_index": 863,
+          "window_start": 832,
+          "dataset_index": 3583,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/394/images/0864.png",
+          "thumb_path": "frames/frame_000003583.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6248588562011719,
+          "rgb_mae": 0.2316266894340515,
+          "rgb_structure_cosine": 0.3509581983089447,
+          "crop_file": "crops/node_301025.png",
+          "frame_file": "frames/frame_000003583.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_301025.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              160,
+              123,
+              192,
+              154
+            ],
+            "context_crop_box": [
+              144,
+              107,
+              208,
+              170
+            ],
+            "context_size": [
+              64,
+              63
+            ],
+            "transmitted_size": [
+              64,
+              63
+            ],
+            "red_box_inclusive": [
+              16,
+              16,
+              47,
+              46
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 118314,
+          "frame_id": 1408,
+          "stage": "stage4",
+          "row": 3,
+          "col": 6,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 8.064620018005371,
+          "pred_percentile": 0.963855421686747,
+          "gt_score": 0.20868465304374695,
+          "gt_percentile": 0.963855421686747,
+          "topk_ids": [
+            92,
+            182,
+            121,
+            235,
+            215,
+            104,
+            29,
+            204,
+            134,
+            161,
+            68,
+            53,
+            80,
+            87,
+            35,
+            1
+          ],
+          "topk_logits": [
+            8.537946701049805,
+            8.537946701049805,
+            8.537946701049805,
+            8.482142448425293,
+            8.482142448425293,
+            6.863839149475098,
+            6.8359375,
+            6.8359375,
+            6.8359375,
+            6.8359375,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902
+          ],
+          "active_ids": [
+            29,
+            92,
+            104,
+            121,
+            134,
+            182,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.03349222242832184,
+            0.18370339274406433,
+            0.03443986922502518,
+            0.18370339274406433,
+            0.03349222242832184,
+            0.18370339274406433,
+            0.17373274266719818,
+            0.17373274266719818
+          ],
+          "dataset": "train",
+          "video": "149",
+          "target_name": "0224.png",
+          "target_index": 223,
+          "window_start": 192,
+          "dataset_index": 1408,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/149/images/0224.png",
+          "thumb_path": "frames/frame_000001408.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6232866048812866,
+          "rgb_mae": 0.2667056620121002,
+          "rgb_structure_cosine": 0.2719186842441559,
+          "crop_file": "crops/node_118314.png",
+          "frame_file": "frames/frame_000001408.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_118314.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              192,
+              93,
+              224,
+              123
+            ],
+            "context_crop_box": [
+              176,
+              78,
+              240,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        }
+      ],
+      "matched_video_count": 5,
+      "groups": {
+        "all": [
+          180224,
+          127575,
+          275649,
+          301025,
+          118314
+        ],
+        "salient": [
+          301025
+        ],
+        "non_salient": [
+          180224,
+          127575,
+          275649,
+          118314
+        ]
+      },
+      "query": {
+        "status": "complete",
+        "anchor_id": 29,
+        "node_ids": [
+          180224,
+          127575,
+          275649,
+          301025,
+          118314
+        ],
+        "includes_anchor": true,
+        "matched_patch_count": 5,
+        "image_context_mode": "padded_patch_red_box_v1",
+        "image_order": [
+          {
+            "role": "anchor",
+            "node_id": 29
+          },
+          {
+            "role": "match",
+            "node_id": 180224
+          },
+          {
+            "role": "match",
+            "node_id": 127575
+          },
+          {
+            "role": "match",
+            "node_id": 275649
+          },
+          {
+            "role": "match",
+            "node_id": 301025
+          },
+          {
+            "role": "match",
+            "node_id": 118314
+          }
+        ],
+        "prompt": "Each image is a context crop. The RED RECTANGLE marks the original target patch.\nCompare only the visual content INSIDE the rectangles. Use the surroundings\nonly to help identify what the boxed content depicts. Ignore the red outlines\nthemselves. Distinguish visible appearance from uncertain semantic inferences.\nThe first image is the ANCHOR PATCH; subsequent images are numbered matches.\n\nYour task is to identify the visual pattern shared by most of the given patches. Observe each patch, and report the visual pattern present in STRICTLY MORE THAN HALF of the 6 patches as the common visual pattern.\n\nEach image contains two regions:\n\n- **Target patch:** ONLY the content inside the red rectangle. This is the region you must describe and compare.\n- **Surrounding context:** The content outside the rectangle. Use it only to help recognize what the patch depicts.\n\nThe first image is the anchor. Subsequent images are labeled Match 1, Match 2, and so on. Use these labels in your answer.\n\n**Rules:**\n\n1. Describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.\n2. Context may help identify a boxed object part, but your description must remain specific to that part. For example, if the box contains dark hair and a small area of skin, describe those features\u2014not the person's face, clothing, or surroundings outside the box.\n3. If an object extends outside the box, describe only its visible portion inside the box. Do not attribute its unseen features to the patch.\n4. Identify shared colors, textures, edge orientations, shapes, contrasts, or semantic objects or parts. \n6. Ignore the red rectangles themselves. Do not count features outside the boxes as supporting evidence.\n7. If there is no clear pattern shared by most target patches, state this explicitly.\n\nBefore answering, check that every described feature belongs inside a target box.\n\nReturn ONLY one valid JSON object with the following schema (replace the placeholders):\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"A concise 1\u20133 sentence description.\",\n  \"Visual pattern title\": \"A short title, or None if there is no majority pattern.\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": []\n}\n\nUse arrays of exact image labels for Supporting patches and Non-supporting patches,\nfor example [\"Anchor\", \"Match 2\"]. Every label must appear in exactly one of these\ntwo arrays. Include one description for every image, in the given image order.\nIf no majority pattern is found, set Visual pattern title to \"None\", explain why\nin the common-pattern description, use an empty supporting array, and put all\nlabels in the non-supporting array. Never invent semantic identities; state\nuncertainty when a visible object or part cannot be confidently identified.",
+        "anchor_index": 2,
+        "submitted_image_count": 6,
+        "submitted_match_count": 5,
+        "submitted_image_files": [
+          "api_crops/anchor_29.png",
+          "api_crops/node_180224.png",
+          "api_crops/node_127575.png",
+          "api_crops/node_275649.png",
+          "api_crops/node_301025.png",
+          "api_crops/node_118314.png"
+        ],
+        "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"Dark tones, white graphic elements, curved contours of hair and neck.\",\n        \"Semantic object or part\": \"Back of a person's head, neck, and upper torso wearing a dark jersey.\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"Central dark patch surrounded by blurred multicolored areas.\",\n        \"Semantic object or part\": \"Dark clothing or hair of a person in a crowd.\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"Dark fabric texture next to skin-toned areas.\",\n        \"Semantic object or part\": \"A person's shoulder and dark clothing.\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"Maroon/dark red textured surface adjacent to skin tones.\",\n        \"Semantic object or part\": \"A person's clothing and part of a face or skin.\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"Dark, mottled brownish-black texture.\",\n        \"Semantic object or part\": \"Dark clothing or hair.\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"Bright red solid-colored fabric area with dark sleeves and a head/hat above.\",\n        \"Semantic object or part\": \"A person wearing a red sweater.\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"Most patches depict a person's upper body, shoulders, or torso clad in dark or colored clothing (such as sweaters, jerseys, or jackets).\",\n  \"Visual pattern title\": \"Upper body clothing and torso of a person\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 4\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": [\n    \"Match 3\"\n  ]\n}\n```",
+        "raw_response": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"Dark tones, white graphic elements, curved contours of hair and neck.\",\n        \"Semantic object or part\": \"Back of a person's head, neck, and upper torso wearing a dark jersey.\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"Central dark patch surrounded by blurred multicolored areas.\",\n        \"Semantic object or part\": \"Dark clothing or hair of a person in a crowd.\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"Dark fabric texture next to skin-toned areas.\",\n        \"Semantic object or part\": \"A person's shoulder and dark clothing.\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"Maroon/dark red textured surface adjacent to skin tones.\",\n        \"Semantic object or part\": \"A person's clothing and part of a face or skin.\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"Dark, mottled brownish-black texture.\",\n        \"Semantic object or part\": \"Dark clothing or hair.\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"Bright red solid-colored fabric area with dark sleeves and a head/hat above.\",\n        \"Semantic object or part\": \"A person wearing a red sweater.\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"Most patches depict a person's upper body, shoulders, or torso clad in dark or colored clothing (such as sweaters, jerseys, or jackets).\",\n  \"Visual pattern title\": \"Upper body clothing and torso of a person\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 4\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": [\n    \"Match 3\"\n  ]\n}\n```",
+                    "thoughtSignature": "ErYVCrMVAWkUfRN11zQgteGrpbLmAo9SWypzGR6iUwwafMDUhrS9Udq7j1aHcJEZZWjrnQQNKDk2cPyWiuCt5xl0NXe6yfoH+Y6jqfYpFDT4srOJJ2tSDu793c/E1vAYig6qCYohY+QMkfcNi9ZulGbfaCWpZ4s/hrtLu+W6fBUIu0ZgmYa8E3oaszfZWIekf6ERfjmen0uYunjaNojS+CqrrApwSBe8Gyon+8dx/6ghcGEaUbvjMXNuBQ/nlLDRrYIGCVV7Mgwg1aG+ZyPP/nRkOhmIFH4X5SvHenMD+4DswNNvC1MdLv77N8BMbK6lrhqAKAl323sG0hJeY823Ly0eHrhCWzVgI1wZzhdUZwzwT6qnCZLUs9saAusYM53QnXe0ssifpPx5kA59549DIueBmwtqbkAP6fSfAaAX74sNBZfH8vQ7mEEdQSjyAC3Ahulv2GOXPL5kYmuAkiivvI/9zT5yD4U2gtleT1WHra+poNqb/EAiL9UqE+Aru66ay209Xjwd4w6yKSOeezi1uy1T9vqeR7Uf2110m3I9ugfBvAaz9o8BP+oYKa9z2ZO2y+Ws2/EHLiiFc4xo9Loi//t5ZGUGJ1b3nFNLequ/eI+BgMwmQJrmSWlpmGgcFGForT5IE93tcVQ2jIZ09iG6LV9/EMtFqCCOUdajODGCaQzZGzvvEtRy0kzlE2wY1bm8URVFClg43W0MOe7nIbicwXnvYmtvtSseSMB5DUy64WxTKRdJNqdbYduwRRQ4BWU4qxud32D2qYwyehAQytFwmakqKbeAL3lFwZfWrrPS+CZdXW9BdI7YovxLLdUptt56JjzrnGLP7ezA/J32WD3gYkF/Ygz/CF3rZeRfOLcYSrhQQpiVTp6xNSfqX6Hg7IyrUrKUjngt9N82cu/aDNdaPHYhxmKOpITV3pFDa8OyXHY68EpOwlgJdMDV+tGsanZ/48zvyEYiQsBgf2AAELby8NYYJZ4rXCiGwvLCqh9jUn9q1QwjzMjvEWWxOeiocEdDqc0tKA1SwBREYe+kbcZt+XsSt4wbPmTMcjvIIBVgPg9GBSQb/oEKYSxZ6ffQW8iyg6nm/u6vw6iBvT3Lae/zIKm6FVSOSomrXGk+lHdTs0JPLRundkkx4X0VQG5aRwZZpxVJiBpcMEADUky2I1zxnwGsHnRSei9CDqhqSzP2S7pSgsNXkgUR4DQDCJ4athsoFGkgwINeneBAVmO6DAU/sShxFZZI3YcYy6P8d6MWdax7UiQmIXwAQHDGX9yWHzB9+ZJCDHeVS0qr8bAXRuBjaOh2XjmgtJAOqWAvuT6UYjr7e2pHsJQSkgekOyI2FdSDDnbHuYObtOAr4DqVtMyLYWgnIfXmeZmu93Efpo2plq4nAsS3G0O6LZgWy1th1RMQYAPRrZXGW6L2y+MGLYSEjEGNI5X50z6KqhHzHK940svrOGu+lt08OU4shhBgvkbHkymUi91Oi0l6nKbI2mUdm7VV0RwVcUB0V55X+SjxgmMYsgiYaX/1k4TM9yirhJLW3KzmokFq/V/XyY97vN5cZByCfsdoa/NdblhTHwLrH9rI161rMQ5piS9dL/gWUWzogUB1800C3CCKDfHrZWNd9VKrxPqleq/L01fd//2ZgaIGI/2rxIwGZupGoKx1gXlE8ilNqrqo+NoSGl7zUPL3y8tbhjjIQUjX7ISfl2OyqPxciuprdyPtEa+hugC6WBIbMHRheMx8/EC2c5paHNZE4CmkzD94Cu9h+7cOTHiYlo9rEUjlV9D32mVwkOTbjg1EqvmQOmeMifkO5dkZxB277zqSGril1t/YWuV9GBueOeYC3FPAf06FW9z9Oew+AyIw/ymogKd068SHIJUcHAE4YfCFAl5iwZ71YaWUYoyx+mYH6VVsk3I4HlPR+3ARfIEzHako9CARxiGJoQ3qza/bshdMm2dRHzX9mLdiqkYTEjwQ3b8v8uZgIeOxpirql5jEqbb/fqFvFaEVjFdhW+pAsny2fsfhTip3M34x4F/HdoDAijHQFGkbymqnDtojcylVJk3BOOWZk369BXvpZc9eL9pdRJU7YopL0HK88u/jyIYG+EM3eHNFtqLGPxtU+sSoNNpqtdxxe0EBQVkZqRtZlRqGK7L9ZFlfDsQGz4vC+nt4dFDP5XF4DJhYUXGxQyCxaTGKDYVv9bpDTXMKS5oZnBtlI+Zoo6JMoongN2eejU/NdYHKbsd5Hv3fs50KI8vgKtZFNLnnmLfJmOJ8CSwgzoTwfXprpW1KVNyHvy/9l8H2ose5cvRZdYKLHNFQj7gzOzZIACojATpWQhkhbo0yBRM6Fao6sjX1oRtisTmyEy5UpwcEYiOmCpV/dyfrF9KSwAADvkHRdlQPenutmoHVBeaf9YKTGUQLV3uPko5m2DzF9hNxDiiZFvyghDeO14RdIc6/LA6w9eZXN1bYRCxhtCipwiMRuT3lMZrannZ/W8j/83ykGgrkaCSaqKTtTiGJaVc/yUQh0XAULv7iXax6tn4JFSWxWRKS7BEAD11oWLT5KreisK3lhAETdH5JscZL+a0Ad2eUi45ZgmPb1F/YycSh2myaBMwPLwOGS+2uSczVnRxREyj/WVhmf3Spgk871uxqwRv4gLwckg48ozMvU8YX/BsIF5KmAuViXnFwG7UtTQTeWFJtEwufihhL56tV9RKAyNPK8Etpb55T40BzEn/irTeDfhhUorxYBaYIyRleNked98Fgwozg2gTCEFpx4btd+9FAHT5Uo1tW2Fg0ybmLa3ydmhWTOVZwSLGWgJr33cDFtBRWoLnqEJpwGe53RF3kShADKIFnf7xTsDtG4kAeWjACdJkhftCEi0r1N4wEznXQiGx+wJVo/Fm9r7JhoNNW0M3z0mGiVmivAXLm//AHGlDtwlfVBLEU8cyihX7LiXWtgECUmWtRH44EvLWvxBriZ/BWdB+TZMux3rrv6swpPVu0g/jPVJ2NtrE0WWSWscObAhWw94g4H865vbo6poONjTGtzR6jLYEn2scuDNvRtwEM669QrIU57R/sAvq29q1Ae2qsB2wChF66aXwwxyKr1KwJh76ZeEwx5CuqKAlMeb5Jk7vK7aa0u3jEiqIzNmsTr/Ety+kKtK3F7QB5D7l9bmqIVejum24/ni4AadX5ih60JqtDd0SjD4fW4HDfp1+gbnXRCqYbQlE1O4scHvPtlZWO5hW6Lkgti1px+S9IepalNbLJKmS0ewe6OwoU4/C/SroZmVD4QRdRGYwrTc1CcLR/0+voHgW88cRlHxuaKswSfeEB/uaxNh1F/RflQ3H0XpRjfjF4q6kIwLB2ID3jcx4HQjV4n6BiF3wxfC+XXdQ97LhlVBLtSuHzf0iIMgjVqCMNhwDtdJiP1Kjo4ET+lWipzY3gEFBaNRyEp5HkB/n00hu9n6QBzwssKwbtxHIWLVQb/KJLGkID7+UK9IYVZSGE8EDcvcnal8WrljXtlx/AlYrq6k6zkmbw0am1h1pOPwFQpFfLQNZt8/7RtgLH5bc34sE5get5/LFP4zdpnTKvqvGKlNP5bdnZVFLW8HvkpcAPi0uIOPO1bW1CD0htvrgWlH5wGH29ySv47Z5P76wFT3QMOR4sp7tcKySH8UJZk/cVAzdCUlPdLIKotepKkwIx+h3p"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7383,
+            "candidatesTokenCount": 488,
+            "totalTokenCount": 8591,
+            "promptTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 6530
+              },
+              {
+                "modality": "TEXT",
+                "tokenCount": 853
+              }
+            ],
+            "thoughtsTokenCount": 720,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-3.5-flash-lite",
+          "responseId": "eRD2apWtK8ndytMPqNCisAc"
+        },
+        "prompt_mode": "gemini_single_anchor_all_matches",
+        "response_model": "gemini-3.5-flash-lite",
+        "input_tokens": 7383,
+        "generated_tokens": 488,
+        "thinking_tokens": 720,
+        "finish_reason": "STOP",
+        "api_attempts": 1,
+        "possibly_truncated": false,
+        "api_image_payload": {
+          "image_count": 6,
+          "images": [
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/anchor_29.png",
+              "original_size": [
+                107,
+                103
+              ],
+              "transmitted_size": [
+                107,
+                103
+              ],
+              "original_bytes": 19078,
+              "transmitted_bytes": 4763,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_180224.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 7972,
+              "transmitted_bytes": 2264,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_127575.png",
+              "original_size": [
+                64,
+                63
+              ],
+              "transmitted_size": [
+                64,
+                63
+              ],
+              "original_bytes": 7408,
+              "transmitted_bytes": 1934,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_275649.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 6738,
+              "transmitted_bytes": 1848,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_301025.png",
+              "original_size": [
+                64,
+                63
+              ],
+              "transmitted_size": [
+                64,
+                63
+              ],
+              "original_bytes": 8184,
+              "transmitted_bytes": 2136,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_118314.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 7975,
+              "transmitted_bytes": 2200,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            }
+          ],
+          "original_request_bytes": 80821,
+          "transmitted_request_bytes": 24543,
+          "reduction_percent": 69.63289244132095
+        }
+      },
+      "prototype_overlap": {
+        "definition": "stage4 top-k prototype candidate IDs; not forward-valid participation",
+        "anchor_ids": [
+          6,
+          9,
+          23,
+          29,
+          33,
+          44,
+          58,
+          92,
+          111,
+          121,
+          182,
+          205,
+          208,
+          215,
+          235,
+          250
+        ],
+        "match_count": 5,
+        "matches_with_metadata": 5,
+        "common_to_all": [
+          92,
+          121,
+          182,
+          215,
+          235
+        ],
+        "recurring": [
+          {
+            "id": 6,
+            "count": 3
+          },
+          {
+            "id": 9,
+            "count": 2
+          },
+          {
+            "id": 12,
+            "count": 2
+          },
+          {
+            "id": 15,
+            "count": 2
+          },
+          {
+            "id": 23,
+            "count": 4
+          },
+          {
+            "id": 29,
+            "count": 4
+          },
+          {
+            "id": 35,
+            "count": 2
+          },
+          {
+            "id": 42,
+            "count": 3
+          },
+          {
+            "id": 44,
+            "count": 2
+          },
+          {
+            "id": 53,
+            "count": 2
+          },
+          {
+            "id": 68,
+            "count": 2
+          },
+          {
+            "id": 80,
+            "count": 2
+          },
+          {
+            "id": 87,
+            "count": 2
+          },
+          {
+            "id": 92,
+            "count": 5
+          },
+          {
+            "id": 104,
+            "count": 3
+          },
+          {
+            "id": 121,
+            "count": 5
+          },
+          {
+            "id": 134,
+            "count": 2
+          },
+          {
+            "id": 161,
+            "count": 2
+          },
+          {
+            "id": 182,
+            "count": 5
+          },
+          {
+            "id": 204,
+            "count": 2
+          },
+          {
+            "id": 205,
+            "count": 3
+          },
+          {
+            "id": 215,
+            "count": 5
+          },
+          {
+            "id": 235,
+            "count": 5
+          }
+        ],
+        "per_match": [
+          {
+            "node_id": 180224,
+            "topk_ids": [
+              6,
+              12,
+              15,
+              23,
+              29,
+              42,
+              44,
+              92,
+              111,
+              121,
+              161,
+              182,
+              204,
+              205,
+              215,
+              235
+            ],
+            "with_anchor": [
+              6,
+              23,
+              29,
+              44,
+              92,
+              111,
+              121,
+              182,
+              205,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 3
+              },
+              {
+                "id": 12,
+                "count": 2
+              },
+              {
+                "id": 15,
+                "count": 2
+              },
+              {
+                "id": 23,
+                "count": 4
+              },
+              {
+                "id": 29,
+                "count": 4
+              },
+              {
+                "id": 42,
+                "count": 3
+              },
+              {
+                "id": 44,
+                "count": 2
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 161,
+                "count": 2
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 204,
+                "count": 2
+              },
+              {
+                "id": 205,
+                "count": 3
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 127575,
+            "topk_ids": [
+              23,
+              53,
+              66,
+              68,
+              80,
+              87,
+              92,
+              104,
+              109,
+              121,
+              134,
+              138,
+              182,
+              215,
+              228,
+              235
+            ],
+            "with_anchor": [
+              23,
+              92,
+              121,
+              182,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 23,
+                "count": 4
+              },
+              {
+                "id": 53,
+                "count": 2
+              },
+              {
+                "id": 68,
+                "count": 2
+              },
+              {
+                "id": 80,
+                "count": 2
+              },
+              {
+                "id": 87,
+                "count": 2
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 104,
+                "count": 3
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 134,
+                "count": 2
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 275649,
+            "topk_ids": [
+              6,
+              9,
+              15,
+              23,
+              29,
+              35,
+              42,
+              92,
+              104,
+              112,
+              121,
+              155,
+              182,
+              205,
+              215,
+              235
+            ],
+            "with_anchor": [
+              6,
+              9,
+              23,
+              29,
+              92,
+              121,
+              182,
+              205,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 3
+              },
+              {
+                "id": 9,
+                "count": 2
+              },
+              {
+                "id": 15,
+                "count": 2
+              },
+              {
+                "id": 23,
+                "count": 4
+              },
+              {
+                "id": 29,
+                "count": 4
+              },
+              {
+                "id": 35,
+                "count": 2
+              },
+              {
+                "id": 42,
+                "count": 3
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 104,
+                "count": 3
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 205,
+                "count": 3
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 301025,
+            "topk_ids": [
+              6,
+              9,
+              12,
+              23,
+              29,
+              42,
+              44,
+              92,
+              121,
+              182,
+              185,
+              205,
+              215,
+              232,
+              235,
+              250
+            ],
+            "with_anchor": [
+              6,
+              9,
+              23,
+              29,
+              44,
+              92,
+              121,
+              182,
+              205,
+              215,
+              235,
+              250
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 3
+              },
+              {
+                "id": 9,
+                "count": 2
+              },
+              {
+                "id": 12,
+                "count": 2
+              },
+              {
+                "id": 23,
+                "count": 4
+              },
+              {
+                "id": 29,
+                "count": 4
+              },
+              {
+                "id": 42,
+                "count": 3
+              },
+              {
+                "id": 44,
+                "count": 2
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 205,
+                "count": 3
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 118314,
+            "topk_ids": [
+              1,
+              29,
+              35,
+              53,
+              68,
+              80,
+              87,
+              92,
+              104,
+              121,
+              134,
+              161,
+              182,
+              204,
+              215,
+              235
+            ],
+            "with_anchor": [
+              29,
+              92,
+              121,
+              182,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 29,
+                "count": 4
+              },
+              {
+                "id": 35,
+                "count": 2
+              },
+              {
+                "id": 53,
+                "count": 2
+              },
+              {
+                "id": 68,
+                "count": 2
+              },
+              {
+                "id": 80,
+                "count": 2
+              },
+              {
+                "id": 87,
+                "count": 2
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 104,
+                "count": 3
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 134,
+                "count": 2
+              },
+              {
+                "id": 161,
+                "count": 2
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 204,
+                "count": 2
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          }
+        ]
+      },
+      "pattern_analysis": {
+        "schema_version": 1,
+        "available": true,
+        "title": "Upper body clothing and torso of a person",
+        "description": "Most patches depict a person's upper body, shoulders, or torso clad in dark or colored clothing (such as sweaters, jerseys, or jackets).",
+        "supporting_patches": [
+          "Anchor",
+          "Match 1",
+          "Match 2",
+          "Match 4",
+          "Match 5"
+        ],
+        "supporting_count": 5,
+        "nonsupporting_patches": [
+          "Match 3"
+        ],
+        "nonsupporting_count": 1,
+        "unknown_patches": [],
+        "patches": [
+          {
+            "index": 0,
+            "label": "Anchor",
+            "support": "supporting",
+            "low_level_visual_features": "Dark tones, white graphic elements, curved contours of hair and neck.",
+            "semantic_object_or_part": "Back of a person's head, neck, and upper torso wearing a dark jersey."
+          },
+          {
+            "index": 1,
+            "label": "Match 1",
+            "support": "supporting",
+            "low_level_visual_features": "Central dark patch surrounded by blurred multicolored areas.",
+            "semantic_object_or_part": "Dark clothing or hair of a person in a crowd."
+          },
+          {
+            "index": 2,
+            "label": "Match 2",
+            "support": "supporting",
+            "low_level_visual_features": "Dark fabric texture next to skin-toned areas.",
+            "semantic_object_or_part": "A person's shoulder and dark clothing."
+          },
+          {
+            "index": 3,
+            "label": "Match 3",
+            "support": "non-supporting",
+            "low_level_visual_features": "Maroon/dark red textured surface adjacent to skin tones.",
+            "semantic_object_or_part": "A person's clothing and part of a face or skin."
+          },
+          {
+            "index": 4,
+            "label": "Match 4",
+            "support": "supporting",
+            "low_level_visual_features": "Dark, mottled brownish-black texture.",
+            "semantic_object_or_part": "Dark clothing or hair."
+          },
+          {
+            "index": 5,
+            "label": "Match 5",
+            "support": "supporting",
+            "low_level_visual_features": "Bright red solid-colored fabric area with dark sleeves and a head/hat above.",
+            "semantic_object_or_part": "A person wearing a red sweater."
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "anchor": {
+        "id": 18,
+        "frame_id": 0,
+        "stage": "stage4",
+        "row": 1,
+        "col": 6,
+        "grid_h": 7,
+        "grid_w": 12,
+        "pred_score": 17.545093536376953,
+        "pred_percentile": 0.9759036144578314,
+        "gt_score": 0.1607503890991211,
+        "gt_percentile": 0.9879518072289156,
+        "topk_ids": [
+          121,
+          92,
+          182,
+          235,
+          215,
+          9,
+          33,
+          208,
+          205,
+          23,
+          44,
+          6,
+          111,
+          224,
+          234,
+          66
+        ],
+        "topk_logits": [
+          8.537946701049805,
+          8.537946701049805,
+          8.537946701049805,
+          8.426339149475098,
+          8.426339149475098,
+          6.919642925262451,
+          6.863839149475098,
+          6.808035850524902,
+          6.640625,
+          6.612723350524902,
+          6.5848212242126465,
+          6.5848212242126465,
+          6.5848212242126465,
+          6.556919574737549,
+          6.556919574737549,
+          6.556919574737549
+        ],
+        "active_ids": [
+          9,
+          33,
+          92,
+          121,
+          182,
+          208,
+          215,
+          235
+        ],
+        "active_weights": [
+          0.03704074025154114,
+          0.035030342638492584,
+          0.18685299158096313,
+          0.18685299158096313,
+          0.18685299158096313,
+          0.033129073679447174,
+          0.16712042689323425,
+          0.16712042689323425
+        ],
+        "dataset": "train",
+        "video": "001",
+        "target_name": "0032.png",
+        "target_index": 31,
+        "window_start": 0,
+        "dataset_index": 0,
+        "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/001/images/0032.png",
+        "thumb_path": "frames/frame_000000000.jpg",
+        "input_h": 360,
+        "input_w": 640,
+        "replayed_pred_score": 17.545093536376953,
+        "replayed_pred_percentile": 0.9759036144578314,
+        "crop_file": "crops/anchor_18.png",
+        "frame_file": "frame.png",
+        "crop_source": "replayed model-input RGB",
+        "api_context": {
+          "mode": "padded_patch_red_box_v1",
+          "file": "api_crops/anchor_18.png",
+          "padding_fraction_per_side": 0.5,
+          "frame_size": [
+            640,
+            360
+          ],
+          "original_patch_box": [
+            320,
+            51,
+            373,
+            103
+          ],
+          "context_crop_box": [
+            293,
+            25,
+            400,
+            129
+          ],
+          "context_size": [
+            107,
+            104
+          ],
+          "transmitted_size": [
+            107,
+            104
+          ],
+          "red_box_inclusive": [
+            27,
+            26,
+            79,
+            77
+          ],
+          "box_width": 2
+        }
+      },
+      "matches": [
+        {
+          "id": 281010,
+          "frame_id": 3345,
+          "stage": "stage4",
+          "row": 2,
+          "col": 6,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 10.37586498260498,
+          "pred_percentile": 0.9759036144578314,
+          "gt_score": 0.1863231360912323,
+          "gt_percentile": 0.9879518072289156,
+          "topk_ids": [
+            92,
+            182,
+            121,
+            235,
+            215,
+            6,
+            161,
+            87,
+            205,
+            85,
+            66,
+            75,
+            138,
+            112,
+            192,
+            23
+          ],
+          "topk_logits": [
+            8.59375,
+            8.537946701049805,
+            8.537946701049805,
+            8.482142448425293,
+            8.482142448425293,
+            6.724330425262451,
+            6.724330425262451,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195
+          ],
+          "active_ids": [
+            6,
+            23,
+            92,
+            121,
+            161,
+            182,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.030010517686605453,
+            0.02918473444879055,
+            0.19460414350032806,
+            0.1840420365333557,
+            0.030010517686605453,
+            0.1840420365333557,
+            0.17405302822589874,
+            0.17405302822589874
+          ],
+          "dataset": "train",
+          "video": "369",
+          "target_name": "0224.png",
+          "target_index": 223,
+          "window_start": 192,
+          "dataset_index": 3345,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/369/images/0224.png",
+          "thumb_path": "frames/frame_000003345.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.671838641166687,
+          "rgb_mae": 0.32264232635498047,
+          "rgb_structure_cosine": 0.24009710550308228,
+          "crop_file": "crops/node_281010.png",
+          "frame_file": "frames/frame_000003345.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_281010.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              192,
+              62,
+              224,
+              93
+            ],
+            "context_crop_box": [
+              176,
+              46,
+              240,
+              109
+            ],
+            "context_size": [
+              64,
+              63
+            ],
+            "transmitted_size": [
+              64,
+              63
+            ],
+            "red_box_inclusive": [
+              16,
+              16,
+              47,
+              46
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 144524,
+          "frame_id": 1720,
+          "stage": "stage4",
+          "row": 3,
+          "col": 8,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -2.750817060470581,
+          "pred_percentile": 0.8192771084337349,
+          "gt_score": 0.032680969685316086,
+          "gt_percentile": 0.9036144578313253,
+          "topk_ids": [
+            121,
+            92,
+            215,
+            235,
+            182,
+            87,
+            138,
+            218,
+            104,
+            66,
+            161,
+            132,
+            136,
+            112,
+            134,
+            35
+          ],
+          "topk_logits": [
+            8.537946701049805,
+            8.537946701049805,
+            8.537946701049805,
+            8.482142448425293,
+            8.482142448425293,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.808035850524902,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.7801337242126465
+          ],
+          "active_ids": [
+            66,
+            87,
+            92,
+            104,
+            121,
+            182,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.032692018896341324,
+            0.032692018896341324,
+            0.1843879073858261,
+            0.032692018896341324,
+            0.1843879073858261,
+            0.1743801087141037,
+            0.1843879073858261,
+            0.1743801087141037
+          ],
+          "dataset": "train",
+          "video": "181",
+          "target_name": "0352.png",
+          "target_index": 351,
+          "window_start": 320,
+          "dataset_index": 1720,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/181/images/0352.png",
+          "thumb_path": "frames/frame_000001720.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.6145015954971313,
+          "rgb_mae": 0.23240096867084503,
+          "rgb_structure_cosine": 0.2008606344461441,
+          "crop_file": "crops/node_144524.png",
+          "frame_file": "frames/frame_000001720.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_144524.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              256,
+              93,
+              288,
+              123
+            ],
+            "context_crop_box": [
+              240,
+              78,
+              304,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 55881,
+          "frame_id": 665,
+          "stage": "stage4",
+          "row": 1,
+          "col": 9,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 0.06905112415552139,
+          "pred_percentile": 0.8072289156626506,
+          "gt_score": 0.17259559035301208,
+          "gt_percentile": 0.9879518072289156,
+          "topk_ids": [
+            121,
+            92,
+            235,
+            215,
+            182,
+            161,
+            66,
+            249,
+            192,
+            23,
+            87,
+            218,
+            136,
+            30,
+            31,
+            6
+          ],
+          "topk_logits": [
+            8.59375,
+            8.59375,
+            8.482142448425293,
+            8.482142448425293,
+            8.482142448425293,
+            6.7801337242126465,
+            6.7801337242126465,
+            6.752232074737549,
+            6.752232074737549,
+            6.752232074737549,
+            6.752232074737549,
+            6.752232074737549,
+            6.752232074737549,
+            6.724330425262451,
+            6.724330425262451,
+            6.724330425262451
+          ],
+          "active_ids": [
+            23,
+            66,
+            92,
+            121,
+            161,
+            182,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.030684974044561386,
+            0.03155319020152092,
+            0.19350260496139526,
+            0.19350260496139526,
+            0.03155319020152092,
+            0.17306780815124512,
+            0.17306780815124512,
+            0.17306780815124512
+          ],
+          "dataset": "train",
+          "video": "067",
+          "target_name": "0608.png",
+          "target_index": 607,
+          "window_start": 576,
+          "dataset_index": 665,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/067/images/0608.png",
+          "thumb_path": "frames/frame_000000665.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.588440477848053,
+          "rgb_mae": 0.243527352809906,
+          "rgb_structure_cosine": 0.27518004179000854,
+          "crop_file": "crops/node_55881.png",
+          "frame_file": "frames/frame_000000665.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_55881.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              288,
+              31,
+              320,
+              62
+            ],
+            "context_crop_box": [
+              272,
+              15,
+              336,
+              78
+            ],
+            "context_size": [
+              64,
+              63
+            ],
+            "transmitted_size": [
+              64,
+              63
+            ],
+            "red_box_inclusive": [
+              16,
+              16,
+              47,
+              46
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 300843,
+          "frame_id": 3581,
+          "stage": "stage4",
+          "row": 3,
+          "col": 3,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 2.1063308715820312,
+          "pred_percentile": 0.9156626506024096,
+          "gt_score": 0.0,
+          "gt_percentile": 0.3614457831325301,
+          "topk_ids": [
+            121,
+            92,
+            215,
+            235,
+            182,
+            134,
+            80,
+            66,
+            87,
+            110,
+            132,
+            104,
+            136,
+            161,
+            68,
+            62
+          ],
+          "topk_logits": [
+            8.59375,
+            8.59375,
+            8.537946701049805,
+            8.482142448425293,
+            8.482142448425293,
+            6.752232074737549,
+            6.724330425262451,
+            6.724330425262451,
+            6.724330425262451,
+            6.724330425262451,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195,
+            6.696428298950195
+          ],
+          "active_ids": [
+            66,
+            80,
+            92,
+            121,
+            134,
+            182,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.029647719115018845,
+            0.029647719115018845,
+            0.1922515630722046,
+            0.1922515630722046,
+            0.030486589297652245,
+            0.1719488799571991,
+            0.18181714415550232,
+            0.1719488799571991
+          ],
+          "dataset": "train",
+          "video": "394",
+          "target_name": "0736.png",
+          "target_index": 735,
+          "window_start": 704,
+          "dataset_index": 3581,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/394/images/0736.png",
+          "thumb_path": "frames/frame_000003581.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.5833826065063477,
+          "rgb_mae": 0.17270512878894806,
+          "rgb_structure_cosine": 0.3790227770805359,
+          "crop_file": "crops/node_300843.png",
+          "frame_file": "frames/frame_000003581.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_300843.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              96,
+              93,
+              128,
+              123
+            ],
+            "context_crop_box": [
+              80,
+              78,
+              144,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 138054,
+          "frame_id": 1643,
+          "stage": "stage4",
+          "row": 3,
+          "col": 6,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 25.152515411376953,
+          "pred_percentile": 0.9879518072289156,
+          "gt_score": 0.11105271428823471,
+          "gt_percentile": 0.963855421686747,
+          "topk_ids": [
+            121,
+            92,
+            182,
+            235,
+            215,
+            80,
+            134,
+            136,
+            104,
+            228,
+            140,
+            110,
+            15,
+            218,
+            30,
+            31
+          ],
+          "topk_logits": [
+            8.59375,
+            8.59375,
+            8.537946701049805,
+            8.482142448425293,
+            8.482142448425293,
+            6.640625,
+            6.612723350524902,
+            6.612723350524902,
+            6.612723350524902,
+            6.5848212242126465,
+            6.5848212242126465,
+            6.5848212242126465,
+            6.5848212242126465,
+            6.5848212242126465,
+            6.556919574737549,
+            6.556919574737549
+          ],
+          "active_ids": [
+            80,
+            92,
+            104,
+            121,
+            134,
+            182,
+            215,
+            235
+          ],
+          "active_weights": [
+            0.027528073638677597,
+            0.1940918117761612,
+            0.026770610362291336,
+            0.1940918117761612,
+            0.026770610362291336,
+            0.18355751037597656,
+            0.17359480261802673,
+            0.17359480261802673
+          ],
+          "dataset": "train",
+          "video": "173",
+          "target_name": "0224.png",
+          "target_index": 223,
+          "window_start": 192,
+          "dataset_index": 1643,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/173/images/0224.png",
+          "thumb_path": "frames/frame_000001643.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.5726807713508606,
+          "rgb_mae": 0.28389298915863037,
+          "rgb_structure_cosine": 0.2811657190322876,
+          "crop_file": "crops/node_138054.png",
+          "frame_file": "frames/frame_000001643.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_138054.png",
+            "padding_fraction_per_side": 0.5,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              192,
+              93,
+              224,
+              123
+            ],
+            "context_crop_box": [
+              176,
+              78,
+              240,
+              138
+            ],
+            "context_size": [
+              64,
+              60
+            ],
+            "transmitted_size": [
+              64,
+              60
+            ],
+            "red_box_inclusive": [
+              16,
+              15,
+              47,
+              44
+            ],
+            "box_width": 2
+          }
+        }
+      ],
+      "matched_video_count": 5,
+      "groups": {
+        "all": [
+          281010,
+          144524,
+          55881,
+          300843,
+          138054
+        ],
+        "salient": [
+          281010,
+          138054
+        ],
+        "non_salient": [
+          144524,
+          55881,
+          300843
+        ]
+      },
+      "query": {
+        "status": "complete",
+        "anchor_id": 18,
+        "node_ids": [
+          281010,
+          144524,
+          55881,
+          300843,
+          138054
+        ],
+        "includes_anchor": true,
+        "matched_patch_count": 5,
+        "image_context_mode": "padded_patch_red_box_v1",
+        "image_order": [
+          {
+            "role": "anchor",
+            "node_id": 18
+          },
+          {
+            "role": "match",
+            "node_id": 281010
+          },
+          {
+            "role": "match",
+            "node_id": 144524
+          },
+          {
+            "role": "match",
+            "node_id": 55881
+          },
+          {
+            "role": "match",
+            "node_id": 300843
+          },
+          {
+            "role": "match",
+            "node_id": 138054
+          }
+        ],
+        "prompt": "Each image is a context crop. The RED RECTANGLE marks the original target patch.\nCompare only the visual content INSIDE the rectangles. Use the surroundings\nonly to help identify what the boxed content depicts. Ignore the red outlines\nthemselves. Distinguish visible appearance from uncertain semantic inferences.\nThe first image is the ANCHOR PATCH; subsequent images are numbered matches.\n\nYour task is to identify the visual pattern shared by most of the given patches. Observe each patch, and report the visual pattern present in STRICTLY MORE THAN HALF of the 6 patches as the common visual pattern.\n\nEach image contains two regions:\n\n- **Target patch:** ONLY the content inside the red rectangle. This is the region you must describe and compare.\n- **Surrounding context:** The content outside the rectangle. Use it only to help recognize what the patch depicts.\n\nThe first image is the anchor. Subsequent images are labeled Match 1, Match 2, and so on. Use these labels in your answer.\n\n**Rules:**\n\n1. Describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.\n2. Context may help identify a boxed object part, but your description must remain specific to that part. For example, if the box contains dark hair and a small area of skin, describe those features\u2014not the person's face, clothing, or surroundings outside the box.\n3. If an object extends outside the box, describe only its visible portion inside the box. Do not attribute its unseen features to the patch.\n4. Identify shared colors, textures, edge orientations, shapes, contrasts, or semantic objects or parts. \n6. Ignore the red rectangles themselves. Do not count features outside the boxes as supporting evidence.\n7. If there is no clear pattern shared by most target patches, state this explicitly.\n\nBefore answering, check that every described feature belongs inside a target box.\n\nReturn ONLY one valid JSON object with the following schema (replace the placeholders):\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"...\",\n        \"Semantic object or part\": \"...\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"A concise 1\u20133 sentence description.\",\n  \"Visual pattern title\": \"A short title, or None if there is no majority pattern.\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": []\n}\n\nUse arrays of exact image labels for Supporting patches and Non-supporting patches,\nfor example [\"Anchor\", \"Match 2\"]. Every label must appear in exactly one of these\ntwo arrays. Include one description for every image, in the given image order.\nIf no majority pattern is found, set Visual pattern title to \"None\", explain why\nin the common-pattern description, use an empty supporting array, and put all\nlabels in the non-supporting array. Never invent semantic identities; state\nuncertainty when a visible object or part cannot be confidently identified.",
+        "anchor_index": 3,
+        "submitted_image_count": 6,
+        "submitted_match_count": 5,
+        "submitted_image_files": [
+          "api_crops/anchor_18.png",
+          "api_crops/node_281010.png",
+          "api_crops/node_144524.png",
+          "api_crops/node_55881.png",
+          "api_crops/node_300843.png",
+          "api_crops/node_138054.png"
+        ],
+        "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"Skin tones, dark and light patches, vertical orientation.\",\n        \"Semantic object or part\": \"Upper body and head of a person.\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"Dark tones, blurred edges, small patch of skin/light area.\",\n        \"Semantic object or part\": \"Head and face of a person in shadow.\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"Vertical lines, mixed grayscale/color tones, cluttered details.\",\n        \"Semantic object or part\": \"Architectural elements and people in a crowd.\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"Dark hair texture at the top, pinkish skin tone below.\",\n        \"Semantic object or part\": \"Back of a person's head and hair.\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"Mottled skin tones, blurred textures, faint edge contours\n.\",\n        \"Semantic object or part\": \"Portion of a person's skin or face.\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"Green foliage mixed with dark shadows and vertical structures.\",\n        \"Semantic object or part\": \"Plants and background architecture.\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"Most of the patches depict parts of a human body, such as heads, skin, or upper bodies, rendered in low-resolution photography.\",\n  \"Visual pattern title\": \"Human body parts\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 3\",\n    \"Match 4\"\n  ],\n  \"Non-supporting patches\": [\n    \"Match 2\",\n    \"Match 5\"\n  ]\n}\n```",
+        "raw_response": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Low-level visual features\": \"Skin tones, dark and light patches, vertical orientation.\",\n        \"Semantic object or part\": \"Upper body and head of a person.\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Low-level visual features\": \"Dark tones, blurred edges, small patch of skin/light area.\",\n        \"Semantic object or part\": \"Head and face of a person in shadow.\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Low-level visual features\": \"Vertical lines, mixed grayscale/color tones, cluttered details.\",\n        \"Semantic object or part\": \"Architectural elements and people in a crowd.\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Low-level visual features\": \"Dark hair texture at the top, pinkish skin tone below.\",\n        \"Semantic object or part\": \"Back of a person's head and hair.\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Low-level visual features\": \"Mottled skin tones, blurred textures, faint edge contours"
+                  },
+                  {
+                    "text": ".\",\n        \"Semantic object or part\": \"Portion of a person's skin or face.\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Low-level visual features\": \"Green foliage mixed with dark shadows and vertical structures.\",\n        \"Semantic object or part\": \"Plants and background architecture.\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"Most of the patches depict parts of a human body, such as heads, skin, or upper bodies, rendered in low-resolution photography.\",\n  \"Visual pattern title\": \"Human body parts\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 3\",\n    \"Match 4\"\n  ],\n  \"Non-supporting patches\": [\n    \"Match 2\",\n    \"Match 5\"\n  ]\n}\n```",
+                    "thoughtSignature": "EpANCo0NAWkUfRO3uvrPpNB84ivHY8x2frXWAMzYu4+ivnQjscKAU4yKLAz0jLIHA6SWI0wWGyQB6/rXU4nlx7Y1dqaBfBVVFQrqgE6Pggvjov4hnN5XrAqy2OiD7+qBNUbOZ70C/KUEZPMncEwAYP9f+eg2sPJtlqtM/ESHwMWzxYeIh9gV+92H046fvWBerW0yKuWNv8DzAoN8SESKZ60T/Rrb6858oEEM1XSk0uH1M9bIBDDMzrzfbdlSq1Du0FtZ2Klxi7uMD38x7ZrhsN/RqkhJYPY2dT9LnogcXk2aRDyoXlLgvuREUEOfuhoIxQFLgzjUxGKAv8zqEmaUtjKuLX0a47g9FXXU+oRR1MeRe6/m2v5urvh5WZeiRX4B6BpH5+S5E6l9+J4BDUmiz12A9XpcAJP7SZgGJjEwxrxoAIkBx847EmRoucLNS42/wrWEgSjLugWEfvFRcjTmyoCsqKglIm6YhOyU0QLGE1qLPSPX1kl+1dpwRw+TtQ77lC4pU95XlgwrLSVVruse+jix3hdXN7TLp1r1QRWUPMxbEeIT2Qng9NeFGMLpnV03QGX4egyRdVQsAY092ZrfFarRfKqjZSyW8FdgFw4bhAnotYUd+e3IchQkkWTRRNzxNHbXJaxLGudY5ZUQQgjsSwmnnJ5GIb9MNEA5F06G7n48JqOaRdBAyyJ9Ix1ob4SuiFHN2WKRGBAwG2hDzXN2sxEenbc5Sp/+B5y3Ipym5cGqGvGfCGBu/W7yDaHCkvdnc3fM34cSkNUOB65851oTLMPUEOgLJVy6h7Og/GyZyAJwWUHj+g95Q2i1/4L5k23zCGDq/VQRGFitRljBEgBnt7PjgI2iI2C8IJYP4FvXc0J00zWhBMcPKHi3U8iSwStXviGPSLWay0IpgLnwtQFT0bhRu9I/iAe2B2ahUSX+q2pWercbkqewM+ZvG/jF9UVtFj3owC69h/kfdRQgErY4VBwsWAldrysLhZVQFOqE0VvNMp4WyX/UxmHMcoY+pDK+wlAdqdyFI0TccLVuqMtfzuKLtpzQqMvjN0IfeViSmszXdJi7FNxYFnn3qmh1prIdoSlLt9Uf0a4qCE6LS21EXw4UK0NdbC0XryEvKqgkTSEhT5ZMvqhkhC41QcLLMCIT3e/xSfc5F+TGdEiBWtMtqbuLywtk563Jw1TmPEPsFhrkeuggR3Fz9zfOc38n+KpqHTdHq7vz8s1pw8X/ffw4VyCKK+b41XxPf6LKCosYK5AHfdeE/o58pP4a7Tgu5B6FTvCz1Wvmi6S4FbcfnbbuqxSB+y0bwKYMcbr70tdyo3vDa+sMQNSCP+uhUfCmCtBF+gEFwrZWDk26+QG75Kkr5X5VTPaljmdG16Jqp9V9886OvW+zdgEP8BmFVAEgjnygo54ZB1u4KUKppXZzM69OhUSN/4OjBIhU1hNgB8KoYTEOOedpMDgEFUtzblPccIDF6y2mk4lqtoM6Eycndp3VSoMUAqpoQL4C5MD0GEZumN8an20tpHKNweZlsAiy9aFJSCKwIivcBWxSI1Jj8QbiAA85belWSecYzVAGwoHA25tVtXlz+Rr52zvSUuS/eJ2pU2UduKnWdxYGoQtZGKLRM1eH2/vCmYiYwUo+Jx+C2X5/Seoqsb2owr+GCgYP6WtPsOhT2a5VPprN7gmMFsur0m3yY5WLwQ/1CnX0vZvrZzxqH8QVV6zMzzMeGy93hZMV+tkYZE6EhdhHEo0wFWJnL4XaDVwn5vW4VcvpIyChdRUWp/DHk2o/Ge6BhRDt9M0dLU3lU+eztW7bp1BJgK7RAYo06PA+XPBWXYBnJM7BrAoc1EPp06XEUgDWhGbuFeItPN0COuWy8rl+BWMpsw5w74/ujiNhzeAHoNGBNLb/Av6eIFBVvflT8rp8JQtjJOkLeH8adkci83a7MObBF3d0gDmC6h7dXNUC4WiQv1rczpUvniuTHfprfxz9ySEpkkFRXVtgTZwfZcLdWOJyB4mWW5xNHvHZGOFH2ipdJQt2EkCS1pEuCIfTiNFnMs51bWEyRmW7PemDRHA3Vb643tTtxc9/SEE9+ggMFIWMc2SKIw9gyyUJkALtBrPnWGji/YYuN9wiTCQUyBT7yn+HHgktCyDiDwW2wbHdCuhslQPKTktaKGxdk/IoAZMiqGuOjOESjexisJyQDk3A0x6hdLEemUJJ4cuItDbYOKo9XQ2nCcUFTR6aTRBV5SSjWw5H19s84MP0"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7351,
+            "candidatesTokenCount": 472,
+            "totalTokenCount": 8302,
+            "promptTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 6498
+              },
+              {
+                "modality": "TEXT",
+                "tokenCount": 853
+              }
+            ],
+            "thoughtsTokenCount": 479,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-3.5-flash-lite",
+          "responseId": "-xD2avSbLO-8xdIP-6ar0Ac"
+        },
+        "prompt_mode": "gemini_single_anchor_all_matches",
+        "response_model": "gemini-3.5-flash-lite",
+        "input_tokens": 7351,
+        "generated_tokens": 472,
+        "thinking_tokens": 479,
+        "finish_reason": "STOP",
+        "api_attempts": 2,
+        "possibly_truncated": false,
+        "api_image_payload": {
+          "image_count": 6,
+          "images": [
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/anchor_18.png",
+              "original_size": [
+                107,
+                104
+              ],
+              "transmitted_size": [
+                107,
+                104
+              ],
+              "original_bytes": 24921,
+              "transmitted_bytes": 6197,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_281010.png",
+              "original_size": [
+                64,
+                63
+              ],
+              "transmitted_size": [
+                64,
+                63
+              ],
+              "original_bytes": 8270,
+              "transmitted_bytes": 2185,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_144524.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 7488,
+              "transmitted_bytes": 2150,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_55881.png",
+              "original_size": [
+                64,
+                63
+              ],
+              "transmitted_size": [
+                64,
+                63
+              ],
+              "original_bytes": 7849,
+              "transmitted_bytes": 2064,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_300843.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 6367,
+              "transmitted_bytes": 1692,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png/api_crops/node_138054.png",
+              "original_size": [
+                64,
+                60
+              ],
+              "transmitted_size": [
+                64,
+                60
+              ],
+              "original_bytes": 7936,
+              "transmitted_bytes": 2297,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            }
+          ],
+          "original_request_bytes": 88121,
+          "transmitted_request_bytes": 26463,
+          "reduction_percent": 69.96970075237458
+        }
+      },
+      "prototype_overlap": {
+        "definition": "stage4 top-k prototype candidate IDs; not forward-valid participation",
+        "anchor_ids": [
+          6,
+          9,
+          23,
+          33,
+          44,
+          66,
+          92,
+          111,
+          121,
+          182,
+          205,
+          208,
+          215,
+          224,
+          234,
+          235
+        ],
+        "match_count": 5,
+        "matches_with_metadata": 5,
+        "common_to_all": [
+          92,
+          121,
+          182,
+          215,
+          235
+        ],
+        "recurring": [
+          {
+            "id": 6,
+            "count": 2
+          },
+          {
+            "id": 23,
+            "count": 2
+          },
+          {
+            "id": 30,
+            "count": 2
+          },
+          {
+            "id": 31,
+            "count": 2
+          },
+          {
+            "id": 66,
+            "count": 4
+          },
+          {
+            "id": 80,
+            "count": 2
+          },
+          {
+            "id": 87,
+            "count": 4
+          },
+          {
+            "id": 92,
+            "count": 5
+          },
+          {
+            "id": 104,
+            "count": 3
+          },
+          {
+            "id": 110,
+            "count": 2
+          },
+          {
+            "id": 112,
+            "count": 2
+          },
+          {
+            "id": 121,
+            "count": 5
+          },
+          {
+            "id": 132,
+            "count": 2
+          },
+          {
+            "id": 134,
+            "count": 3
+          },
+          {
+            "id": 136,
+            "count": 4
+          },
+          {
+            "id": 138,
+            "count": 2
+          },
+          {
+            "id": 161,
+            "count": 4
+          },
+          {
+            "id": 182,
+            "count": 5
+          },
+          {
+            "id": 192,
+            "count": 2
+          },
+          {
+            "id": 215,
+            "count": 5
+          },
+          {
+            "id": 218,
+            "count": 3
+          },
+          {
+            "id": 235,
+            "count": 5
+          }
+        ],
+        "per_match": [
+          {
+            "node_id": 281010,
+            "topk_ids": [
+              6,
+              23,
+              66,
+              75,
+              85,
+              87,
+              92,
+              112,
+              121,
+              138,
+              161,
+              182,
+              192,
+              205,
+              215,
+              235
+            ],
+            "with_anchor": [
+              6,
+              23,
+              66,
+              92,
+              121,
+              182,
+              205,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 2
+              },
+              {
+                "id": 23,
+                "count": 2
+              },
+              {
+                "id": 66,
+                "count": 4
+              },
+              {
+                "id": 87,
+                "count": 4
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 112,
+                "count": 2
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 138,
+                "count": 2
+              },
+              {
+                "id": 161,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 192,
+                "count": 2
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 144524,
+            "topk_ids": [
+              35,
+              66,
+              87,
+              92,
+              104,
+              112,
+              121,
+              132,
+              134,
+              136,
+              138,
+              161,
+              182,
+              215,
+              218,
+              235
+            ],
+            "with_anchor": [
+              66,
+              92,
+              121,
+              182,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 66,
+                "count": 4
+              },
+              {
+                "id": 87,
+                "count": 4
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 104,
+                "count": 3
+              },
+              {
+                "id": 112,
+                "count": 2
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 132,
+                "count": 2
+              },
+              {
+                "id": 134,
+                "count": 3
+              },
+              {
+                "id": 136,
+                "count": 4
+              },
+              {
+                "id": 138,
+                "count": 2
+              },
+              {
+                "id": 161,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 218,
+                "count": 3
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 55881,
+            "topk_ids": [
+              6,
+              23,
+              30,
+              31,
+              66,
+              87,
+              92,
+              121,
+              136,
+              161,
+              182,
+              192,
+              215,
+              218,
+              235,
+              249
+            ],
+            "with_anchor": [
+              6,
+              23,
+              66,
+              92,
+              121,
+              182,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 6,
+                "count": 2
+              },
+              {
+                "id": 23,
+                "count": 2
+              },
+              {
+                "id": 30,
+                "count": 2
+              },
+              {
+                "id": 31,
+                "count": 2
+              },
+              {
+                "id": 66,
+                "count": 4
+              },
+              {
+                "id": 87,
+                "count": 4
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 136,
+                "count": 4
+              },
+              {
+                "id": 161,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 192,
+                "count": 2
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 218,
+                "count": 3
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 300843,
+            "topk_ids": [
+              62,
+              66,
+              68,
+              80,
+              87,
+              92,
+              104,
+              110,
+              121,
+              132,
+              134,
+              136,
+              161,
+              182,
+              215,
+              235
+            ],
+            "with_anchor": [
+              66,
+              92,
+              121,
+              182,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 66,
+                "count": 4
+              },
+              {
+                "id": 80,
+                "count": 2
+              },
+              {
+                "id": 87,
+                "count": 4
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 104,
+                "count": 3
+              },
+              {
+                "id": 110,
+                "count": 2
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 132,
+                "count": 2
+              },
+              {
+                "id": 134,
+                "count": 3
+              },
+              {
+                "id": 136,
+                "count": 4
+              },
+              {
+                "id": 161,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 138054,
+            "topk_ids": [
+              15,
+              30,
+              31,
+              80,
+              92,
+              104,
+              110,
+              121,
+              134,
+              136,
+              140,
+              182,
+              215,
+              218,
+              228,
+              235
+            ],
+            "with_anchor": [
+              92,
+              121,
+              182,
+              215,
+              235
+            ],
+            "across_matches": [
+              {
+                "id": 30,
+                "count": 2
+              },
+              {
+                "id": 31,
+                "count": 2
+              },
+              {
+                "id": 80,
+                "count": 2
+              },
+              {
+                "id": 92,
+                "count": 5
+              },
+              {
+                "id": 104,
+                "count": 3
+              },
+              {
+                "id": 110,
+                "count": 2
+              },
+              {
+                "id": 121,
+                "count": 5
+              },
+              {
+                "id": 134,
+                "count": 3
+              },
+              {
+                "id": 136,
+                "count": 4
+              },
+              {
+                "id": 182,
+                "count": 5
+              },
+              {
+                "id": 215,
+                "count": 5
+              },
+              {
+                "id": 218,
+                "count": 3
+              },
+              {
+                "id": 235,
+                "count": 5
+              }
+            ]
+          }
+        ]
+      },
+      "pattern_analysis": {
+        "schema_version": 1,
+        "available": true,
+        "title": "Human body parts",
+        "description": "Most of the patches depict parts of a human body, such as heads, skin, or upper bodies, rendered in low-resolution photography.",
+        "supporting_patches": [
+          "Anchor",
+          "Match 1",
+          "Match 3",
+          "Match 4"
+        ],
+        "supporting_count": 4,
+        "nonsupporting_patches": [
+          "Match 2",
+          "Match 5"
+        ],
+        "nonsupporting_count": 2,
+        "unknown_patches": [],
+        "patches": [
+          {
+            "index": 0,
+            "label": "Anchor",
+            "support": "supporting",
+            "low_level_visual_features": "Skin tones, dark and light patches, vertical orientation.",
+            "semantic_object_or_part": "Upper body and head of a person."
+          },
+          {
+            "index": 1,
+            "label": "Match 1",
+            "support": "supporting",
+            "low_level_visual_features": "Dark tones, blurred edges, small patch of skin/light area.",
+            "semantic_object_or_part": "Head and face of a person in shadow."
+          },
+          {
+            "index": 2,
+            "label": "Match 2",
+            "support": "non-supporting",
+            "low_level_visual_features": "Vertical lines, mixed grayscale/color tones, cluttered details.",
+            "semantic_object_or_part": "Architectural elements and people in a crowd."
+          },
+          {
+            "index": 3,
+            "label": "Match 3",
+            "support": "supporting",
+            "low_level_visual_features": "Dark hair texture at the top, pinkish skin tone below.",
+            "semantic_object_or_part": "Back of a person's head and hair."
+          },
+          {
+            "index": 4,
+            "label": "Match 4",
+            "support": "supporting",
+            "low_level_visual_features": null,
+            "semantic_object_or_part": null
+          },
+          {
+            "index": 5,
+            "label": "Match 5",
+            "support": "non-supporting",
+            "low_level_visual_features": "Green foliage mixed with dark shadows and vertical structures.",
+            "semantic_object_or_part": "Plants and background architecture."
+          }
+        ],
+        "warnings": [
+          "Fields recovered from a legacy response format."
+        ]
+      }
+    }
+  ],
+  "prediction_display": {
+    "available": true,
+    "image": "predicted_saliency.png",
+    "minimum": -3.9444055557250977,
+    "maximum": 67.35713195800781,
+    "constant": false,
+    "alpha": 0.5,
+    "colormap": "jet",
+    "format": "jet_overlay_v1",
+    "source_mtime_ns": 1794510900000479010,
+    "frame_mtime_ns": 1794510899999900019,
+    "prediction_shape": [
+      224,
+      384
+    ],
+    "frame_shape": [
+      360,
+      640,
+      3
+    ],
+    "scaling": "per-frame min-max to [0,1] for display only; bilinear resize to frame size"
+  },
+  "query_execution": {
+    "mode": "sequential_one_query_per_anchor",
+    "queries_per_anchor": 1,
+    "conversation_scope": "fresh_per_anchor",
+    "anchor_in_prompt": true,
+    "min_retrieved_matches": 2,
+    "salient_anchors": 3,
+    "eligible_anchors": 3,
+    "completed_model_queries": 3,
+    "skipped_empty_anchors": 0,
+    "skipped_small_anchors": 0
+  },
+  "llm": {
+    "provider": "gemini",
+    "model_id": "gemini-3.5-flash-lite",
+    "api": "generateContent REST v1beta",
+    "max_new_tokens": 2048,
+    "min_request_interval_seconds": 65.0,
+    "max_retries": 3,
+    "max_retry_wait_seconds": 300.0,
+    "anchor_in_prompt": true,
+    "saliency_labels_in_prompt": false,
+    "image_input": "anchor context crop first, followed by every retrieved match context crop; original patch boxed in red",
+    "image_context_mode": "padded_patch_red_box_v1",
+    "context_padding_fraction_per_side": 0.5,
+    "context_box_color": "red",
+    "context_box_width_pixels": 2,
+    "api_image_max_side": 256,
+    "api_jpeg_quality": 90,
+    "queries_per_anchor": 1,
+    "independent_conversations": true
+  }
+}
