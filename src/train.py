@@ -105,7 +105,7 @@ PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
 
 # Epochs 1..N: zero dense/CC/SIM/NSS/KL, side-stage, and priority-map loss weights.
 # From epoch N+1 onward, restore the values configured in LOSS_LAMBDA below.
-INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 0
+INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 3
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05

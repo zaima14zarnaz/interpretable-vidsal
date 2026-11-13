@@ -1,74 +1,58 @@
 #!/usr/bin/env python3
-"""Find recurring visual patterns using one Gemini request per salient anchor.
+"""Find recurring visual patterns using the prototype graph and one Gemini request per salient anchor.
 
-Place beside generate_vis_sim_graph.py and generate_prot_overlap_graph.py.
-Set GEMINI_API_KEY below (or the GEMINI_API_KEY environment variable), then run:
+Place beside generate_prot_graph.py. No visual-similarity graph/script is
+needed. The prototype graph must have the new all-prototype activation cache,
+ranked prototype_patches index, visual_descriptors and generated neighborhood.json.
+Run ACTION='cache_similarity' and then ACTION='view'/'serve' in the prototype
+generator once if upgrading an older database.
+
+Example:
   python find_vis_pattern.py --video-id 001 --frame-name YOUR_FRAME.png \
-      --checkpoint /path/best_dhf1k.pth --top-k 30 --device cuda:0
+      --prototype-graph-dir /path/prototype_graph_outputs --prepare-only
 
-Each eligible anchor produces ONE independent prompt containing the anchor
-crop first, then ALL its retrieved match crops. The configured minimum number
-of RETRIEVED matches is required; the anchor does not count toward it. No separate
-salient/non-salient group queries are sent. Their labels remain report metadata.
-Five eligible anchors produce five successful requests (temporary failures may
-require retries). Salient anchors use the configured within-frame percentile.
-Matches come from distinct other videos: keep the best eligible patch per
-(dataset, video), then select top-k. Existing reports with repeated videos must
-be retrieved again into a new output directory; filtering an old top-k list
-cannot recover eligible videos it omitted.
+For each salient stage4 anchor, rank ALL native visual_activations and retain
+its top 8 prototype IDs (or the whole bank if smaller). For each candidate,
+retrieve exactly its N connected graph patches using indexed prototype/rank
+lookups. N comes from the generated graph snapshot, not the ranking index's
+larger cache capacity. Mean visual similarity is evaluated separately against
+every graph member using stage4 cosine + (1 - RGB MAE) + RGB structure cosine.
+Choose the prototype with the HIGHEST mean (ties: lowest prototype ID).
 
-Gemini receives one context crop per patch with 50% of the original width/height
-added on EACH side, clipped to the frame. A red box marks the original patch.
-Context images are downscaled to --api-image-max-side before drawing the box,
-and saved in api_crops/. Tight report crops and retrieval metrics are unchanged.
-Resuming pending queries builds context from saved frames, without inference.
-Use --describe-only --reset-descriptions to regenerate completed tight-crop
-answers intentionally; existing answers are archived first.
+The winning prototype's complete group becomes the report's retrieved matches;
+there is no cross-video deduplication, similarity threshold or --top-k cap.
+The anchor participates in the group mean if it is already a graph member,
+but is removed from matches so it appears exactly once in the model's inputs.
+One Gemini request receives the anchor first plus all other winning-group
+patches, in their graph activation-rank order, using the unchanged prompt.
+Candidate IDs, activations, group scores and winner are saved in report.json;
+prototype overlap still uses the original stored top-k candidate IDs.
 
-Stage4 cosine defaults to the cached cutoff minus STAGE4_COSINE_RELAXATION.
-RGB MAE and structure cosine default to the absolute MAX_RGB_MAE and
-MIN_RGB_STRUCTURE_COSINE constants. CLI absolute overrides still win.
-All edges are queried exactly from the graph/cache.
-Graph files stay read-only. The full temporal window ending at the requested
-cached target frame is replayed with the original graph's checkpoint/config.
+The HTML template, visible wording, context-crop prompt, image preprocessing,
+rate limits, retry/resume behavior and saliency overlay remain unchanged.
+--patch-grid-cols controls layout (default graph N + 1 on new retrieval runs).
+--top-k and old visual-graph/threshold options are accepted for command-line
+compatibility but do not limit or filter the new prototype-group retrieval.
+--min-group-size still controls the minimum number of retrieved matches needed
+to query Gemini; the anchor is not counted toward that minimum.
 
-Requests start at least 65 seconds apart by default. Retries honor server delay
-hints and bounded backoff; exhausted daily/zero quotas stop for later resumption.
-Per-project token/day limits and other clients can still cause rate limits.
-Progress and request timestamps are saved after every anchor/attempt. The API
-key, request headers, and image request payloads are never written to reports.
+Graph files remain read-only. Only the selected frame's original full temporal
+window is replayed; raw stage4 features, loader-RGB descriptors, activations,
+assignments, patch saliency, checkpoint and evaluation provenance are checked
+against the prototype cache. Groups/descriptors are reused across anchors.
+
+Set GEMINI_API_KEY in the environment or privately below before requesting
+answers. --prepare-only sends no API requests. --describe-only --output RUN_DIR
+resumes saved queries without inference/retrieval; --reset-descriptions archives
+old answers before regenerating them. --view-only --output RUN_DIR rebuilds and
+serves the saved report at http://127.0.0.1:8765/report.html (no inference/API
+requests). Use --no-browser or --port as before. Existing reports retain their
+saved retrieval; use a new output directory for prototype-based retrieval.
 
 Outputs: report.html, report.md, report.json, raw prediction arrays, frame.png,
 predicted_saliency.png, salient_anchors.png, crops/, api_crops/ and frames/.
-Frame numbers are one-based loader positions; original filenames are retained.
-Prototype overlap uses saved stage4 top-k candidate IDs. The report distinguishes
-intersection with the anchor, strict intersection across every match, and
-recurrence counts across matches. This metadata is not added to Gemini inputs.
---prepare-only makes no API requests.
---describe-only --output RUN_DIR resumes answers using previously retrieved
-matches. Older three-query reports are archived and migrated automatically.
---reset-descriptions archives answers before intentionally regenerating them.
---view-only --output RUN_DIR rebuilds the interactive report and saliency overlay
-from saved data without model inference or API requests, then serves the report
-at http://127.0.0.1:8765/report.html and opens that address in the default browser.
-Keep the script running while viewing; Ctrl+C stops the server. Use --port to
-change the port (0 selects a free port), or --no-browser to serve without
-launching a browser. On a remote machine, forward this port over SSH and open
-the HTTP address on your own computer. The report shows the
-boxed frame and a JET heatmap overlay of predicted saliency on the RGB frame,
-clickable anchor thumbnails, and a bottom detail panel with that anchor's
-matches and saved Gemini analysis. Use --heatmap-alpha to set overlay opacity.
-The detail panel shows four structured pattern-summary boxes to the right of
-the patch grid. --patch-grid-cols controls patches per row (default top_k + 1,
-using the saved report's top_k when rebuilding an existing report); narrow
-screens allow horizontal scrolling while retaining the configured column count.
-Patch cards show support, visual features and semantic descriptions.
-Parsed fields are saved as pattern_analysis in each report.json anchor entry;
-raw query text is preserved. Legacy JSON-like responses can be rebuilt with
---view-only, without another Gemini request. Missing support is shown explicitly.
-New thresholds require a new retrieval run. No local VLM/SDK is needed; the
-Gemini REST API uses Python's standard library. Existing saliency dependencies
-(NumPy, Pillow, PyTorch, tqdm and your project environment) are still needed.
+Dependencies: existing saliency environment, NumPy and Pillow. Viewing/resuming
+saved reports does not require either graph generator or PyTorch inference.
 """
 from __future__ import annotations
 
@@ -91,6 +75,7 @@ import sqlite3
 import sys
 import time
 import webbrowser
+import zlib
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from email.utils import parsedate_to_datetime
@@ -108,7 +93,9 @@ GEMINI_API_KEY = ""
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 MIN_REQUEST_INTERVAL_SECONDS = 65.0
 SALIENCY_PERCENTILE = 0.97
-TOP_K = 30
+TOP_K = 30  # Legacy CLI default; prototype groups are never truncated.
+ANCHOR_PROTOTYPE_COUNT = 8
+PROTOTYPE_RETRIEVAL_MODE = "top8_activation_best_mean_visual_group_v1"
 PATCH_GRID_COLS = None  # None selects top_k + 1; CLI can override with an integer.
 MIN_GROUP_SIZE = 2
 STAGE4_COSINE_RELAXATION = 0.2
@@ -310,96 +297,205 @@ def prepare_api_image(path, max_side=API_IMAGE_MAX_SIDE, jpeg_quality=API_JPEG_Q
     return mime_type, encoded, stats
 
 
-def retrieval_thresholds(visual, cached, args):
-    feature, _mae, _structure = cached
-    relaxation = getattr(args, "stage4_cosine_relaxation", STAGE4_COSINE_RELAXATION)
-    feature_override = getattr(args, "min_stage4_cosine", None)
-    mae_override = getattr(args, "max_rgb_mae", MAX_RGB_MAE)
-    structure_override = getattr(args, "min_rgb_structure_cosine", MIN_RGB_STRUCTURE_COSINE)
-    return visual.validate_thresholds((
-        max(-1., feature - relaxation) if feature_override is None else feature_override,
-        MAX_RGB_MAE if mae_override is None else mae_override,
-        MIN_RGB_STRUCTURE_COSINE if structure_override is None else structure_override))
-
-
 def llm_selection(args):
     return "gemini", getattr(args, "gemini_model", GEMINI_MODEL)
 
 
-class EdgeRetriever:
-    def __init__(self, graph, thresholds):
-        self.graph, self.thresholds, self.connection = graph, thresholds, None
-        self.source = "exact_implicit_graph"
-        directory = graph.directory
-        database, manifest = directory / "edges.sqlite", directory / "edges_manifest.json"
-        if not database.exists() or not manifest.exists():
-            return
-        meta = json.loads(manifest.read_text())
-        if meta.get("status") != "complete":
-            return  # A partial materialization never restricts exact retrieval.
-        if meta.get("source_manifest_sha256") != graph.manifest["source_manifest_sha256"]:
-            raise ValueError("Completed edges.sqlite belongs to a different graph.")
-        base_f, base_m, base_s = meta["thresholds"]
-        f, m, s = thresholds
-        if f < base_f or m > base_m or s < base_s:
-            # The old materialization omits valid edges at looser thresholds.
-            # Exact implicit retrieval recovers them without rebuilding graphs.
-            return
-        self.connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
-        self.connection.row_factory = sqlite3.Row
-        self.connection.execute("ATTACH DATABASE ? AS metadata", ((graph.source_dir / "graph.sqlite").resolve().as_uri() + "?mode=ro",))
-        self.source = "completed_edges_sqlite"
+class PrototypeGroupRetriever:
+    """Read-only access to the exact groups displayed by the prototype graph.
+
+    No visual-similarity graph, materialized patch edges or global patch search.
+    Native activations, indexed group memberships and descriptors are reused.
+    """
+    def __init__(self, helper, directory):
+        self.helper = helper
+        self.directory = self.source_dir = Path(directory).resolve()
+        required = ("connect_db", "get_node", "require_dense_cache", "load_descriptors",
+                    "visual_metrics", "Stage4Capture", "rgb_descriptor", "extract_stage")
+        missing = [name for name in required if not hasattr(helper, name)]
+        if missing:
+            raise ValueError(f"Prototype generator is outdated (missing {missing}). Use the updated generate_prot_graph.py.")
+        self.manifest = json.loads((self.directory / "manifest.json").read_text())
+        if self.manifest.get("status") != "complete":
+            raise ValueError("Prototype graph extraction is not complete.")
+        self.manifest_sha256 = helper.sha256_file(self.directory / "manifest.json")
+        self.con = helper.connect_db(self.directory / "graph.sqlite", readonly=True)
+        try:
+            self.prototype_count = helper.require_dense_cache(self.con)
+            setting = self.con.execute("SELECT value FROM similarity_metadata WHERE key='settings'").fetchone()
+            if not setting:
+                raise ValueError("Prototype graph is missing its visual descriptor settings.")
+            self.settings = json.loads(setting[0])
+            if self.settings.get("version") != helper.SIMILARITY_VERSION:
+                raise ValueError("Prototype descriptor version differs from the loaded generator. Use the matching prototype script.")
+            # Replay the descriptor source recorded at extraction time.
+            helper.STAGE4_FEATURE_MODULE = self.settings["feature_module"]
+            helper.STAGE4_FEATURE_OUTPUT_PATH = tuple(self.settings["feature_output_path"])
+            helper.STAGE4_FEATURE_LAYOUT = self.settings["feature_layout"]
+            helper.RGB_DESCRIPTOR_SIZE = int(self.settings["rgb_size"])
+            helper.TOP_K = int(self.manifest["top_k"])
+            if helper.similarity_settings() != self.settings:
+                raise ValueError("Prototype descriptor semantics differ from the loaded generator.")
+            snapshot_path = self.directory / "neighborhood.json"
+            if snapshot_path.is_file():
+                snapshot = json.loads(snapshot_path.read_text())
+                if snapshot.get("graph_version") != getattr(helper, "GRAPH_VERSION", None):
+                    raise ValueError("Graph snapshot is not the new prototype/patch graph. Regenerate it with ACTION='view'.")
+                self.group_size = int(snapshot["patches_per_prototype"])
+                if snapshot.get("total_prototypes") != self.prototype_count:
+                    raise ValueError("Prototype snapshot bank size differs from graph.sqlite. Regenerate ACTION='view'.")
+                self.group_size_source = "neighborhood.json:patches_per_prototype"
+            elif self.manifest.get("patches_per_prototype") is not None:
+                self.group_size = int(self.manifest["patches_per_prototype"])
+                self.group_size_source = "manifest.json:patches_per_prototype"
+            else:
+                raise ValueError("Cannot determine the generated graph's N. Run ACTION='view' in the prototype generator to write neighborhood.json.")
+            if self.group_size < 1:
+                raise ValueError("Prototype graph N must be positive.")
+            rank_row = self.con.execute("SELECT value FROM prototype_graph_metadata WHERE key='ranking'").fetchone()
+            if not rank_row:
+                raise ValueError("Prototype ranking cache is invalid/missing. Run ACTION='view' in the prototype generator.")
+            self.ranking_metadata = json.loads(rank_row[0])
+            if self.ranking_metadata.get("capacity", 0) < self.group_size:
+                raise ValueError("Prototype index contains fewer than the generated N matches. Regenerate ACTION='view'.")
+            patch_count = int(self.con.execute("SELECT COUNT(*) FROM nodes WHERE stage='stage4'").fetchone()[0])
+            if (self.ranking_metadata.get("patch_count") != patch_count or
+                    self.ranking_metadata.get("prototype_count") != self.prototype_count):
+                raise ValueError("Prototype index is stale. Regenerate ACTION='view' before retrieving report patches.")
+            self.expected_group_size = min(self.group_size, patch_count)
+            self.source = "prototype_patches_sqlite"
+            self._nodes, self._descriptors, self._groups, self._activation_frames = {}, {}, {}, {}
+        except BaseException:
+            self.con.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     def close(self):
-        if self.connection is not None:
-            self.connection.close()
+        self.con.close()
 
-    def neighbors(self, anchor, top_k):
-        """Best eligible direct-edge patch per other (dataset, video), then top-k.
+    def node(self, node_id):
+        node_id = int(node_id)
+        if node_id not in self._nodes:
+            self._nodes[node_id] = self.helper.get_node(self.con, node_id)
+        return dict(self._nodes[node_id])
 
-        Deduplicate BEFORE limiting so a video with many highly ranked patches
-        cannot crowd out eligible patches from other videos.
-        """
-        if top_k < 1:
-            return []
-        if self.connection is None:
-            # The companion graph API ranks patches, not videos. Expand its
-            # bounded prefix until k distinct videos are found or it is exhausted.
-            limit = max(64, top_k * 4)
-            video_cache = {}
-            while True:
-                hits = self.graph.neighbors(anchor["id"], self.thresholds, limit=limit, cross_video=True)
-                for hit in hits:
-                    nid = hit["node_id"]
-                    if nid not in video_cache:
-                        video_cache[nid] = video_key(self.graph.node(nid))
-                selected = unique_video_hits(hits, anchor, top_k,
-                                             lambda hit: video_cache[hit["node_id"]])
-                if len(selected) >= top_k or len(hits) < limit:
-                    return selected
-                limit *= 2
-        f, m, s = self.thresholds
-        # UNION handles the stored undirected source<target orientation.
-        rows = self.connection.execute("""
-            WITH incident AS (
-              SELECT target AS node_id,stage4_cosine,rgb_mae,rgb_structure_cosine FROM edges WHERE source=?
-              UNION ALL
-              SELECT source AS node_id,stage4_cosine,rgb_mae,rgb_structure_cosine FROM edges WHERE target=?
-            )
-            SELECT e.*,f.dataset AS match_dataset,f.video AS match_video FROM incident e
-              JOIN metadata.nodes n ON n.id=e.node_id
-              JOIN metadata.frames f ON f.id=n.frame_id
-            WHERE n.stage='stage4' AND NOT (f.dataset=? AND f.video=?)
-              AND e.stage4_cosine>=? AND e.rgb_mae<=? AND e.rgb_structure_cosine>=?
-            ORDER BY e.stage4_cosine DESC,e.rgb_mae ASC,e.rgb_structure_cosine DESC,e.node_id ASC
-            """, (anchor["id"], anchor["id"], anchor["dataset"], anchor["video"], f, m, s))
+    def descriptors(self, node_ids):
+        ids = list(dict.fromkeys(map(int, node_ids)))
+        missing = [nid for nid in ids if nid not in self._descriptors]
+        if missing:
+            self._descriptors.update(self.helper.load_descriptors(self.con, missing))
+        unavailable = [nid for nid in ids if nid not in self._descriptors]
+        if unavailable:
+            raise ValueError(f"Visual descriptors missing for graph patches {unavailable[:10]}. Complete ACTION='cache_similarity' before making this report.")
+        return {nid: self._descriptors[nid] for nid in ids}
+
+    def frame_activations(self, frame_id, node_ids):
+        frame_id = int(frame_id)
+        if frame_id not in self._activation_frames:
+            row = self.con.execute("SELECT * FROM prototype_activation_frames WHERE frame_id=? AND stage='stage4'", (frame_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"No all-prototype activations for frame {frame_id}. Run ACTION='cache_similarity'.")
+            ids = np.frombuffer(zlib.decompress(row["node_ids"]), dtype='<i8')
+            values = np.frombuffer(zlib.decompress(row["activations"]), dtype='<f4').reshape(row["patch_count"], row["prototype_count"])
+            if (len(ids) != len(values) or len(set(ids.tolist())) != len(ids)
+                    or values.shape[1] != self.prototype_count or not np.isfinite(values).all()):
+                raise ValueError("Corrupt all-prototype activation frame cache.")
+            self._activation_frames[frame_id] = ({int(nid): i for i, nid in enumerate(ids)}, values)
+        positions, values = self._activation_frames[frame_id]
         try:
-            selected = unique_video_hits(rows, anchor, top_k,
-                                         lambda hit: (hit["match_dataset"], hit["match_video"]))
-            return [{key: hit[key] for key in ("node_id", *METRICS)} for hit in selected]
-        finally:
-            rows.close()
+            return values[[positions[int(nid)] for nid in node_ids]]
+        except KeyError as error:
+            raise ValueError(f"Patch {error.args[0]} is absent from its frame activation block.") from error
 
+    def members(self, prototype_id):
+        prototype_id = int(prototype_id)
+        if not 0 <= prototype_id < self.prototype_count:
+            raise ValueError(f"Unknown stage4 prototype {prototype_id}.")
+        if prototype_id not in self._groups:
+            rows = list(self.con.execute("""SELECT p.node_id,p.rank,p.activation,n.stage FROM prototype_patches p
+                JOIN nodes n ON n.id=p.node_id
+                WHERE p.stage='stage4' AND p.prototype_id=? AND p.rank<=? ORDER BY p.rank""",
+                (prototype_id, self.group_size)))
+            if (len(rows) != self.expected_group_size or
+                    [int(row["rank"]) for row in rows] != list(range(1, len(rows)+1)) or
+                    any(row["stage"] != "stage4" for row in rows) or
+                    len({int(row["node_id"]) for row in rows}) != len(rows)):
+                raise ValueError(f"Prototype {prototype_id} does not have its complete generated graph group. Regenerate ACTION='view'.")
+            self._groups[prototype_id] = [dict(row) for row in rows]
+        return self._groups[prototype_id]
+
+    def select(self, anchor):
+        """Highest mean over all graph members among the anchor's top-8 activations.
+
+        Self-membership contributes its actual similarity to that group's mean,
+        as for every other graph member. It is removed only from output matches
+        because the anchor is already image 1 of the unchanged Gemini prompt.
+        """
+        if anchor.get("stage") != "stage4":
+            raise ValueError("Prototype-group retrieval is defined for stage4 anchors.")
+        weights = self.frame_activations(anchor["frame_id"], [anchor["id"]])[0]
+        candidates = np.lexsort((np.arange(self.prototype_count), -weights))[:min(ANCHOR_PROTOTYPE_COUNT, self.prototype_count)]
+        groups = {int(pid): self.members(pid) for pid in candidates}
+        needed = [anchor["id"], *[row["node_id"] for group in groups.values() for row in group]]
+        descriptors = self.descriptors(needed)
+        scores, candidate_hits = [], {}
+        pair_cache = {}
+        for candidate_rank, pid in enumerate(candidates, 1):
+            pid = int(pid)
+            group = groups[pid]
+            hits = []
+            for row in group:
+                nid = int(row["node_id"])
+                if nid not in pair_cache:
+                    pair_cache[nid] = self.helper.visual_metrics(descriptors[int(anchor["id"])], descriptors[nid])
+                metrics = pair_cache[nid]
+                score = metrics.get("visual_score")
+                if score is None or not math.isfinite(score):
+                    raise ValueError(f"Cannot score every member of prototype {pid}: patch {nid}: {metrics.get('similarity_missing_reason')}. Repair the descriptor cache before retrieval.")
+                hits.append({"node_id": nid, **metrics,
+                             "prototype_graph_rank": int(row["rank"]), "prototype_activation": float(row["activation"])})
+            mean_score = float(np.mean([hit["visual_score"] for hit in hits])) if hits else None
+            scores.append({"prototype_id": pid, "anchor_activation_rank": candidate_rank,
+                           "anchor_activation": float(weights[pid]), "graph_patch_count": len(group),
+                           "graph_patch_ids": [hit["node_id"] for hit in hits],
+                           "mean_visual_similarity": mean_score,
+                           "anchor_is_graph_member": any(hit["node_id"] == anchor["id"] for hit in hits)})
+            candidate_hits[pid] = hits
+        eligible = [score for score in scores if score["mean_visual_similarity"] is not None]
+        winner = min(eligible, key=lambda score: (-score["mean_visual_similarity"], score["prototype_id"])) if eligible else None
+        selected_id = winner["prototype_id"] if winner else None
+        hits = [dict(hit) for hit in candidate_hits.get(selected_id, []) if hit["node_id"] != anchor["id"]]
+        trace = {"mode": PROTOTYPE_RETRIEVAL_MODE,
+                 "top_activated_prototype_ids": [int(p) for p in candidates],
+                 "activation_source": "native cached visual_activations, full bank; ties by prototype ID",
+                 "visual_similarity_formula": self.helper.SIMILARITY_FORMULA,
+                 "selection": "maximum mean anchor-to-group visual similarity; lowest prototype ID breaks ties",
+                 "group_mean_scope": "every generated graph member, including anchor self-membership when present",
+                 "graph_group_size": self.group_size, "group_size_source": self.group_size_source,
+                 "candidate_scores": scores, "selected_prototype_id": selected_id,
+                 "selected_mean_visual_similarity": winner["mean_visual_similarity"] if winner else None,
+                 "selected_graph_patch_ids": winner["graph_patch_ids"] if winner else [],
+                 "returned_match_ids": [hit["node_id"] for hit in hits],
+                 "anchor_removed_from_match_list": bool(winner and winner["anchor_is_graph_member"])}
+        return hits, trace
+
+
+def validate_retrieved_matches(anchor, matches, report):
+    if report.get("protocol", {}).get("retrieval_mode") != PROTOTYPE_RETRIEVAL_MODE:
+        # Resuming old saved reports preserves their previous retrieval contract.
+        return validate_match_videos(anchor, matches)
+    ids = [int(node["id"]) for node in matches]
+    if len(ids) != len(set(ids)) or int(anchor["id"]) in ids:
+        raise ValueError("Prototype-group matches must be unique patches distinct from the anchor.")
+    for node in matches:
+        if node.get("stage") != "stage4":
+            raise ValueError("Prototype-group matches must be stage4 patches.")
+        video_key(node)  # Metadata is still needed by the existing report.
 
 def video_key(node):
     """Video IDs are scoped by their graph dataset, as in cross-video retrieval."""
@@ -512,7 +608,7 @@ def save_match_assets(node, source_dir, outdir):
     return node
 
 
-def replay_frame(args, helper, visual, graph, frame, manifest, outdir):
+def replay_frame(args, helper, graph, frame, manifest, outdir):
     import torch
     import torch.nn.functional as F
     from torch.utils.data import DataLoader, Subset
@@ -520,7 +616,7 @@ def replay_frame(args, helper, visual, graph, frame, manifest, outdir):
     evaluation = Path(args.evaluation or manifest["evaluation_file"]).resolve()
     checkpoint = Path(args.checkpoint or manifest["checkpoint"]).resolve()
     if helper.sha256_file(checkpoint) != manifest["checkpoint_sha256"]:
-        raise ValueError("Checkpoint differs from the graph's checkpoint. Regenerate both graphs for that checkpoint before comparing cached saliency labels.")
+        raise ValueError("Checkpoint differs from the graph's checkpoint. Regenerate the prototype graph for that checkpoint before comparing cached saliency labels.")
     if helper.sha256_file(evaluation) != manifest["evaluation_sha256"]:
         raise ValueError("evaluation.py differs from the graph's extraction version. Restore it, or regenerate graphs with the current code.")
     helper.SRC_DIR, helper.EVALUATION_FILE = evaluation.parent, evaluation
@@ -545,17 +641,8 @@ def replay_frame(args, helper, visual, graph, frame, manifest, outdir):
         raise ValueError("Replay did not return the exact full target window.")
     model = ev.build_model(device, device)
     ev.load_checkpoint(model, str(checkpoint)); model.eval()
-    captured = {}
-
-    def capture(module, inputs):
-        tensor = inputs[0]
-        if tensor.ndim != 5 or tensor.shape[0] != 1:
-            raise ValueError("Expected stage4 input [1,C,T,H,W].")
-        last = tensor.detach()[0, :, -1].float().permute(1, 2, 0).contiguous()
-        captured["grid"] = tuple(last.shape[:2])
-        captured["features"] = visual.normalize_rows(last.reshape(-1, last.shape[-1]).cpu().numpy())
-
-    hook = model.concept_creations["stage4"].register_forward_pre_hook(capture)
+    capture = helper.Stage4Capture(model)
+    capture.reset()
     try:
         amp_dtype = getattr(torch, str(manifest.get("amp_dtype") or "torch.float16").split(".")[-1])
         with torch.inference_mode(), torch.autocast(device.type, dtype=amp_dtype, enabled=bool(manifest.get("amp_enabled"))):
@@ -565,15 +652,35 @@ def replay_frame(args, helper, visual, graph, frame, manifest, outdir):
         prediction = result["saliency_map"].detach().float().cpu()
         if prediction.ndim != 4 or tuple(prediction.shape[:2]) != (1, 1) or not bool(torch.isfinite(prediction).all()):
             raise ValueError("Expected a finite predicted saliency_map [1,1,H,W].")
-        h, w = captured["grid"]
+        detail = result.get("concept_out", {}).get("stage4")
+        if detail is None:
+            raise ValueError("Replay must expose native concept_out['stage4'].")
+        info = helper.extract_stage(detail, 1, "stage4")
+        h, w = info["h"], info["w"]
+        if info["m"] != graph.prototype_count or info["weights"] is None:
+            raise ValueError("Replay must expose native activations for the same full prototype bank.")
+        live_features = capture.last_frame(info, 1)[0].reshape(h*w, -1)
         records = graph.con.execute("SELECT id,row,col,grid_h,grid_w,pred_score FROM nodes WHERE frame_id=? AND stage='stage4' ORDER BY row,col", (frame["id"],)).fetchall()
         if len(records) != h*w or any((r["grid_h"], r["grid_w"], r["row"], r["col"]) != (h, w, i//w, i%w) for i, r in enumerate(records)):
             raise ValueError("Replay stage4 grid differs from the graph.")
-        positions = np.array([graph.position(row["id"]) for row in records])
-        cached = np.asarray(graph.features[positions])
-        live = captured["features"]
+        node_ids = [int(row["id"]) for row in records]
+        descriptors = graph.descriptors(node_ids)
+        cached = np.stack([descriptors[nid][0] for nid in node_ids])
+        cached_rgb = np.stack([descriptors[nid][1] for nid in node_ids])
+        live = live_features
         if live.shape != cached.shape or not np.allclose(live, cached, atol=args.replay_atol, rtol=.005):
             raise ValueError("Replay descriptors differ from cached graph descriptors. Check model source, checkpoint and preprocessing; do not mix graph versions.")
+        cached_activations = graph.frame_activations(frame["id"], node_ids)
+        live_activations = info["weights"][0].reshape(h*w, info["m"])
+        if not np.allclose(live_activations, cached_activations, atol=args.replay_atol, rtol=.005):
+            raise ValueError("Replay prototype activations differ from the graph cache. Regenerate the prototype graph or restore the original model configuration.")
+        for i, nid in enumerate(node_ids):
+            row, col = divmod(i, w)
+            node = graph.node(nid)
+            top = list(map(int, info["top"][0, row, col]))
+            active = sorted(set(map(int, info["active"][0, row, col][info["mask"][0, row, col]])))
+            if top != node["topk_ids"] or active != node["active_ids"]:
+                raise ValueError(f"Replay assignments differ for patch {nid}; refusing mixed prototype-overlap metadata.")
         scores = F.adaptive_avg_pool2d(prediction, (h, w))[0, 0].numpy()
         cached_scores = np.array([r["pred_score"] for r in records]).reshape(h, w)
         if not np.allclose(scores, cached_scores, atol=args.replay_score_atol, rtol=.005):
@@ -591,15 +698,11 @@ def replay_frame(args, helper, visual, graph, frame, manifest, outdir):
             raise ValueError("Expected unnormalized RGB in [0,1] or [0,255].")
         if tuple(last_rgb.shape[-2:]) != (frame["input_h"], frame["input_w"]):
             raise ValueError("Replay RGB dimensions differ from the graph.")
-        resized = last_rgb
-        resize = getattr(model.backbone, "resize_to", None)
-        if resize is not None:
-            size = (resize, resize) if isinstance(resize, int) else tuple(resize)
-            resized = F.interpolate(last_rgb[None], size=size, mode="bilinear", align_corners=False)[0]
-        descriptor_size = int(graph.manifest["rgb_descriptor_size"])
-        live_rgb = visual.torch_rgb_descriptors(resized, h, w, descriptor_size)
-        if not np.allclose(live_rgb, np.asarray(graph.rgb[positions]), atol=1e-5, rtol=1e-5):
-            raise ValueError("Replay RGB descriptors differ from graph extraction preprocessing.")
+        rgb_hwc = last_rgb.permute(1, 2, 0).numpy()
+        live_rgb = np.stack([helper.rgb_descriptor(rgb_hwc, r, c, h, w)
+                             for r in range(h) for c in range(w)])
+        if not np.allclose(live_rgb, cached_rgb, atol=1e-5, rtol=1e-5):
+            raise ValueError("Replay RGB descriptors differ from prototype graph extraction preprocessing.")
         image = Image.fromarray((last_rgb.permute(1, 2, 0).numpy().clip(0, 1)*255).astype(np.uint8))
         image.save(outdir / "frame.png")
         np.save(outdir / "prediction.npy", prediction[0, 0].numpy(), allow_pickle=False)
@@ -628,9 +731,10 @@ def replay_frame(args, helper, visual, graph, frame, manifest, outdir):
             "window_names": expected, "window_len": length, "grid": [h, w], "device": str(device),
             "max_feature_difference": float(np.max(np.abs(live-cached))),
             "max_score_difference": float(np.max(np.abs(scores-cached_scores))),
-            "max_rgb_descriptor_difference": float(np.max(np.abs(live_rgb-np.asarray(graph.rgb[positions]))))}
+            "max_rgb_descriptor_difference": float(np.max(np.abs(live_rgb-cached_rgb))),
+            "max_activation_difference": float(np.max(np.abs(live_activations-cached_activations)))}
     finally:
-        hook.remove()
+        capture.close()
         # No returned object retains GPU tensors. Release saliency before API requests.
         del model
         gc.collect()
@@ -1334,28 +1438,28 @@ def write_reports(report, outdir, heatmap_alpha=None):
 
 
 def prepare(args):
-    visual = load_module(args.visual_script, "_pattern_visual_graph")
     helper = load_module(args.prototype_script, "_pattern_prototype_graph")
-    source_dir = Path(args.prototype_graph_dir or visual.PROTOTYPE_GRAPH_DIR).resolve()
-    graph_dir = Path(args.visual_graph_dir or visual.OUTPUT_DIR).resolve()
-    manifest = json.loads((source_dir / "manifest.json").read_text())
-    if manifest.get("status") != "complete":
-        raise ValueError("Prototype graph extraction is not complete.")
+    source_dir = Path(args.prototype_graph_dir or helper.OUTPUT_DIR).resolve()
+    frame_label = args.frame_name or f"frame_{args.frame_no}"
     outdir = Path(args.output or SCRIPT_DIR / "pattern_report_outputs" /
-        (args.video_id + '_' + args.frame_name)).resolve()
+        (args.video_id + '_' + frame_label)).resolve()
     if outdir.exists():
         raise FileExistsError(f"Output already exists: {outdir}. Use --describe-only to finish an existing report, or choose a new --output.")
-    with visual.VisualGraph(helper, directory=graph_dir, source_directory=source_dir) as graph:
+    with PrototypeGroupRetriever(helper, source_dir) as graph:
+        manifest = graph.manifest
         frame = select_frame(graph.con, args.video_id, args.dataset, args.frame_name, args.frame_no)
-        cached_thresholds = visual.validate_thresholds(tuple(graph.manifest["thresholds"]))
-        thresholds = retrieval_thresholds(visual, cached_thresholds, args)
         provider, llm_model = llm_selection(args)
         minimum = getattr(args, "min_group_size", MIN_GROUP_SIZE)
-        print(f'Cached graph thresholds: {cached_thresholds}; requested retrieval thresholds: {thresholds}', flush=True)
+        print(f"Prototype graph: {source_dir}; N={graph.group_size} connected patches per prototype. "
+              f"Each anchor compares its top-{min(ANCHOR_PROTOTYPE_COUNT, graph.prototype_count)} activated prototype groups.", flush=True)
+        if any(getattr(args, name, None) is not None for name in ("visual_graph_dir", "min_stage4_cosine")):
+            print("Prototype-group retrieval does not use visual-graph files or patch-edge thresholds.", flush=True)
+        if args.top_k != TOP_K:
+            print("--top-k does not truncate prototype groups; all winning-group patches are retained. Use --patch-grid-cols for row size.", flush=True)
         outdir.mkdir(parents=True)
         (outdir / "crops").mkdir(); (outdir / "frames").mkdir()
         print(f'Replaying {frame["video"]}/{frame["target_name"]} with the original temporal context…', flush=True)
-        anchors, replay = replay_frame(args, helper, visual, graph, frame, manifest, outdir)
+        anchors, replay = replay_frame(args, helper, graph, frame, manifest, outdir)
         # GPU references from replay_frame have now left scope.
         gc.collect()
         try:
@@ -1367,47 +1471,47 @@ def prepare(args):
         report = {"schema_version": 2, "status": "prepared", "created_at": datetime.now(timezone.utc).isoformat(),
             "frame": frame, "replay": replay, "protocol": {"stage": "stage4", "saliency_percentile": args.saliency_percentile,
             "percentile_definition": "ascending midrank of mean raw predicted saliency_map per stage4 grid cell within its own frame; ties preserved",
-            "top_k": args.top_k, "top_k_before_saliency_split": True, "thresholds": list(thresholds),
-            "cached_graph_thresholds": list(cached_thresholds), "min_group_size": minimum,
+            "retrieval_mode": PROTOTYPE_RETRIEVAL_MODE,
+            "anchor_prototype_count": ANCHOR_PROTOTYPE_COUNT,
+            "prototype_selection": "highest mean anchor-to-member visual similarity among top-8 activated prototype groups",
+            "visual_similarity_formula": helper.SIMILARITY_FORMULA,
+            "graph_group_size": graph.group_size, "graph_group_size_source": graph.group_size_source,
+            "top_k": graph.group_size, "legacy_requested_top_k": args.top_k,
+            "top_k_before_saliency_split": True, "thresholds": None,
+            "cached_graph_thresholds": None, "min_group_size": minimum,
             "heatmap_alpha": float(getattr(args, "heatmap_alpha", HEATMAP_ALPHA)),
-            "patch_grid_cols": int(getattr(args, "patch_grid_cols", PATCH_GRID_COLS) or (args.top_k + 1)),
+            "patch_grid_cols": int(getattr(args, "patch_grid_cols", PATCH_GRID_COLS) or (graph.group_size + 1)),
             "heatmap_display": HEATMAP_DISPLAY_FORMAT,
             "llm_provider": provider, "llm_model": llm_model,
-            "other_videos_only": True, "max_matches_per_video": 1,
-            "video_identity": "(dataset, video)", "top_k_after_video_deduplication": True,
-            "ranking": "stage4 cosine descending, RGB MAE ascending, RGB structure cosine descending, node ID ascending",
-            "source_graph": str(graph_dir), "prototype_graph": str(source_dir), "source_manifest_sha256": graph.manifest["source_manifest_sha256"],
+            "other_videos_only": False, "max_matches_per_video": None,
+            "video_identity": "(dataset, video)", "top_k_after_video_deduplication": False,
+            "ranking": "select prototype by maximum mean visual similarity; return its complete connected group in graph activation-rank order",
+            "source_graph": str(source_dir), "prototype_graph": str(source_dir),
+            "source_manifest_sha256": graph.manifest_sha256, "edge_source": graph.source,
             "anchor_in_llm_inputs": True, "queries_per_anchor": 1, "query_scope": "anchor_plus_all_matches",
+            "anchor_self_membership": "included in group mean; omitted from matches to avoid duplicate input",
             "empty_group_policy": "skip without refilling", "small_group_policy": "skip anchors below minimum retrieved matches"}, "anchors": []}
-        if args.edge_source == "implicit":
-            # Do not open an unrelated materialization when explicitly bypassed.
-            retriever = object.__new__(EdgeRetriever)
-            retriever.graph, retriever.thresholds, retriever.connection = graph, thresholds, None
-            retriever.source = "exact_implicit_graph"
-        else:
-            retriever = EdgeRetriever(graph, thresholds)
-        report["protocol"]["edge_source"] = retriever.source
-        try:
-            for anchor in anchors:
-                print(f'Retrieving top-{args.top_k} matches from distinct other videos for node {anchor["id"]}…', flush=True)
-                hits = retriever.neighbors(anchor, args.top_k)
-                matches = []
-                for hit in hits:
-                    node = graph.node(hit["node_id"])
-                    if (node["dataset"], node["video"]) == (anchor["dataset"], anchor["video"]):
-                        raise ValueError("Retriever returned an excluded source-video patch.")
-                    node.update({key: float(hit[key]) for key in METRICS})
-                    matches.append(save_match_assets(node, source_dir, outdir))
-                validate_match_videos(anchor, matches)
-                groups = split_matches(matches, args.saliency_percentile)
-                entry = {"anchor": anchor, "matches": matches,
-                    "matched_video_count": len({(n["dataset"], n["video"]) for n in matches}),
-                    "groups": {name: [n["id"] for n in members] for name, members in groups.items()},
-                    "query": new_anchor_query(anchor, matches, minimum)}
-                report["anchors"].append(entry)
-                write_reports(report, outdir)
-        finally:
-            retriever.close()
+        for anchor in anchors:
+            print(f'Selecting the best prototype group for salient node {anchor["id"]}…', flush=True)
+            hits, selection = graph.select(anchor)
+            matches = []
+            for hit in hits:
+                node = graph.node(hit["node_id"])
+                node.update({key: float(hit[key]) for key in (*METRICS, "visual_score")})
+                node.update(selected_prototype_id=selection["selected_prototype_id"],
+                            prototype_graph_rank=hit["prototype_graph_rank"],
+                            prototype_activation=hit["prototype_activation"])
+                matches.append(save_match_assets(node, source_dir, outdir))
+            validate_retrieved_matches(anchor, matches, report)
+            groups = split_matches(matches, args.saliency_percentile)
+            entry = {"anchor": anchor, "matches": matches, "prototype_selection": selection,
+                "matched_video_count": len({(n["dataset"], n["video"]) for n in matches}),
+                "groups": {name: [n["id"] for n in members] for name, members in groups.items()},
+                "query": new_anchor_query(anchor, matches, minimum)}
+            report["anchors"].append(entry)
+            print(f'Anchor {anchor["id"]}: prototype {selection["selected_prototype_id"]}, '
+                  f'mean similarity {selection["selected_mean_visual_similarity"]}, {len(matches)} matches.', flush=True)
+            write_reports(report, outdir)
         write_reports(report, outdir)
     return report, outdir
 
@@ -1473,7 +1577,7 @@ def query_execution_summary(report):
 def describe_report(args, report, outdir):
     # Check the entire saved retrieval before starting any external requests.
     for entry in report["anchors"]:
-        validate_match_videos(entry["anchor"], entry["matches"])
+        validate_retrieved_matches(entry["anchor"], entry["matches"], report)
     minimum = args.min_group_size
     normalize_anchor_queries(report, minimum, reset=getattr(args, "reset_descriptions", False))
     report["query_execution"] = summary = query_execution_summary(report)
@@ -1488,7 +1592,7 @@ def describe_report(args, report, outdir):
         raise ValueError("Saved answers used the previous image input format. Use --describe-only --reset-descriptions "
                          "to archive and regenerate them with padded, boxed context crops.")
     report["protocol"].update(llm_provider="gemini", llm_model=model_id,
-        max_matches_per_video=1, other_videos_only=True, video_identity="(dataset, video)",
+        video_identity="(dataset, video)",
         image_context_mode=API_CONTEXT_MODE, context_padding_fraction_per_side=API_CONTEXT_PADDING,
         context_target="original patch inside red box; surrounding pixels provide context only")
     pending_count = summary["eligible_anchors"]-summary["completed_model_queries"]
@@ -1547,11 +1651,11 @@ def arguments():
     parser.add_argument('--dataset')
     parser.add_argument('--checkpoint', help='Defaults to graph checkpoint; must have the same SHA256')
     parser.add_argument('--evaluation', help='Defaults to evaluation.py path in graph manifest')
-    parser.add_argument('--visual-script', type=Path, default=SCRIPT_DIR/'generate_vis_sim_graph.py')
-    parser.add_argument('--prototype-script', type=Path, default=SCRIPT_DIR/'generate_prot_overlap_graph.py')
-    parser.add_argument('--visual-graph-dir', type=Path)
-    parser.add_argument('--prototype-graph-dir', type=Path)
-    parser.add_argument('--top-k', type=int, default=TOP_K, help='Maximum matches from distinct other videos, at most one patch per video')
+    parser.add_argument('--visual-script', type=Path, default=SCRIPT_DIR/'generate_vis_sim_graph.py', help=argparse.SUPPRESS)
+    parser.add_argument('--prototype-script', type=Path, default=SCRIPT_DIR/'generate_prot_graph.py')
+    parser.add_argument('--visual-graph-dir', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--prototype-graph-dir', type=Path, help='Prototype graph output directory (defaults to the prototype generator OUTPUT_DIR)')
+    parser.add_argument('--top-k', type=int, default=TOP_K, help='Legacy compatibility option; new retrieval uses every patch connected to the chosen prototype. Use --patch-grid-cols for layout.')
     parser.add_argument('--min-group-size', type=int, default=MIN_GROUP_SIZE, help=f'Minimum RETRIEVED matches per anchor (at least {MIN_GROUP_SIZE}); anchor not counted')
     parser.add_argument('--stage4-cosine-relaxation', type=float, default=STAGE4_COSINE_RELAXATION,
                         help='Subtract from the cached stage4 cosine cutoff (default STAGE4_COSINE_RELAXATION)')

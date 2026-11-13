@@ -1,6 +1,8 @@
 # 1. Generate visual similarity and prototype similarity graph
+python generate_prot_overlap_graph.py
 
 # 2. View visual similarity and prototype similarity graph
+python generate_vis_sim_graph.py
 
 # 3. Find similar visual patterns between the salient patches in a given sample
 # and other patches activating the same prototypes in other samples
@@ -8,10 +10,10 @@ python find_vis_pattern.py \
   --video-id 001 \
   --frame-name 0032.png \
   --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261111_182327/best_checkpoint.pth \
-  --top-k 7 \
+  --top-k 5 \
   --device cuda:0 \
   --api-image-max-side 256 \
   --api-jpeg-quality 90
 
 # View report
-python find_vis_pattern_report.py --dir /home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png
+python find_vis_pattern.py --view-only --output /home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png

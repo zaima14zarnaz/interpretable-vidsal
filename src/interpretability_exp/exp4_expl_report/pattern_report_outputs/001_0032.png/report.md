@@ -19,76 +19,126 @@ Video 001 · frame 32 (0032.png)
   "Description of each patch": [
     {
       "Anchor": {
-        "Low-level visual features": "Dark hair, skin-toned regions, and reddish clothing/lighting within the rectangular border.",
-        "Semantic object or part": "A person's head and upper body."
+        "Low-level visual features": "Red and skin-toned surfaces with soft textures.",
+        "Semantic object or part": "A person wearing a red shirt."
       }
     },
     {
       "Match 1": {
-        "Low-level visual features": "Light skin tones, dark hair, and an open mouth showing teeth against a reddish and greenish background.",
-        "Semantic object or part": "A person's face."
+        "Low-level visual features": "Dark grey shape against a white background.",
+        "Semantic object or part": "An animal's tail or shadow."
       }
     },
     {
       "Match 2": {
-        "Low-level visual features": "Dark and reddish tones, indistinct facial features in dim lighting.",
-        "Semantic object or part": "A person's face."
+        "Low-level visual features": "Beige and white vertical linear folds.",
+        "Semantic object or part": "Fabric pleats or draped material."
       }
     },
     {
       "Match 3": {
-        "Low-level visual features": "Dark brown and black hair/skin tones with shadowed facial features.",
-        "Semantic object or part": "A person's head and face."
+        "Low-level visual features": "Green and dark mottled textures.",
+        "Semantic object or part": "Foliage or trees."
       }
     },
     {
       "Match 4": {
-        "Low-level visual features": "Dark hair framing light skin, with visible facial features like an eye, nose, and smiling mouth.",
-        "Semantic object or part": "A person's face."
+        "Low-level visual features": "Green and yellowish-brown patchy surface.",
+        "Semantic object or part": "Grass or terrain."
       }
     },
     {
       "Match 5": {
-        "Low-level visual features": "Light skin tones, dark hair, and facial features under indoor lighting.",
-        "Semantic object or part": "A person's face."
+        "Low-level visual features": "Pink surface with a white graphic mark.",
+        "Semantic object or part": "A pink t-shirt with a design."
+      }
+    },
+    {
+      "Match 6": {
+        "Low-level visual features": "Light beige upper region and a dark horizontal band below.",
+        "Semantic object or part": "A wall or surface edge."
+      }
+    },
+    {
+      "Match 7": {
+        "Low-level visual features": "Dark vertical background with yellow text or graphics.",
+        "Semantic object or part": "Product packaging or printed text."
+      }
+    },
+    {
+      "Match 8": {
+        "Low-level visual features": "Mottled green, yellow, and white patches.",
+        "Semantic object or part": "A landscape or water surface."
+      }
+    },
+    {
+      "Match 9": {
+        "Low-level visual features": "High-contrast black, white, and dark tones with linear contours.",
+        "Semantic object or part": "An illustrated face or hair."
+      }
+    },
+    {
+      "Match 10": {
+        "Low-level visual features": "Dark bluish-gray curved surface with subtle highlights.",
+        "Semantic object or part": "A helmet or visor."
       }
     }
   ],
-  "Description of the common visual pattern": "All target patches depict a human face or head under various lighting conditions and angles.",
-  "Visual pattern title": "Human face",
-  "Supporting patches": [
+  "Description of the common visual pattern": "There is no clear visual pattern or semantic theme shared by a majority of the patches, as each image depicts completely different objects such as clothing, animals, foliage, text, and landscapes.",
+  "Visual pattern title": "None",
+  "Supporting patches": [],
+  "Non-supporting patches": [
     "Anchor",
     "Match 1",
     "Match 2",
     "Match 3",
     "Match 4",
-    "Match 5"
-  ],
-  "Non-supporting patches": []
+    "Match 5",
+    "Match 6",
+    "Match 7",
+    "Match 8",
+    "Match 9",
+    "Match 10"
+  ]
 }
 ```
 
-Anchor top-k prototypes: [6, 9, 11, 33, 44, 58, 92, 121, 145, 182, 185, 205, 208, 215, 235, 250]
+Anchor top-k prototypes: [31, 91, 104]
 
-Prototypes common to every retrieved match: [6, 9, 11, 33, 44, 58, 92, 121, 182, 205, 208, 215, 235, 250]
+Prototypes common to every retrieved match: [3]
 
 | Match number | Node | Video / frame | Saliency label | Percentile | Stage-4 cosine |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 118811 | 149 / 0608.png | non-salient | 0.880 | 0.6863 |
-| 2 | 430386 | 568 / 0224.png | salient | 1.000 | 0.6592 |
-| 3 | 81269 | 099 / 0224.png | salient | 1.000 | 0.6489 |
-| 4 | 138306 | 173 / 0416.png | salient | 1.000 | 0.6292 |
-| 5 | 130831 | 163 / 0672.png | salient | 1.000 | 0.6257 |
+| 1 | 116971 | 289 / 0288.png | non-salient | 0.964 | 0.3687 |
+| 2 | 2319 | 006 / 0288.png | salient | 0.976 | 0.1522 |
+| 3 | 1940 | 005 / 0288.png | non-salient | 0.880 | 0.2815 |
+| 4 | 1953 | 005 / 0288.png | non-salient | 0.952 | 0.2907 |
+| 5 | 145870 | 362 / 0544.png | non-salient | 0.952 | 0.2208 |
+| 6 | 135438 | 335 / 0160.png | salient | 1.000 | 0.2697 |
+| 7 | 225343 | 563 / 0160.png | non-salient | 0.928 | 0.2153 |
+| 8 | 120833 | 299 / 0160.png | salient | 0.976 | 0.1713 |
+| 9 | 87558 | 212 / 0544.png | non-salient | 0.940 | 0.1538 |
+| 10 | 86057 | 209 / 0416.png | salient | 0.976 | 0.1565 |
 
-Node 118811 — shared with anchor: [6, 9, 11, 33, 44, 58, 92, 121, 145, 182, 185, 205, 208, 215, 235, 250]; recurring across matches (ID/count): [{'id': 6, 'count': 5}, {'id': 9, 'count': 5}, {'id': 11, 'count': 5}, {'id': 33, 'count': 5}, {'id': 44, 'count': 5}, {'id': 58, 'count': 5}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 145, 'count': 4}, {'id': 182, 'count': 5}, {'id': 185, 'count': 2}, {'id': 205, 'count': 5}, {'id': 208, 'count': 5}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}, {'id': 250, 'count': 5}]
+Node 116971 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
 
-Node 430386 — shared with anchor: [6, 9, 11, 33, 44, 58, 92, 121, 145, 182, 205, 208, 215, 235, 250]; recurring across matches (ID/count): [{'id': 6, 'count': 5}, {'id': 9, 'count': 5}, {'id': 11, 'count': 5}, {'id': 21, 'count': 3}, {'id': 33, 'count': 5}, {'id': 44, 'count': 5}, {'id': 58, 'count': 5}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 145, 'count': 4}, {'id': 182, 'count': 5}, {'id': 205, 'count': 5}, {'id': 208, 'count': 5}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}, {'id': 250, 'count': 5}]
+Node 2319 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
 
-Node 81269 — shared with anchor: [6, 9, 11, 33, 44, 58, 92, 121, 145, 182, 205, 208, 215, 235, 250]; recurring across matches (ID/count): [{'id': 6, 'count': 5}, {'id': 9, 'count': 5}, {'id': 11, 'count': 5}, {'id': 21, 'count': 3}, {'id': 33, 'count': 5}, {'id': 44, 'count': 5}, {'id': 58, 'count': 5}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 145, 'count': 4}, {'id': 182, 'count': 5}, {'id': 205, 'count': 5}, {'id': 208, 'count': 5}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}, {'id': 250, 'count': 5}]
+Node 1940 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 51, 'count': 9}, {'id': 81, 'count': 4}]
 
-Node 138306 — shared with anchor: [6, 9, 11, 33, 44, 58, 92, 121, 182, 185, 205, 208, 215, 235, 250]; recurring across matches (ID/count): [{'id': 6, 'count': 5}, {'id': 9, 'count': 5}, {'id': 11, 'count': 5}, {'id': 21, 'count': 3}, {'id': 33, 'count': 5}, {'id': 44, 'count': 5}, {'id': 58, 'count': 5}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 182, 'count': 5}, {'id': 185, 'count': 2}, {'id': 205, 'count': 5}, {'id': 208, 'count': 5}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}, {'id': 250, 'count': 5}]
+Node 1953 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 51, 'count': 9}, {'id': 81, 'count': 4}]
 
-Node 130831 — shared with anchor: [6, 9, 11, 33, 44, 58, 92, 121, 145, 182, 205, 208, 215, 235, 250]; recurring across matches (ID/count): [{'id': 6, 'count': 5}, {'id': 9, 'count': 5}, {'id': 11, 'count': 5}, {'id': 33, 'count': 5}, {'id': 44, 'count': 5}, {'id': 58, 'count': 5}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 145, 'count': 4}, {'id': 182, 'count': 5}, {'id': 205, 'count': 5}, {'id': 208, 'count': 5}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}, {'id': 250, 'count': 5}]
+Node 145870 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+
+Node 135438 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+
+Node 225343 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 81, 'count': 4}]
+
+Node 120833 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 51, 'count': 9}, {'id': 81, 'count': 4}]
+
+Node 87558 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+
+Node 86057 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
 
 ## Anchor 29: cell (2, 5)
 
@@ -101,77 +151,126 @@ Video 001 · frame 32 (0032.png)
   "Description of each patch": [
     {
       "Anchor": {
-        "Low-level visual features": "Dark tones, white graphic elements, curved contours of hair and neck.",
-        "Semantic object or part": "Back of a person's head, neck, and upper torso wearing a dark jersey."
+        "Low-level visual features": "Dark color tones, vertical orientation, blurry texture",
+        "Semantic object or part": "Dark hair and shoulder of a person near water"
       }
     },
     {
       "Match 1": {
-        "Low-level visual features": "Central dark patch surrounded by blurred multicolored areas.",
-        "Semantic object or part": "Dark clothing or hair of a person in a crowd."
+        "Low-level visual features": "Vertical alternating dark and light stripes, linear edges",
+        "Semantic object or part": "Striped fabric or clothing"
       }
     },
     {
       "Match 2": {
-        "Low-level visual features": "Dark fabric texture next to skin-toned areas.",
-        "Semantic object or part": "A person's shoulder and dark clothing."
+        "Low-level visual features": "Dark blue and skin-toned regions with soft lighting",
+        "Semantic object or part": "Shoulder, neck, and dark clothing"
       }
     },
     {
       "Match 3": {
-        "Low-level visual features": "Maroon/dark red textured surface adjacent to skin tones.",
-        "Semantic object or part": "A person's clothing and part of a face or skin."
+        "Low-level visual features": "Vertical alternating dark and light stripes, linear edges",
+        "Semantic object or part": "Striped fabric or clothing"
       }
     },
     {
       "Match 4": {
-        "Low-level visual features": "Dark, mottled brownish-black texture.",
-        "Semantic object or part": "Dark clothing or hair."
+        "Low-level visual features": "Dark brown and white patches, vertical leg-like shapes",
+        "Semantic object or part": "Lower legs and body of a horse"
       }
     },
     {
       "Match 5": {
-        "Low-level visual features": "Bright red solid-colored fabric area with dark sleeves and a head/hat above.",
-        "Semantic object or part": "A person wearing a red sweater."
+        "Low-level visual features": "Dark wings, white central body, green background",
+        "Semantic object or part": "Flying or standing bird"
+      }
+    },
+    {
+      "Match 6": {
+        "Low-level visual features": "Muted gray-brown textured background with faint white letters",
+        "Semantic object or part": "Ground surface with text overlay"
+      }
+    },
+    {
+      "Match 7": {
+        "Low-level visual features": "Dark limb silhouette against blue and white horizontal lines",
+        "Semantic object or part": "Leg near a court line"
+      }
+    },
+    {
+      "Match 8": {
+        "Low-level visual features": "Tan and dark brown fur texture with a small highlighted snout area",
+        "Semantic object or part": "Animal muzzle or nose"
+      }
+    },
+    {
+      "Match 9": {
+        "Low-level visual features": "Dark solid fur texture, white band near the bottom",
+        "Semantic object or part": "Horse body and leg"
+      }
+    },
+    {
+      "Match 10": {
+        "Low-level visual features": "Purple surface with a white line and a blurry leg",
+        "Semantic object or part": "Tennis court surface and player's leg"
       }
     }
   ],
-  "Description of the common visual pattern": "Most patches depict a person's upper body, shoulders, or torso clad in dark or colored clothing (such as sweaters, jerseys, or jackets).",
-  "Visual pattern title": "Upper body clothing and torso of a person",
-  "Supporting patches": [
+  "Description of the common visual pattern": "There is no majority visual pattern or shared semantic category among the patches, as each patch depicts completely unrelated objects and scenes such as clothing, animals, sports courts, and text.",
+  "Visual pattern title": "None",
+  "Supporting patches": [],
+  "Non-supporting patches": [
     "Anchor",
     "Match 1",
     "Match 2",
+    "Match 3",
     "Match 4",
-    "Match 5"
-  ],
-  "Non-supporting patches": [
-    "Match 3"
+    "Match 5",
+    "Match 6",
+    "Match 7",
+    "Match 8",
+    "Match 9",
+    "Match 10"
   ]
 }
 ```
 
-Anchor top-k prototypes: [6, 9, 23, 29, 33, 44, 58, 92, 111, 121, 182, 205, 208, 215, 235, 250]
+Anchor top-k prototypes: [31, 91, 126]
 
-Prototypes common to every retrieved match: [92, 121, 182, 215, 235]
+Prototypes common to every retrieved match: [126]
 
 | Match number | Node | Video / frame | Saliency label | Percentile | Stage-4 cosine |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 180224 | 233 / 0160.png | non-salient | 0.928 | 0.6344 |
-| 2 | 127575 | 160 / 0096.png | non-salient | 0.855 | 0.6296 |
-| 3 | 275649 | 362 / 0416.png | non-salient | 0.928 | 0.6266 |
-| 4 | 301025 | 394 / 0864.png | salient | 0.976 | 0.6249 |
-| 5 | 118314 | 149 / 0224.png | non-salient | 0.964 | 0.6233 |
+| 1 | 12210 | 029 / 0928.png | non-salient | 0.964 | 0.1387 |
+| 2 | 174993 | 435 / 0032.png | non-salient | 0.940 | 0.0545 |
+| 3 | 12209 | 029 / 0928.png | salient | 0.976 | 0.1606 |
+| 4 | 67658 | 161 / 0160.png | salient | 0.976 | 0.1709 |
+| 5 | 118791 | 294 / 0160.png | non-salient | 0.892 | 0.3344 |
+| 6 | 103226 | 253 / 0416.png | non-salient | 0.627 | 0.1220 |
+| 7 | 233324 | 582 / 0032.png | non-salient | 0.952 | 0.2015 |
+| 8 | 173429 | 431 / 0032.png | non-salient | 0.940 | 0.1953 |
+| 9 | 67657 | 161 / 0160.png | non-salient | 0.964 | 0.1932 |
+| 10 | 48941 | 115 / 0416.png | non-salient | 0.952 | 0.1159 |
 
-Node 180224 — shared with anchor: [6, 23, 29, 44, 92, 111, 121, 182, 205, 215, 235]; recurring across matches (ID/count): [{'id': 6, 'count': 3}, {'id': 12, 'count': 2}, {'id': 15, 'count': 2}, {'id': 23, 'count': 4}, {'id': 29, 'count': 4}, {'id': 42, 'count': 3}, {'id': 44, 'count': 2}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 161, 'count': 2}, {'id': 182, 'count': 5}, {'id': 204, 'count': 2}, {'id': 205, 'count': 3}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}]
+Node 12210 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 65, 'count': 2}, {'id': 126, 'count': 10}]
 
-Node 127575 — shared with anchor: [23, 92, 121, 182, 215, 235]; recurring across matches (ID/count): [{'id': 23, 'count': 4}, {'id': 53, 'count': 2}, {'id': 68, 'count': 2}, {'id': 80, 'count': 2}, {'id': 87, 'count': 2}, {'id': 92, 'count': 5}, {'id': 104, 'count': 3}, {'id': 121, 'count': 5}, {'id': 134, 'count': 2}, {'id': 182, 'count': 5}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}]
+Node 174993 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 68, 'count': 3}, {'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
 
-Node 275649 — shared with anchor: [6, 9, 23, 29, 92, 121, 182, 205, 215, 235]; recurring across matches (ID/count): [{'id': 6, 'count': 3}, {'id': 9, 'count': 2}, {'id': 15, 'count': 2}, {'id': 23, 'count': 4}, {'id': 29, 'count': 4}, {'id': 35, 'count': 2}, {'id': 42, 'count': 3}, {'id': 92, 'count': 5}, {'id': 104, 'count': 3}, {'id': 121, 'count': 5}, {'id': 182, 'count': 5}, {'id': 205, 'count': 3}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}]
+Node 12209 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 65, 'count': 2}, {'id': 126, 'count': 10}]
 
-Node 301025 — shared with anchor: [6, 9, 23, 29, 44, 92, 121, 182, 205, 215, 235, 250]; recurring across matches (ID/count): [{'id': 6, 'count': 3}, {'id': 9, 'count': 2}, {'id': 12, 'count': 2}, {'id': 23, 'count': 4}, {'id': 29, 'count': 4}, {'id': 42, 'count': 3}, {'id': 44, 'count': 2}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 182, 'count': 5}, {'id': 205, 'count': 3}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}]
+Node 67658 — shared with anchor: [91, 126]; recurring across matches (ID/count): [{'id': 91, 'count': 2}, {'id': 104, 'count': 2}, {'id': 126, 'count': 10}]
 
-Node 118314 — shared with anchor: [29, 92, 121, 182, 215, 235]; recurring across matches (ID/count): [{'id': 29, 'count': 4}, {'id': 35, 'count': 2}, {'id': 53, 'count': 2}, {'id': 68, 'count': 2}, {'id': 80, 'count': 2}, {'id': 87, 'count': 2}, {'id': 92, 'count': 5}, {'id': 104, 'count': 3}, {'id': 121, 'count': 5}, {'id': 134, 'count': 2}, {'id': 161, 'count': 2}, {'id': 182, 'count': 5}, {'id': 204, 'count': 2}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}]
+Node 118791 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
+
+Node 103226 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 90, 'count': 6}, {'id': 104, 'count': 2}, {'id': 126, 'count': 10}]
+
+Node 233324 — shared with anchor: [91, 126]; recurring across matches (ID/count): [{'id': 90, 'count': 6}, {'id': 91, 'count': 2}, {'id': 126, 'count': 10}]
+
+Node 173429 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
+
+Node 67657 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 68, 'count': 3}, {'id': 126, 'count': 10}]
+
+Node 48941 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 68, 'count': 3}, {'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
 
 ## Anchor 18: cell (1, 6)
 
@@ -184,75 +283,123 @@ Video 001 · frame 32 (0032.png)
   "Description of each patch": [
     {
       "Anchor": {
-        "Low-level visual features": "Skin tones, dark and light patches, vertical orientation.",
-        "Semantic object or part": "Upper body and head of a person."
+        "Low-level visual features": "Flesh-toned and dark regions with blurry vertical and horizontal gradients.",
+        "Semantic object or part": "Upper body and torso of a person."
       }
     },
     {
       "Match 1": {
-        "Low-level visual features": "Dark tones, blurred edges, small patch of skin/light area.",
-        "Semantic object or part": "Head and face of a person in shadow."
+        "Low-level visual features": "Dark diagonal lines intersecting with a bright white highlight area.",
+        "Semantic object or part": "Structural lines or railings."
       }
     },
     {
       "Match 2": {
-        "Low-level visual features": "Vertical lines, mixed grayscale/color tones, cluttered details.",
-        "Semantic object or part": "Architectural elements and people in a crowd."
+        "Low-level visual features": "Horizontal blue and dark bands with vertical rectangular windows or port holes.",
+        "Semantic object or part": "Side of a ship or building facade."
       }
     },
     {
       "Match 3": {
-        "Low-level visual features": "Dark hair texture at the top, pinkish skin tone below.",
-        "Semantic object or part": "Back of a person's head and hair."
+        "Low-level visual features": "Angular light-colored surfaces meeting in stepped planes under shadow.",
+        "Semantic object or part": "Building roofs or architectural cornices."
       }
     },
     {
       "Match 4": {
-        "Low-level visual features": "Mottled skin tones, blurred textures, faint edge contours
-.",
-        "Semantic object or part": "Portion of a person's skin or face."
+        "Low-level visual features": "Smooth flesh-toned gradients with a subtle vertical contour.",
+        "Semantic object or part": "Skin of a person's body or limb."
       }
     },
     {
       "Match 5": {
-        "Low-level visual features": "Green foliage mixed with dark shadows and vertical structures.",
-        "Semantic object or part": "Plants and background architecture."
+        "Low-level visual features": "Dense dark and light speckles forming a mottled textured field.",
+        "Semantic object or part": "Crowd of people in a stadium."
+      }
+    },
+    {
+      "Match 6": {
+        "Low-level visual features": "Horizontal blocks of turquoise, white, and dark blue with faint reflections.",
+        "Semantic object or part": "Swimming pool edge and water."
+      }
+    },
+    {
+      "Match 7": {
+        "Low-level visual features": "Brownish-tan mottled texture with a central dark irregular blob.",
+        "Semantic object or part": "Earthy ground or a small animal/creature."
+      }
+    },
+    {
+      "Match 8": {
+        "Low-level visual features": "Brownish-tan mottled texture with a central dark irregular blob.",
+        "Semantic object or part": "Earthy ground or a small animal/creature."
+      }
+    },
+    {
+      "Match 9": {
+        "Low-level visual features": "Grey speckled grainy texture with a bright turquoise curve at the bottom corner.",
+        "Semantic object or part": "Textured surface with a colored edge."
+      }
+    },
+    {
+      "Match 10": {
+        "Low-level visual features": "Light blue background area above a rounded green-brown object and dark vertical shapes.",
+        "Semantic object or part": "Object against an open sky or light background."
       }
     }
   ],
-  "Description of the common visual pattern": "Most of the patches depict parts of a human body, such as heads, skin, or upper bodies, rendered in low-resolution photography.",
-  "Visual pattern title": "Human body parts",
-  "Supporting patches": [
+  "Description of the common visual pattern": "There is no clear visual pattern shared by most of the target patches. Each patch depicts entirely different semantic objects, colors, and textures (e.g., human skin, ship siding, architectural roofs, pool water, earthy ground, and crowd textures), failing to reach a majority agreement.",
+  "Visual pattern title": "None",
+  "Supporting patches": [],
+  "Non-supporting patches": [
     "Anchor",
     "Match 1",
-    "Match 3",
-    "Match 4"
-  ],
-  "Non-supporting patches": [
     "Match 2",
-    "Match 5"
+    "Match 3",
+    "Match 4",
+    "Match 5",
+    "Match 6",
+    "Match 7",
+    "Match 8",
+    "Match 9",
+    "Match 10"
   ]
 }
 ```
 
-Anchor top-k prototypes: [6, 9, 23, 33, 44, 66, 92, 111, 121, 182, 205, 208, 215, 224, 234, 235]
+Anchor top-k prototypes: [3, 57, 81]
 
-Prototypes common to every retrieved match: [92, 121, 182, 215, 235]
+Prototypes common to every retrieved match: [51]
 
 | Match number | Node | Video / frame | Saliency label | Percentile | Stage-4 cosine |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 281010 | 369 / 0224.png | salient | 0.976 | 0.6718 |
-| 2 | 144524 | 181 / 0352.png | non-salient | 0.819 | 0.6145 |
-| 3 | 55881 | 067 / 0608.png | non-salient | 0.807 | 0.5884 |
-| 4 | 300843 | 394 / 0736.png | non-salient | 0.916 | 0.5834 |
-| 5 | 138054 | 173 / 0224.png | salient | 0.988 | 0.5727 |
+| 1 | 130556 | 322 / 0672.png | non-salient | 0.831 | 0.0904 |
+| 2 | 124866 | 310 / 0288.png | non-salient | 0.940 | 0.1968 |
+| 3 | 126224 | 313 / 0288.png | non-salient | 0.771 | 0.1312 |
+| 4 | 33557 | 076 / 0672.png | non-salient | 0.952 | 0.2648 |
+| 5 | 22699 | 053 / 0800.png | non-salient | 0.807 | 0.2682 |
+| 6 | 16193 | 039 / 0160.png | non-salient | 0.964 | 0.1097 |
+| 7 | 34736 | 079 / 0544.png | non-salient | 0.916 | 0.1416 |
+| 8 | 34652 | 079 / 0416.png | non-salient | 0.867 | 0.1908 |
+| 9 | 218919 | 546 / 0544.png | non-salient | 0.904 | 0.1233 |
+| 10 | 80012 | 192 / 0160.png | non-salient | 0.867 | 0.1993 |
 
-Node 281010 — shared with anchor: [6, 23, 66, 92, 121, 182, 205, 215, 235]; recurring across matches (ID/count): [{'id': 6, 'count': 2}, {'id': 23, 'count': 2}, {'id': 66, 'count': 4}, {'id': 87, 'count': 4}, {'id': 92, 'count': 5}, {'id': 112, 'count': 2}, {'id': 121, 'count': 5}, {'id': 138, 'count': 2}, {'id': 161, 'count': 4}, {'id': 182, 'count': 5}, {'id': 192, 'count': 2}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}]
+Node 130556 — shared with anchor: []; recurring across matches (ID/count): [{'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
 
-Node 144524 — shared with anchor: [66, 92, 121, 182, 215, 235]; recurring across matches (ID/count): [{'id': 66, 'count': 4}, {'id': 87, 'count': 4}, {'id': 92, 'count': 5}, {'id': 104, 'count': 3}, {'id': 112, 'count': 2}, {'id': 121, 'count': 5}, {'id': 132, 'count': 2}, {'id': 134, 'count': 3}, {'id': 136, 'count': 4}, {'id': 138, 'count': 2}, {'id': 161, 'count': 4}, {'id': 182, 'count': 5}, {'id': 215, 'count': 5}, {'id': 218, 'count': 3}, {'id': 235, 'count': 5}]
+Node 124866 — shared with anchor: []; recurring across matches (ID/count): [{'id': 31, 'count': 2}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
 
-Node 55881 — shared with anchor: [6, 23, 66, 92, 121, 182, 215, 235]; recurring across matches (ID/count): [{'id': 6, 'count': 2}, {'id': 23, 'count': 2}, {'id': 30, 'count': 2}, {'id': 31, 'count': 2}, {'id': 66, 'count': 4}, {'id': 87, 'count': 4}, {'id': 92, 'count': 5}, {'id': 121, 'count': 5}, {'id': 136, 'count': 4}, {'id': 161, 'count': 4}, {'id': 182, 'count': 5}, {'id': 192, 'count': 2}, {'id': 215, 'count': 5}, {'id': 218, 'count': 3}, {'id': 235, 'count': 5}]
+Node 126224 — shared with anchor: []; recurring across matches (ID/count): [{'id': 51, 'count': 10}]
 
-Node 300843 — shared with anchor: [66, 92, 121, 182, 215, 235]; recurring across matches (ID/count): [{'id': 66, 'count': 4}, {'id': 80, 'count': 2}, {'id': 87, 'count': 4}, {'id': 92, 'count': 5}, {'id': 104, 'count': 3}, {'id': 110, 'count': 2}, {'id': 121, 'count': 5}, {'id': 132, 'count': 2}, {'id': 134, 'count': 3}, {'id': 136, 'count': 4}, {'id': 161, 'count': 4}, {'id': 182, 'count': 5}, {'id': 215, 'count': 5}, {'id': 235, 'count': 5}]
+Node 33557 — shared with anchor: [81]; recurring across matches (ID/count): [{'id': 51, 'count': 10}, {'id': 81, 'count': 2}, {'id': 115, 'count': 8}]
 
-Node 138054 — shared with anchor: [92, 121, 182, 215, 235]; recurring across matches (ID/count): [{'id': 30, 'count': 2}, {'id': 31, 'count': 2}, {'id': 80, 'count': 2}, {'id': 92, 'count': 5}, {'id': 104, 'count': 3}, {'id': 110, 'count': 2}, {'id': 121, 'count': 5}, {'id': 134, 'count': 3}, {'id': 136, 'count': 4}, {'id': 182, 'count': 5}, {'id': 215, 'count': 5}, {'id': 218, 'count': 3}, {'id': 235, 'count': 5}]
+Node 22699 — shared with anchor: []; recurring across matches (ID/count): [{'id': 31, 'count': 2}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+
+Node 16193 — shared with anchor: [3, 81]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 81, 'count': 2}]
+
+Node 34736 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+
+Node 34652 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+
+Node 218919 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+
+Node 80012 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]

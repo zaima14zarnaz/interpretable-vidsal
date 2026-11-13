@@ -365,6 +365,45 @@ class ExplainableVidSalModel(nn.Module):
             last_rgb = last_rgb / 255.0
         return last_rgb
 
+    def _prepare_rgb_last_frame_for_concepts(
+        self,
+        last_rgb_frame: torch.Tensor,
+    ) -> torch.Tensor:
+        """Match backbone spatial canvas for concept RGB plumbing; no ImageNet norm.
+
+        ``last_rgb_frame`` is the detached float [0,1] last frame from
+        ``_extract_last_rgb_frame`` (pre-backbone-normalization). Spatial size follows
+        ``backbone.resize_to`` exactly as ``backbone._prepare_input`` would for the
+        last temporal slice: None keeps H,W; int uses square; (H,W) uses that pair.
+        Bilinear + ``align_corners=False`` mirrors the backbone's trilinear spatial
+        geometry on T=1. ImageNet mean/std are intentionally not applied.
+        """
+        rgb = last_rgb_frame.detach().float()
+        if rgb.dim() != 4 or rgb.shape[1] != 3:
+            raise ValueError(
+                "last_rgb_frame must have shape [B,3,H,W], "
+                f"got {tuple(rgb.shape)}"
+            )
+        resize_to = getattr(self.backbone, "resize_to", None)
+        if resize_to is not None:
+            if isinstance(resize_to, int):
+                target_hw = (int(resize_to), int(resize_to))
+            elif isinstance(resize_to, (tuple, list)) and len(resize_to) == 2:
+                target_hw = (int(resize_to[0]), int(resize_to[1]))
+            else:
+                raise ValueError(
+                    f"Unsupported backbone.resize_to={resize_to!r}; "
+                    "expected None, int, or (height, width)."
+                )
+            if rgb.shape[-2:] != target_hw:
+                rgb = F.interpolate(
+                    rgb,
+                    size=target_hw,
+                    mode="bilinear",
+                    align_corners=False,
+                )
+        return rgb.to(self.output_device, non_blocking=True)
+
     def _decoder_output_size(self, last_rgb_frame: torch.Tensor) -> Tuple[int, int]:
         resize_to = getattr(self.backbone, "resize_to", None)
         if resize_to is None:
@@ -487,6 +526,16 @@ class ExplainableVidSalModel(nn.Module):
                 saliency_maps if return_concept_losses else None
             )
 
+            # One shared RGB canvas for concept losses: detached float [0,1], resized
+            # like backbone._prepare_input spatially, without ImageNet normalization.
+            # Stage-specific RGB patch grids are deferred; concept_features H,W after
+            # _resize_feature_for_concepts define batch-major, row-major patch order.
+            rgb_last_frame_for_concepts = None
+            if self.training and return_concept_losses:
+                rgb_last_frame_for_concepts = self._prepare_rgb_last_frame_for_concepts(
+                    last_rgb_frame
+                )
+
             concept_creations = self.concept_creations
             temporal_feature_infusers = self.temporal_feature_infusers
             for stage in self.backbone_stages:
@@ -502,6 +551,7 @@ class ExplainableVidSalModel(nn.Module):
                     saliency_maps=saliency_maps_for_concepts,
                     return_losses=return_concept_losses,
                     collect_gate_debug=False,
+                    rgb_last_frame=rgb_last_frame_for_concepts,
                 )
                 concept_outs[stage] = visual_out
                 if self.use_temporal_feature_infusion:
