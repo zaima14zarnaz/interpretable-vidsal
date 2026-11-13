@@ -453,6 +453,81 @@ class ExplainableVidSalModel(nn.Module):
             for stage in self.backbone_stages
         }
 
+    def _prepare_cached_backbone_features_for_stage(
+        self,
+        cached_backbone_features: Optional[Dict[str, torch.Tensor]],
+        stage: str,
+        concept_features: torch.Tensor,
+    ) -> Optional[torch.Tensor]:
+        """Align a detached reference last-slice tensor to this stage's concept grid.
+
+        Expected input per stage: [B, C_stage, 1, H_ref, W_ref], float, no grad.
+        Applies the same ``_resize_feature_for_concepts`` spatial policy used for
+        live features, then checks batch/channels/T=1/spatial alignment/finiteness.
+        Does not replace live concept or decoder features.
+        """
+        if cached_backbone_features is None:
+            return None
+        if stage not in cached_backbone_features:
+            raise KeyError(
+                f"cached_backbone_features missing stage {stage!r}; "
+                f"got keys {sorted(cached_backbone_features)}"
+            )
+        reference = cached_backbone_features[stage]
+        if not torch.is_tensor(reference):
+            raise TypeError(
+                f"cached_backbone_features[{stage!r}] must be a tensor, "
+                f"got {type(reference).__name__}"
+            )
+        if reference.requires_grad:
+            raise ValueError(
+                f"cached_backbone_features[{stage!r}] must have requires_grad=False."
+            )
+        reference = reference.detach().to(
+            device=concept_features.device,
+            dtype=torch.float32,
+        )
+        if reference.dim() != 5:
+            raise ValueError(
+                f"cached_backbone_features[{stage!r}] must be [B,C,1,H,W], "
+                f"got {tuple(reference.shape)}"
+            )
+        if reference.shape[0] != concept_features.shape[0]:
+            raise ValueError(
+                f"cached_backbone_features[{stage!r}] batch "
+                f"{reference.shape[0]} != live features batch "
+                f"{concept_features.shape[0]}"
+            )
+        expected_c = int(self.stage_channels[stage])
+        if reference.shape[1] != expected_c:
+            raise ValueError(
+                f"cached_backbone_features[{stage!r}] channels "
+                f"{reference.shape[1]} != expected {expected_c}"
+            )
+        if reference.shape[2] != 1:
+            raise ValueError(
+                f"cached_backbone_features[{stage!r}] must have temporal length 1, "
+                f"got T={reference.shape[2]}"
+            )
+        if not torch.isfinite(reference).all():
+            raise ValueError(
+                f"cached_backbone_features[{stage!r}] contains non-finite values."
+            )
+        reference = self._resize_feature_for_concepts(reference, stage)
+        live_last = concept_features[:, :, -1:, :, :]
+        if reference.shape[-2:] != live_last.shape[-2:]:
+            raise ValueError(
+                f"After concept-grid resize, cached_backbone_features[{stage!r}] "
+                f"spatial {tuple(reference.shape[-2:])} != live last-slice "
+                f"{tuple(live_last.shape[-2:])}"
+            )
+        if reference.shape[1] != live_last.shape[1]:
+            raise ValueError(
+                f"cached_backbone_features[{stage!r}] channels "
+                f"{reference.shape[1]} != live {live_last.shape[1]}"
+            )
+        return reference.detach()
+
     def forward(
         self,
         x: torch.Tensor,
@@ -461,6 +536,7 @@ class ExplainableVidSalModel(nn.Module):
         return_concept_losses: Optional[bool] = None,
         collect_gate_debug: bool = False,
         return_decoder_diagnostics: bool = False,
+        cached_backbone_features: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Union[torch.Tensor, Dict[str, Any]]:
         """
         Args:
@@ -477,6 +553,10 @@ class ExplainableVidSalModel(nn.Module):
                 stats are computed post-hoc for logging and do not affect outputs.
             return_decoder_diagnostics: if True, include decoder stage maps/gates in
                 prediction_out. Off by default so diagnostics never change training.
+            cached_backbone_features: optional dict of detached frozen-reference
+                last-slice tensors ``{stage: [B,C_stage,1,H,W]}``. Live prediction
+                features are still computed from the trainable backbone; reference
+                tensors are only forwarded into concept modules for later losses.
 
         Returns:
             saliency_map [B, 1, H, W] when return_details is False, else a result dict.
@@ -545,6 +625,13 @@ class ExplainableVidSalModel(nn.Module):
                 )
                 if return_details:
                     concept_features_shape[stage] = tuple(concept_features.shape)
+                reference_stage_features = (
+                    self._prepare_cached_backbone_features_for_stage(
+                        cached_backbone_features,
+                        stage,
+                        concept_features,
+                    )
+                )
                 concept_creations[stage]._diagnostic_label = f"concept.{stage}"
                 visual_out = concept_creations[stage](
                     concept_features,
@@ -552,6 +639,7 @@ class ExplainableVidSalModel(nn.Module):
                     return_losses=return_concept_losses,
                     collect_gate_debug=False,
                     rgb_last_frame=rgb_last_frame_for_concepts,
+                    cached_backbone_features=reference_stage_features,
                 )
                 concept_outs[stage] = visual_out
                 if self.use_temporal_feature_infusion:

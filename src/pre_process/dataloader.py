@@ -19,6 +19,11 @@ class DatasetLoader(Dataset):
     Each sample returns:
         video_filename, rgb_frame_set, final_sal_map, final_fix_map, n_frames
 
+    When return_sample_metadata=True, a sixth dict is appended with the actual
+    sampled clip identity (video, start, ordered frame names, spatial size, and
+    transform/view metadata). The start is recorded after random sampling, never
+    inferred from the dataset index.
+
     Shapes:
         rgb_frame_set: [T, H, W, 3]
         final_sal_map: [H, W]
@@ -47,6 +52,7 @@ class DatasetLoader(Dataset):
         transform_rgb: Optional[Callable] = None,
         transform_sal: Optional[Callable] = None,
         random_train_sampling: bool = False,
+        return_sample_metadata: bool = False,
     ):
         if window_len < 1:
             raise ValueError(f"window_len must be >= 1, got {window_len}")
@@ -57,6 +63,7 @@ class DatasetLoader(Dataset):
         self.window_len = window_len
         self.stride = stride
         self.random_train_sampling = random_train_sampling
+        self.return_sample_metadata = bool(return_sample_metadata)
 
         # Preferred: one synchronized transform for RGB window + saliency + fixation.
         self.joint_transform = joint_transform
@@ -274,5 +281,33 @@ class DatasetLoader(Dataset):
                 f"'{video_filename}/{final_fname}'"
             )
 
-        return video_filename, rgb_frame_set, final_sal_map, final_fix_map, n_frames
+        sample = (
+            video_filename,
+            rgb_frame_set,
+            final_sal_map,
+            final_fix_map,
+            n_frames,
+        )
+        if not self.return_sample_metadata:
+            return sample
+
+        height, width = int(rgb_frame_set.shape[1]), int(rgb_frame_set.shape[2])
+        metadata = {
+            "dataset_root": self.dataset_dir,
+            "dataset_dir": self.dataset_dir,
+            "split": os.path.basename(self.dataset_dir.rstrip(os.sep)),
+            "video_id": video_filename,
+            "window_start": int(start),
+            "frame_names": list(window_frames),
+            "window_len": int(self.window_len),
+            "stride": int(self.stride),
+            "random_train_sampling": bool(self.random_train_sampling),
+            "content_hw": (height, width),
+            "original_spatial_hw": (height, width),
+            "view_id": "identity",
+            "joint_transform": self.joint_transform is not None,
+            "transform_rgb": self.transform_rgb is not None,
+            "transform_sal": self.transform_sal is not None,
+        }
+        return sample + (metadata,)
 

@@ -68,15 +68,36 @@ def video_saliency_collate_fn(batch):
 
     Also supports pre-normalized rgb clips shaped [T, 3, H, W].
 
-    Returns:
-        video_filenames: list[str]
-        rgb_batch:       [B, T, 3, H, W] float32 in [0, 1] unless already normalized
-        sal_batch:       [B, 1, H, W] float32 in [0, 1]
-        fix_batch:       [B, 1, H, W] float32 binary {0, 1}
-        n_frames:        [B] int64, valid frame count per sample
-        valid_mask:      [B, T] bool, True for real frames
+    Legacy samples (5 fields) return:
+        video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask
+
+    Metadata-enabled samples (6 fields) return those six outputs plus:
+        sample_metadata: list[dict] in batch order, with padded_input_geometry set
     """
-    video_filenames, rgb_list, sal_list, fix_list, n_frames_list = zip(*batch)
+    if not batch:
+        raise ValueError("Cannot collate an empty batch.")
+    sample_len = len(batch[0])
+    if sample_len not in (5, 6):
+        raise ValueError(
+            "Each DatasetLoader sample must have 5 fields, or 6 when "
+            f"return_sample_metadata=True; got {sample_len}."
+        )
+    if any(len(sample) != sample_len for sample in batch):
+        raise ValueError("All samples in a batch must have the same field count.")
+
+    has_metadata = sample_len == 6
+    if has_metadata:
+        (
+            video_filenames,
+            rgb_list,
+            sal_list,
+            fix_list,
+            n_frames_list,
+            metadata_list,
+        ) = zip(*batch)
+    else:
+        video_filenames, rgb_list, sal_list, fix_list, n_frames_list = zip(*batch)
+        metadata_list = None
 
     b = len(batch)
     t_max = max(int(n) for n in n_frames_list)
@@ -88,6 +109,7 @@ def video_saliency_collate_fn(batch):
     fix_batch = torch.zeros(b, 1, h_max, w_max, dtype=torch.float32)
     valid_mask = torch.zeros(b, t_max, dtype=torch.bool)
     n_frames = torch.tensor(n_frames_list, dtype=torch.int64)
+    sample_metadata = []
 
     for i, (rgb, sal, fix, n) in enumerate(
         zip(rgb_list, sal_list, fix_list, n_frames_list)
@@ -111,6 +133,18 @@ def video_saliency_collate_fn(batch):
         fix_batch[i, 0, :fh, :fw] = fix_map
         valid_mask[i, :n] = True
 
+        if has_metadata:
+            meta = dict(metadata_list[i])
+            meta["content_hw"] = (int(h), int(w))
+            meta["original_spatial_hw"] = tuple(meta.get("original_spatial_hw", (h, w)))
+            meta["padded_input_geometry"] = {
+                "batch_shape": [int(b), int(t_max), 3, int(h_max), int(w_max)],
+                "n_frames": int(n),
+                "content_hw": [int(h), int(w)],
+                "padded_hw": [int(h_max), int(w_max)],
+            }
+            sample_metadata.append(meta)
+
     fix_batch = (fix_batch > 0).float()
 
     if fix_batch.shape != sal_batch.shape:
@@ -131,7 +165,7 @@ def video_saliency_collate_fn(batch):
                 f"fix_batch must be binary {{0, 1}}, got unique values {unique_fix.tolist()}"
             )
 
-    return (
+    outputs = (
         list(video_filenames),
         rgb_batch,
         sal_batch,
@@ -139,3 +173,6 @@ def video_saliency_collate_fn(batch):
         n_frames,
         valid_mask,
     )
+    if has_metadata:
+        return outputs + (sample_metadata,)
+    return outputs

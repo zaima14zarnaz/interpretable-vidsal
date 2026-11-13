@@ -9,7 +9,7 @@ import sys
 import math
 import pandas as pd
 from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 
@@ -33,6 +33,13 @@ from metrics import prepare_target_last_map
 from model.model import ExplainableVidSalModel
 from pre_process.dataloader import DatasetLoader
 from model.concept_creation import save_prototype_queues
+from model.backbone_feature_cache import (
+    CACHE_ROOT as DEFAULT_BACKBONE_FEATURE_CACHE_ROOT,
+    DEFAULT_REFERENCE_CHECKPOINT,
+    FrozenBackboneFeatureCache,
+    SampleIdentity,
+    fingerprint_rgb_clip,
+)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -63,6 +70,14 @@ MICRO_BATCH_SIZE = 2
 # Gradient checkpointing trades recompute for lower activation memory during backbone fine-tuning.
 BACKBONE_GRADIENT_CHECKPOINTING = True
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
+
+# Frozen reference-feature cache plumbing (targets only; no feature-similarity loss yet).
+USE_CACHED_BACKBONE_FEATURES = True
+BACKBONE_FEATURE_CACHE_ROOT = str(DEFAULT_BACKBONE_FEATURE_CACHE_ROOT)
+REFERENCE_BACKBONE_CHECKPOINT = DEFAULT_REFERENCE_CHECKPOINT
+# True: load only; miss raises. False: compute missing with the frozen reference.
+BACKBONE_FEATURE_CACHE_READ_ONLY = False
+BACKBONE_FEATURE_CACHE_STORAGE_DTYPE = "float16"
 LR = 5e-5
 FINETUNE_LR = 5e-5
 WEIGHT_DECAY = 1e-4
@@ -105,7 +120,7 @@ PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
 
 # Epochs 1..N: zero dense/CC/SIM/NSS/KL, side-stage, and priority-map loss weights.
 # From epoch N+1 onward, restore the values configured in LOSS_LAMBDA below.
-INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 3
+INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 5
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -308,6 +323,158 @@ def _return_concept_losses() -> bool:
             "lambda_visual_equiv",
         )
     )
+
+
+def _unpack_loader_batch(batch):
+    """Support legacy 6-field batches and metadata-enabled 7-field batches."""
+    if len(batch) == 6:
+        video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask = batch
+        return (
+            video_filenames,
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+            n_frames,
+            valid_mask,
+            None,
+        )
+    if len(batch) == 7:
+        (
+            video_filenames,
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+            n_frames,
+            valid_mask,
+            sample_metadata,
+        ) = batch
+        return (
+            video_filenames,
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+            n_frames,
+            valid_mask,
+            sample_metadata,
+        )
+    raise ValueError(
+        f"Unexpected loader batch length {len(batch)}; expected 6 or 7 fields."
+    )
+
+
+def _build_reference_cache(
+    device: torch.device,
+) -> Optional[FrozenBackboneFeatureCache]:
+    if not USE_CACHED_BACKBONE_FEATURES:
+        return None
+    cache = FrozenBackboneFeatureCache(
+        root=BACKBONE_FEATURE_CACHE_ROOT,
+        checkpoint=REFERENCE_BACKBONE_CHECKPOINT,
+        device=device,
+        storage_dtype=BACKBONE_FEATURE_CACHE_STORAGE_DTYPE,
+        resize_to=(224, 384),
+        normalize=True,
+    )
+    print(
+        "Frozen reference-feature cache | "
+        f"root={BACKBONE_FEATURE_CACHE_ROOT} | "
+        f"read_only={BACKBONE_FEATURE_CACHE_READ_ONLY} | "
+        f"checkpoint={REFERENCE_BACKBONE_CHECKPOINT} | "
+        f"fingerprint={cache.reference_fingerprint[:16]}… | "
+        f"legacy_compatible={cache.legacy_reference_sha256 is not None}",
+        flush=True,
+    )
+    return cache
+
+
+def _content_hw_from_meta(meta: Dict[str, Any]) -> Tuple[int, int]:
+    content_hw = meta.get("content_hw")
+    if content_hw is None and meta.get("padded_input_geometry"):
+        content_hw = meta["padded_input_geometry"].get("content_hw")
+    if content_hw is None:
+        content_hw = meta.get("original_spatial_hw")
+    if content_hw is None or len(content_hw) != 2:
+        raise ValueError(f"sample metadata missing content_hw: {meta!r}")
+    return int(content_hw[0]), int(content_hw[1])
+
+
+def _identities_for_rgb_view(
+    sample_metadata: Sequence[Dict[str, Any]],
+    rgb_batch: torch.Tensor,
+    n_frames: torch.Tensor,
+    *,
+    view_id: str,
+    preprocess: Dict[str, Any],
+) -> Tuple[List[SampleIdentity], List[Tuple[int, int]]]:
+    identities: List[SampleIdentity] = []
+    content_hw_list: List[Tuple[int, int]] = []
+    for index, meta in enumerate(sample_metadata):
+        height, width = _content_hw_from_meta(meta)
+        frames = int(n_frames[index])
+        clip = rgb_batch[index, :frames, :, :height, :width].detach().to(
+            dtype=torch.float32
+        )
+        if clip.numel() > 0 and float(clip.max()) > 2.0:
+            clip = clip / 255.0
+        content_sha = fingerprint_rgb_clip(clip)
+        padded = dict(meta.get("padded_input_geometry") or {})
+        padded["view_id"] = view_id
+        identities.append(
+            SampleIdentity(
+                dataset_root=str(meta.get("dataset_root") or meta.get("dataset_dir")),
+                video_id=str(meta["video_id"]),
+                window_start=int(meta["window_start"]),
+                frame_names=tuple(meta["frame_names"]),
+                window_len=int(meta.get("window_len", frames)),
+                content_sha256=content_sha,
+                split=meta.get("split"),
+                temporal_sampling={
+                    "mode": "contiguous",
+                    "stride": int(meta.get("stride", 1)),
+                },
+                view_id=str(view_id),
+                input_shape=tuple(int(x) for x in clip.shape),
+                padded_input_geometry=padded,
+                preprocess=dict(preprocess),
+            )
+        )
+        content_hw_list.append((height, width))
+    return identities, content_hw_list
+
+
+def _resolve_cached_backbone_features(
+    cache: Optional[FrozenBackboneFeatureCache],
+    rgb_batch: torch.Tensor,
+    sample_metadata: Optional[Sequence[Dict[str, Any]]],
+    n_frames: torch.Tensor,
+    *,
+    view_id: str = "identity",
+) -> Optional[Dict[str, torch.Tensor]]:
+    """Resolve frozen reference last-slice features for the exact RGB view."""
+    if cache is None or not USE_CACHED_BACKBONE_FEATURES:
+        return None
+    if sample_metadata is None:
+        raise ValueError(
+            "USE_CACHED_BACKBONE_FEATURES requires DatasetLoader "
+            "return_sample_metadata=True and collated sample metadata."
+        )
+    identities, content_hw = _identities_for_rgb_view(
+        sample_metadata,
+        rgb_batch,
+        n_frames,
+        view_id=view_id,
+        preprocess=cache.preprocess,
+    )
+    with torch.no_grad():
+        return cache.resolve_batch(
+            rgb_batch.detach(),
+            identities=identities,
+            n_frames=n_frames,
+            content_hw=content_hw,
+            view_id=view_id,
+            force=False,
+            allow_compute=not BACKBONE_FEATURE_CACHE_READ_ONLY,
+        )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1006,6 +1173,7 @@ def train_one_epoch(
     output_dir: str,
     calculate_metrics: bool = True,
     scaler: Optional[GradScaler] = None,
+    feature_cache: Optional[FrozenBackboneFeatureCache] = None,
 ) -> Tuple[float, Optional[Dict[str, float]]]:
     model.train()
     running_loss = 0.0
@@ -1020,14 +1188,16 @@ def train_one_epoch(
         leave=False,
         disable=not SHOW_PROGRESS_BAR,
     )
-    for batch_idx, (
-        video_filenames,
-        rgb_batch,
-        sal_batch,
-        fix_batch,
-        n_frames,
-        valid_mask,
-    ) in enumerate(pbar):
+    for batch_idx, batch in enumerate(pbar):
+        (
+            video_filenames,
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+            n_frames,
+            valid_mask,
+            sample_metadata,
+        ) = _unpack_loader_batch(batch)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
         rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
@@ -1036,6 +1206,15 @@ def train_one_epoch(
             fix_batch,
         )
         fix_batch = (fix_batch > 0).float()
+        n_frames = n_frames.to(device=rgb_batch.device, non_blocking=True)
+
+        cached_backbone_features = _resolve_cached_backbone_features(
+            feature_cache,
+            rgb_batch,
+            sample_metadata,
+            n_frames,
+            view_id="identity",
+        )
 
         equiv_model_out = None
         with autocast(
@@ -1049,16 +1228,25 @@ def train_one_epoch(
                 return_details=True,
                 return_concept_losses=_return_concept_losses(),
                 return_decoder_diagnostics=(batch_idx == 0),
+                cached_backbone_features=cached_backbone_features,
             )
 
             if _should_run_visual_equiv(model, epoch):
                 rgb_batch_flip = torch.flip(rgb_batch, dims=[-1])
+                cached_backbone_features_flip = _resolve_cached_backbone_features(
+                    feature_cache,
+                    rgb_batch_flip,
+                    sample_metadata,
+                    n_frames,
+                    view_id="hflip",
+                )
                 equiv_model_out = model(
                     rgb_batch_flip,
                     saliency_maps=sal_batch,
                     return_details=True,
                     return_concept_losses=_return_concept_losses(),
                     return_decoder_diagnostics=False,
+                    cached_backbone_features=cached_backbone_features_flip,
                 )
 
             if batch_idx == 0:
@@ -1187,6 +1375,7 @@ def validate_one_epoch(
     device: torch.device,
     epoch: int,
     output_dir: str,
+    feature_cache: Optional[FrozenBackboneFeatureCache] = None,
 ) -> Tuple[float, Dict[str, float], None]:
     model.eval()
     running_loss = 0.0
@@ -1199,14 +1388,16 @@ def validate_one_epoch(
         leave=False,
         disable=not SHOW_PROGRESS_BAR,
     )
-    for batch_idx, (
-        video_filenames,
-        rgb_batch,
-        sal_batch,
-        fix_batch,
-        n_frames,
-        valid_mask,
-    ) in enumerate(pbar):
+    for batch_idx, batch in enumerate(pbar):
+        (
+            video_filenames,
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+            n_frames,
+            valid_mask,
+            sample_metadata,
+        ) = _unpack_loader_batch(batch)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
         rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
@@ -1215,6 +1406,16 @@ def validate_one_epoch(
             fix_batch,
         )
         fix_batch = (fix_batch > 0).float()
+        n_frames = n_frames.to(device=rgb_batch.device, non_blocking=True)
+        cached_backbone_features = None
+        if _return_concept_losses():
+            cached_backbone_features = _resolve_cached_backbone_features(
+                feature_cache,
+                rgb_batch,
+                sample_metadata,
+                n_frames,
+                view_id="identity",
+            )
 
         with autocast(
             device.type,
@@ -1227,6 +1428,7 @@ def validate_one_epoch(
                 return_details=True,
                 return_concept_losses=_return_concept_losses(),
                 return_decoder_diagnostics=(batch_idx == 0),
+                cached_backbone_features=cached_backbone_features,
             )
             if batch_idx == 0:
                 _print_decoder_concept_gate_debug(model, model_out)
@@ -1332,8 +1534,20 @@ def main() -> None:
         f"from epoch {INTERPRETABILITY_LOSS_WARMUP_EPOCHS + 1}: restore LOSS_LAMBDA values"
     )
 
-    train_dataset = DatasetLoader(TRAIN_DATASET_DIR, window_len=WINDOW_LEN, stride=1, random_train_sampling=True)
-    val_dataset = DatasetLoader(VAL_DATASET_DIR, window_len=WINDOW_LEN, stride=32, random_train_sampling=False)
+    train_dataset = DatasetLoader(
+        TRAIN_DATASET_DIR,
+        window_len=WINDOW_LEN,
+        stride=1,
+        random_train_sampling=True,
+        return_sample_metadata=USE_CACHED_BACKBONE_FEATURES,
+    )
+    val_dataset = DatasetLoader(
+        VAL_DATASET_DIR,
+        window_len=WINDOW_LEN,
+        stride=32,
+        random_train_sampling=False,
+        return_sample_metadata=USE_CACHED_BACKBONE_FEATURES,
+    )
 
     # g = torch.Generator().manual_seed(SEED)
     # idx = torch.randperm(len(train_dataset), generator=g)[:MAX_SAMPLES].tolist()
@@ -1458,10 +1672,17 @@ def main() -> None:
         f"scheduler T_max={scheduler_t_max} eta_min={scheduler_eta_min:.1e}"
     )
     scaler = GradScaler(device.type, enabled=_amp_enabled(device))
+    feature_cache = _build_reference_cache(device)
 
     if OVERFIT_ONE_BATCH:
         _run_overfit_one_batch(
-            model, train_loader, optimizer, trainable_params, device, OUTPUT_DIR
+            model,
+            train_loader,
+            optimizer,
+            trainable_params,
+            device,
+            OUTPUT_DIR,
+            feature_cache=feature_cache,
         )
         return
 
@@ -1498,6 +1719,7 @@ def main() -> None:
             OUTPUT_DIR,
             calculate_metrics=False,
             scaler=scaler,
+            feature_cache=feature_cache,
         )
         run_validation = epoch % val_every_n_epochs == 0
         if run_validation:
@@ -1507,6 +1729,7 @@ def main() -> None:
                 device,
                 epoch,
                 OUTPUT_DIR,
+                feature_cache=feature_cache,
             )
         else:
             val_loss = None
@@ -1590,18 +1813,35 @@ def _run_overfit_one_batch(
     trainable_params: list,
     device: torch.device,
     output_dir: str,
+    feature_cache: Optional[FrozenBackboneFeatureCache] = None,
 ) -> None:
     """Debug mode: repeatedly train on the first batch."""
     print(f"OVERFIT_ONE_BATCH: {OVERFIT_STEPS} steps on first batch")
 
     batch = next(iter(loader))
-    video_filenames, rgb_batch, sal_batch, fix_batch, n_frames, valid_mask = batch
+    (
+        video_filenames,
+        rgb_batch,
+        sal_batch,
+        fix_batch,
+        n_frames,
+        valid_mask,
+        sample_metadata,
+    ) = _unpack_loader_batch(batch)
     rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
         rgb_batch,
         sal_batch,
         fix_batch,
     )
     fix_batch = (fix_batch > 0).float()
+    n_frames = n_frames.to(device=rgb_batch.device, non_blocking=True)
+    cached_backbone_features = _resolve_cached_backbone_features(
+        feature_cache,
+        rgb_batch,
+        sample_metadata,
+        n_frames,
+        view_id="identity",
+    )
 
     model.train()
     for step in range(1, OVERFIT_STEPS + 1):
@@ -1612,6 +1852,7 @@ def _run_overfit_one_batch(
             return_details=True,
             return_concept_losses=_return_concept_losses(),
             return_decoder_diagnostics=True,
+            cached_backbone_features=cached_backbone_features,
         )
         if step == 1:
             save_first_batch_maps(model_out, sal_batch, fix_batch, rgb_batch, output_dir)

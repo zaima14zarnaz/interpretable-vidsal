@@ -910,6 +910,7 @@ class VisualConceptCreation(nn.Module):
         return_losses: bool = True,
         collect_gate_debug: bool = False,
         rgb_last_frame: Optional[torch.Tensor] = None,
+        cached_backbone_features: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
@@ -924,6 +925,12 @@ class VisualConceptCreation(nn.Module):
                 it. Appearance descriptors use the actual ``features`` H,W grid,
                 in batch-major, row-major patch order. RGB appearance cost is fixed;
                 gradients reach model parameters through live soft assignments.
+            cached_backbone_features: optional detached frozen-reference last-slice
+                tensor shaped [B, C, 1, H, W], aligned with ``features[:, :, -1:]``.
+                Flattening order for a future feature-similarity loss must match the
+                live visual patch order: [B,C,1,H,W] -> [B,H,W,C] -> [B*H*W,C].
+                Kept separate from learned ``visual_patch_embeddings``; unused for
+                loss in this plumbing step.
         Returns:
             Visual concept outputs plus legacy temporal keys set to None.
         """
@@ -934,6 +941,49 @@ class VisualConceptCreation(nn.Module):
             )
         if features.size(2) < 1:
             raise ValueError(f"Need T>=1 for visual concepts, got T={features.size(2)}")
+        if cached_backbone_features is not None:
+            if not torch.is_tensor(cached_backbone_features):
+                raise TypeError(
+                    "cached_backbone_features must be a torch.Tensor or None."
+                )
+            if cached_backbone_features.requires_grad:
+                raise ValueError(
+                    "cached_backbone_features must be detached (requires_grad=False)."
+                )
+            ref = cached_backbone_features.detach()
+            if ref.dim() != 5 or ref.shape[2] != 1:
+                raise ValueError(
+                    "cached_backbone_features must have shape [B,C,1,H,W], "
+                    f"got {tuple(ref.shape)}"
+                )
+            live_last = features[:, :, -1:, :, :]
+            if ref.shape[0] != live_last.shape[0]:
+                raise ValueError(
+                    "cached_backbone_features batch must match features: "
+                    f"{ref.shape[0]} vs {live_last.shape[0]}"
+                )
+            if ref.shape[1] != live_last.shape[1]:
+                raise ValueError(
+                    "cached_backbone_features channels must match features: "
+                    f"{ref.shape[1]} vs {live_last.shape[1]}"
+                )
+            if ref.shape[-2:] != live_last.shape[-2:]:
+                raise ValueError(
+                    "cached_backbone_features spatial grid must match "
+                    f"features[:, :, -1:]: {tuple(ref.shape[-2:])} vs "
+                    f"{tuple(live_last.shape[-2:])}"
+                )
+            if ref.device != features.device:
+                raise ValueError(
+                    "cached_backbone_features must be on the same device as features: "
+                    f"{ref.device} vs {features.device}"
+                )
+            if not torch.isfinite(ref).all():
+                raise ValueError("cached_backbone_features contains non-finite values.")
+            # Local only for a subsequent loss edit; do not store on self.
+            cached_backbone_features = ref
+        else:
+            cached_backbone_features = None
         if rgb_last_frame is not None:
             if not torch.is_tensor(rgb_last_frame):
                 raise TypeError("rgb_last_frame must be a torch.Tensor or None.")
@@ -957,6 +1007,9 @@ class VisualConceptCreation(nn.Module):
                     f"{rgb_last_frame.device} vs {features.device}"
                 )
         visual_out = self._build_visual_concepts_from_patches(features)
+        # Reserved for a subsequent feature-similarity loss against live embeddings.
+        # Kept local/validated only; does not affect current losses or queues.
+        _ = cached_backbone_features
         align_out: Dict[str, Any] = {
             "loss_visual_saliency_align": None,
             "visual_saliency_patch_logits": None,
@@ -1142,3 +1195,4 @@ def load_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
         raise ValueError("RGB queue snapshot format/stages do not match. Old embedding queues cannot be reused; start with empty RGB queues.")
     for name, module in modules.items():
         module.load_prototype_queue_state(payload["stages"][name])
+
