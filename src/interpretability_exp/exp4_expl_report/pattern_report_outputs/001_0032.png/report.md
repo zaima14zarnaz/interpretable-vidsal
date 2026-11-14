@@ -19,126 +19,106 @@ Video 001 · frame 32 (0032.png)
   "Description of each patch": [
     {
       "Anchor": {
-        "Low-level visual features": "Red and skin-toned surfaces with soft textures.",
-        "Semantic object or part": "A person wearing a red shirt."
+        "Low-level visual features": "Red, black, and skin-toned color regions with soft and sharp edges forming human contours.",
+        "Semantic object or part": "Upper body of a person wearing a red garment."
       }
     },
     {
       "Match 1": {
-        "Low-level visual features": "Dark grey shape against a white background.",
-        "Semantic object or part": "An animal's tail or shadow."
+        "Low-level visual features": "White, grey, and metallic surfaces with circular and linear reflections.",
+        "Semantic object or part": "Glassware and countertop surface near a sink."
       }
     },
     {
       "Match 2": {
-        "Low-level visual features": "Beige and white vertical linear folds.",
-        "Semantic object or part": "Fabric pleats or draped material."
+        "Low-level visual features": "White and grey curved shapes with mottled texture against a brownish background.",
+        "Semantic object or part": "Curved white object or foam on water or ground."
       }
     },
     {
       "Match 3": {
-        "Low-level visual features": "Green and dark mottled textures.",
-        "Semantic object or part": "Foliage or trees."
+        "Low-level visual features": "Skin-toned hand, white rectangular strips, and dark vertical structural elements.",
+        "Semantic object or part": "Hand interacting with white keys on a keyboard or instrument."
       }
     },
     {
       "Match 4": {
-        "Low-level visual features": "Green and yellowish-brown patchy surface.",
-        "Semantic object or part": "Grass or terrain."
+        "Low-level visual features": "Skin-toned fingers, white rectangular shapes, and a dark background.",
+        "Semantic object or part": "Hand pressing keys on a keyboard or instrument."
       }
     },
     {
       "Match 5": {
-        "Low-level visual features": "Pink surface with a white graphic mark.",
-        "Semantic object or part": "A pink t-shirt with a design."
+        "Low-level visual features": "Skin-toned hand, white horizontal blocks, and dark surrounding surfaces.",
+        "Semantic object or part": "Hand resting on keyboard keys."
       }
     },
     {
       "Match 6": {
-        "Low-level visual features": "Light beige upper region and a dark horizontal band below.",
-        "Semantic object or part": "A wall or surface edge."
+        "Low-level visual features": "Skin-toned hand and fingers, white key surfaces, and dark background.",
+        "Semantic object or part": "Hand resting on keyboard keys."
       }
     },
     {
       "Match 7": {
-        "Low-level visual features": "Dark vertical background with yellow text or graphics.",
-        "Semantic object or part": "Product packaging or printed text."
+        "Low-level visual features": "Skin-toned fingers, white rectangular blocks, and dark structural areas.",
+        "Semantic object or part": "Hand pressing keyboard keys."
       }
     },
     {
       "Match 8": {
-        "Low-level visual features": "Mottled green, yellow, and white patches.",
-        "Semantic object or part": "A landscape or water surface."
+        "Low-level visual features": "Brown, olive-green, and dark mottled textures with irregular gradients.",
+        "Semantic object or part": "Textured organic surface or camouflage."
       }
     },
     {
       "Match 9": {
-        "Low-level visual features": "High-contrast black, white, and dark tones with linear contours.",
-        "Semantic object or part": "An illustrated face or hair."
+        "Low-level visual features": "High-contrast white, red, and dark rounded color patches.",
+        "Semantic object or part": "Cartoon character head or stylized graphic."
       }
     },
     {
       "Match 10": {
-        "Low-level visual features": "Dark bluish-gray curved surface with subtle highlights.",
-        "Semantic object or part": "A helmet or visor."
+        "Low-level visual features": "Vertical white rectangular band containing a dark and red shape, bordered by muted textures.",
+        "Semantic object or part": "Vertical structure with a red object or graphic."
       }
-    }
-  ],
-  "Description of the common visual pattern": "There is no clear visual pattern or semantic theme shared by a majority of the patches, as each image depicts completely different objects such as clothing, animals, foliage, text, and landscapes.",
-  "Visual pattern title": "None",
-  "Supporting patches": [],
-  "Non-supporting patches": [
-    "Anchor",
-    "Match 1",
-    "Match 2",
-    "Match 3",
-    "Match 4",
-    "Match 5",
-    "Match 6",
-    "Match 7",
-    "Match 8",
-    "Match 9",
-    "Match 10"
-  ]
-}
-```
 
-Anchor top-k prototypes: [31, 91, 104]
+Anchor top-k prototypes: [39, 45, 90]
 
-Prototypes common to every retrieved match: [3]
+Prototypes common to every retrieved match: [35, 39, 90]
 
 | Match number | Node | Video / frame | Saliency label | Percentile | Stage-4 cosine |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 116971 | 289 / 0288.png | non-salient | 0.964 | 0.3687 |
-| 2 | 2319 | 006 / 0288.png | salient | 0.976 | 0.1522 |
-| 3 | 1940 | 005 / 0288.png | non-salient | 0.880 | 0.2815 |
-| 4 | 1953 | 005 / 0288.png | non-salient | 0.952 | 0.2907 |
-| 5 | 145870 | 362 / 0544.png | non-salient | 0.952 | 0.2208 |
-| 6 | 135438 | 335 / 0160.png | salient | 1.000 | 0.2697 |
-| 7 | 225343 | 563 / 0160.png | non-salient | 0.928 | 0.2153 |
-| 8 | 120833 | 299 / 0160.png | salient | 0.976 | 0.1713 |
-| 9 | 87558 | 212 / 0544.png | non-salient | 0.940 | 0.1538 |
-| 10 | 86057 | 209 / 0416.png | salient | 0.976 | 0.1565 |
+| 1 | 44117 | 103 / 0160.png | salient | 1.000 | 0.1265 |
+| 2 | 235525 | 589 / 0032.png | salient | 1.000 | 0.1544 |
+| 3 | 143875 | 358 / 0032.png | salient | 1.000 | 0.1788 |
+| 4 | 144043 | 358 / 0288.png | salient | 1.000 | 0.1880 |
+| 5 | 144295 | 358 / 0672.png | salient | 1.000 | 0.1933 |
+| 6 | 144211 | 358 / 0544.png | salient | 1.000 | 0.1697 |
+| 7 | 144127 | 358 / 0416.png | salient | 1.000 | 0.1902 |
+| 8 | 48497 | 114 / 0032.png | salient | 1.000 | 0.1890 |
+| 9 | 12159 | 029 / 0800.png | salient | 1.000 | 0.2269 |
+| 10 | 166637 | 412 / 0160.png | salient | 1.000 | 0.2323 |
 
-Node 116971 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+Node 44117 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 2319 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+Node 235525 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 1940 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 51, 'count': 9}, {'id': 81, 'count': 4}]
+Node 143875 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 1953 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 51, 'count': 9}, {'id': 81, 'count': 4}]
+Node 144043 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 145870 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+Node 144295 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 135438 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+Node 144211 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 225343 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 81, 'count': 4}]
+Node 144127 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 120833 — shared with anchor: []; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 51, 'count': 9}, {'id': 81, 'count': 4}]
+Node 48497 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 87558 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+Node 12159 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
-Node 86057 — shared with anchor: [31]; recurring across matches (ID/count): [{'id': 3, 'count': 10}, {'id': 31, 'count': 6}, {'id': 51, 'count': 9}]
+Node 166637 — shared with anchor: [39, 90]; recurring across matches (ID/count): [{'id': 35, 'count': 10}, {'id': 39, 'count': 10}, {'id': 90, 'count': 10}]
 
 ## Anchor 29: cell (2, 5)
 
@@ -151,126 +131,86 @@ Video 001 · frame 32 (0032.png)
   "Description of each patch": [
     {
       "Anchor": {
-        "Low-level visual features": "Dark color tones, vertical orientation, blurry texture",
-        "Semantic object or part": "Dark hair and shoulder of a person near water"
+        "Low-level visual features": "Dark tones, white graphic elements, and smooth skin-toned areas.",
+        "Semantic object or part": "Back of a head, neck, and dark shirt with white print."
       }
     },
     {
       "Match 1": {
-        "Low-level visual features": "Vertical alternating dark and light stripes, linear edges",
-        "Semantic object or part": "Striped fabric or clothing"
+        "Low-level visual features": "Very dark tones, irregular shadows, and rough texture.",
+        "Semantic object or part": "Dark rock cavity or deep shadow."
       }
     },
     {
       "Match 2": {
-        "Low-level visual features": "Dark blue and skin-toned regions with soft lighting",
-        "Semantic object or part": "Shoulder, neck, and dark clothing"
+        "Low-level visual features": "Skin-toned flesh colors with smooth gradients.",
+        "Semantic object or part": "Human hand."
       }
     },
     {
       "Match 3": {
-        "Low-level visual features": "Vertical alternating dark and light stripes, linear edges",
-        "Semantic object or part": "Striped fabric or clothing"
+        "Low-level visual features": "Dark fabric texture with white alphanumeric characters.",
+        "Semantic object or part": "Dark tank top with white text."
       }
     },
     {
       "Match 4": {
-        "Low-level visual features": "Dark brown and white patches, vertical leg-like shapes",
-        "Semantic object or part": "Lower legs and body of a horse"
+        "Low-level visual features": "Blue and dark blue tones with rippled patterns.",
+        "Semantic object or part": "Water surface."
       }
     },
     {
       "Match 5": {
-        "Low-level visual features": "Dark wings, white central body, green background",
-        "Semantic object or part": "Flying or standing bird"
+        "Low-level visual features": "Solid dark tone with a vertical outline.",
+        "Semantic object or part": "Dark jacket or clothing."
       }
     },
     {
       "Match 6": {
-        "Low-level visual features": "Muted gray-brown textured background with faint white letters",
-        "Semantic object or part": "Ground surface with text overlay"
+        "Low-level visual features": "Dark background with a thin bright angled line.",
+        "Semantic object or part": "Dark fabric with a strap or edge."
       }
     },
     {
       "Match 7": {
-        "Low-level visual features": "Dark limb silhouette against blue and white horizontal lines",
-        "Semantic object or part": "Leg near a court line"
-      }
-    },
-    {
-      "Match 8": {
-        "Low-level visual features": "Tan and dark brown fur texture with a small highlighted snout area",
-        "Semantic object or part": "Animal muzzle or nose"
-      }
-    },
-    {
-      "Match 9": {
-        "Low-level visual features": "Dark solid fur texture, white band near the bottom",
-        "Semantic object or part": "Horse body and leg"
-      }
-    },
-    {
-      "Match 10": {
-        "Low-level visual features": "Purple surface with a white line and a blurry leg",
-        "Semantic object or part": "Tennis court surface and player's leg"
-      }
-    }
-  ],
-  "Description of the common visual pattern": "There is no majority visual pattern or shared semantic category among the patches, as each patch depicts completely unrelated objects and scenes such as clothing, animals, sports courts, and text.",
-  "Visual pattern title": "None",
-  "Supporting patches": [],
-  "Non-supporting patches": [
-    "Anchor",
-    "Match 1",
-    "Match 2",
-    "Match 3",
-    "Match 4",
-    "Match 5",
-    "Match 6",
-    "Match 7",
-    "Match 8",
-    "Match 9",
-    "Match 10"
-  ]
-}
-```
+        "Low-level visual features": "Dark fabric texture alongside a
 
-Anchor top-k prototypes: [31, 91, 126]
+Anchor top-k prototypes: [42, 45, 91]
 
-Prototypes common to every retrieved match: [126]
+Prototypes common to every retrieved match: [91]
 
 | Match number | Node | Video / frame | Saliency label | Percentile | Stage-4 cosine |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 12210 | 029 / 0928.png | non-salient | 0.964 | 0.1387 |
-| 2 | 174993 | 435 / 0032.png | non-salient | 0.940 | 0.0545 |
-| 3 | 12209 | 029 / 0928.png | salient | 0.976 | 0.1606 |
-| 4 | 67658 | 161 / 0160.png | salient | 0.976 | 0.1709 |
-| 5 | 118791 | 294 / 0160.png | non-salient | 0.892 | 0.3344 |
-| 6 | 103226 | 253 / 0416.png | non-salient | 0.627 | 0.1220 |
-| 7 | 233324 | 582 / 0032.png | non-salient | 0.952 | 0.2015 |
-| 8 | 173429 | 431 / 0032.png | non-salient | 0.940 | 0.1953 |
-| 9 | 67657 | 161 / 0160.png | non-salient | 0.964 | 0.1932 |
-| 10 | 48941 | 115 / 0416.png | non-salient | 0.952 | 0.1159 |
+| 1 | 62947 | 151 / 0288.png | non-salient | 0.964 | 0.2082 |
+| 2 | 33705 | 077 / 0032.png | non-salient | 0.904 | 0.2282 |
+| 3 | 219941 | 549 / 0032.png | salient | 0.988 | 0.2187 |
+| 4 | 16279 | 039 / 0288.png | salient | 1.000 | 0.2882 |
+| 5 | 95310 | 233 / 0416.png | non-salient | 0.964 | 0.4542 |
+| 6 | 4325 | 011 / 0672.png | salient | 0.988 | 0.1755 |
+| 7 | 177876 | 441 / 0160.png | non-salient | 0.843 | 0.4074 |
+| 8 | 29934 | 069 / 0160.png | salient | 0.976 | 0.3809 |
+| 9 | 181457 | 449 / 0160.png | non-salient | 0.964 | 0.2767 |
+| 10 | 29850 | 069 / 0032.png | salient | 0.988 | 0.3613 |
 
-Node 12210 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 65, 'count': 2}, {'id': 126, 'count': 10}]
+Node 62947 — shared with anchor: [91]; recurring across matches (ID/count): [{'id': 73, 'count': 5}, {'id': 90, 'count': 4}, {'id': 91, 'count': 10}]
 
-Node 174993 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 68, 'count': 3}, {'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
+Node 33705 — shared with anchor: [42, 91]; recurring across matches (ID/count): [{'id': 42, 'count': 3}, {'id': 91, 'count': 10}, {'id': 94, 'count': 7}]
 
-Node 12209 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 65, 'count': 2}, {'id': 126, 'count': 10}]
+Node 219941 — shared with anchor: [42, 91]; recurring across matches (ID/count): [{'id': 42, 'count': 3}, {'id': 91, 'count': 10}, {'id': 94, 'count': 7}]
 
-Node 67658 — shared with anchor: [91, 126]; recurring across matches (ID/count): [{'id': 91, 'count': 2}, {'id': 104, 'count': 2}, {'id': 126, 'count': 10}]
+Node 16279 — shared with anchor: [45, 91]; recurring across matches (ID/count): [{'id': 90, 'count': 4}, {'id': 91, 'count': 10}]
 
-Node 118791 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
+Node 95310 — shared with anchor: [42, 91]; recurring across matches (ID/count): [{'id': 42, 'count': 3}, {'id': 90, 'count': 4}, {'id': 91, 'count': 10}]
 
-Node 103226 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 90, 'count': 6}, {'id': 104, 'count': 2}, {'id': 126, 'count': 10}]
+Node 4325 — shared with anchor: [91]; recurring across matches (ID/count): [{'id': 73, 'count': 5}, {'id': 91, 'count': 10}, {'id': 94, 'count': 7}]
 
-Node 233324 — shared with anchor: [91, 126]; recurring across matches (ID/count): [{'id': 90, 'count': 6}, {'id': 91, 'count': 2}, {'id': 126, 'count': 10}]
+Node 177876 — shared with anchor: [91]; recurring across matches (ID/count): [{'id': 73, 'count': 5}, {'id': 91, 'count': 10}, {'id': 94, 'count': 7}]
 
-Node 173429 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
+Node 29934 — shared with anchor: [91]; recurring across matches (ID/count): [{'id': 73, 'count': 5}, {'id': 91, 'count': 10}, {'id': 94, 'count': 7}]
 
-Node 67657 — shared with anchor: [31, 126]; recurring across matches (ID/count): [{'id': 31, 'count': 4}, {'id': 68, 'count': 3}, {'id': 126, 'count': 10}]
+Node 181457 — shared with anchor: [91]; recurring across matches (ID/count): [{'id': 73, 'count': 5}, {'id': 91, 'count': 10}, {'id': 94, 'count': 7}]
 
-Node 48941 — shared with anchor: [126]; recurring across matches (ID/count): [{'id': 68, 'count': 3}, {'id': 90, 'count': 6}, {'id': 126, 'count': 10}]
+Node 29850 — shared with anchor: [91]; recurring across matches (ID/count): [{'id': 90, 'count': 4}, {'id': 91, 'count': 10}, {'id': 94, 'count': 7}]
 
 ## Anchor 18: cell (1, 6)
 
@@ -283,72 +223,72 @@ Video 001 · frame 32 (0032.png)
   "Description of each patch": [
     {
       "Anchor": {
-        "Low-level visual features": "Flesh-toned and dark regions with blurry vertical and horizontal gradients.",
-        "Semantic object or part": "Upper body and torso of a person."
+        "Low-level visual features": "Flesh-toned and dark pixel regions with varied contrast and blurry outlines.",
+        "Semantic object or part": "Upper body of a person."
       }
     },
     {
       "Match 1": {
-        "Low-level visual features": "Dark diagonal lines intersecting with a bright white highlight area.",
-        "Semantic object or part": "Structural lines or railings."
+        "Low-level visual features": "Brownish, horizontal wood-grain texture with subtle lines.",
+        "Semantic object or part": "Wooden surface or plank."
       }
     },
     {
       "Match 2": {
-        "Low-level visual features": "Horizontal blue and dark bands with vertical rectangular windows or port holes.",
-        "Semantic object or part": "Side of a ship or building facade."
+        "Low-level visual features": "Flesh tones, green vertical stalk shapes, and brown background textures.",
+        "Semantic object or part": "A hand holding a vegetable stalk."
       }
     },
     {
       "Match 3": {
-        "Low-level visual features": "Angular light-colored surfaces meeting in stepped planes under shadow.",
-        "Semantic object or part": "Building roofs or architectural cornices."
+        "Low-level visual features": "Uniform light brown, smooth surface texture.",
+        "Semantic object or part": "Wooden table or flat surface."
       }
     },
     {
       "Match 4": {
-        "Low-level visual features": "Smooth flesh-toned gradients with a subtle vertical contour.",
-        "Semantic object or part": "Skin of a person's body or limb."
+        "Low-level visual features": "Overexposed, bright yellow-white and pale flesh tones with blurred facial features.",
+        "Semantic object or part": "Face of a child in a photo frame."
       }
     },
     {
       "Match 5": {
-        "Low-level visual features": "Dense dark and light speckles forming a mottled textured field.",
-        "Semantic object or part": "Crowd of people in a stadium."
+        "Low-level visual features": "Mixed blue, yellow, and white lighting with indistinct facial contours.",
+        "Semantic object or part": "Head and face of a person."
       }
     },
     {
       "Match 6": {
-        "Low-level visual features": "Horizontal blocks of turquoise, white, and dark blue with faint reflections.",
-        "Semantic object or part": "Swimming pool edge and water."
+        "Low-level visual features": "Dark typographic characters against a white background.",
+        "Semantic object or part": "Printed text."
       }
     },
     {
       "Match 7": {
-        "Low-level visual features": "Brownish-tan mottled texture with a central dark irregular blob.",
-        "Semantic object or part": "Earthy ground or a small animal/creature."
+        "Low-level visual features": "Yellowish-brown tones and dark blurry vertical shapes.",
+        "Semantic object or part": "Upper body of a person wearing a yellow shirt."
       }
     },
     {
       "Match 8": {
-        "Low-level visual features": "Brownish-tan mottled texture with a central dark irregular blob.",
-        "Semantic object or part": "Earthy ground or a small animal/creature."
+        "Low-level visual features": "White, black, and purplish patterns with high contrast.",
+        "Semantic object or part": "Torso and clothing of a person."
       }
     },
     {
       "Match 9": {
-        "Low-level visual features": "Grey speckled grainy texture with a bright turquoise curve at the bottom corner.",
-        "Semantic object or part": "Textured surface with a colored edge."
+        "Low-level visual features": "White and brown fur texture next to a dark grey/black surface.",
+        "Semantic object or part": "Animal fur being touched by a hand or object."
       }
     },
     {
       "Match 10": {
-        "Low-level visual features": "Light blue background area above a rounded green-brown object and dark vertical shapes.",
-        "Semantic object or part": "Object against an open sky or light background."
+        "Low-level visual features": "Dark grey upper background with mottled warm tones in the lower area.",
+        "Semantic object or part": "A surface or floor with cluttered objects."
       }
     }
   ],
-  "Description of the common visual pattern": "There is no clear visual pattern shared by most of the target patches. Each patch depicts entirely different semantic objects, colors, and textures (e.g., human skin, ship siding, architectural roofs, pool water, earthy ground, and crowd textures), failing to reach a majority agreement.",
+  "Description of the common visual pattern": "There is no clear visual pattern shared by most of the target patches. Each patch depicts entirely different semantic objects, textures, and scenes.",
   "Visual pattern title": "None",
   "Supporting patches": [],
   "Non-supporting patches": [
@@ -367,39 +307,39 @@ Video 001 · frame 32 (0032.png)
 }
 ```
 
-Anchor top-k prototypes: [3, 57, 81]
+Anchor top-k prototypes: [39, 54, 116]
 
-Prototypes common to every retrieved match: [51]
+Prototypes common to every retrieved match: [116]
 
 | Match number | Node | Video / frame | Saliency label | Percentile | Stage-4 cosine |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 130556 | 322 / 0672.png | non-salient | 0.831 | 0.0904 |
-| 2 | 124866 | 310 / 0288.png | non-salient | 0.940 | 0.1968 |
-| 3 | 126224 | 313 / 0288.png | non-salient | 0.771 | 0.1312 |
-| 4 | 33557 | 076 / 0672.png | non-salient | 0.952 | 0.2648 |
-| 5 | 22699 | 053 / 0800.png | non-salient | 0.807 | 0.2682 |
-| 6 | 16193 | 039 / 0160.png | non-salient | 0.964 | 0.1097 |
-| 7 | 34736 | 079 / 0544.png | non-salient | 0.916 | 0.1416 |
-| 8 | 34652 | 079 / 0416.png | non-salient | 0.867 | 0.1908 |
-| 9 | 218919 | 546 / 0544.png | non-salient | 0.904 | 0.1233 |
-| 10 | 80012 | 192 / 0160.png | non-salient | 0.867 | 0.1993 |
+| 1 | 32598 | 075 / 0160.png | non-salient | 0.723 | 0.2960 |
+| 2 | 218045 | 544 / 0160.png | non-salient | 0.916 | 0.2121 |
+| 3 | 73578 | 175 / 0672.png | non-salient | 0.916 | 0.3195 |
+| 4 | 88647 | 215 / 0032.png | non-salient | 0.892 | 0.2332 |
+| 5 | 164981 | 408 / 0160.png | non-salient | 0.687 | 0.3251 |
+| 6 | 182184 | 451 / 0544.png | non-salient | 0.711 | 0.2117 |
+| 7 | 66984 | 160 / 0032.png | non-salient | 0.663 | 0.2918 |
+| 8 | 71435 | 171 / 0032.png | non-salient | 0.566 | 0.2290 |
+| 9 | 183940 | 456 / 0544.png | non-salient | 0.928 | 0.2202 |
+| 10 | 77931 | 186 / 0416.png | non-salient | 0.904 | 0.2756 |
 
-Node 130556 — shared with anchor: []; recurring across matches (ID/count): [{'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+Node 32598 — shared with anchor: [116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 48, 'count': 7}, {'id': 116, 'count': 10}]
 
-Node 124866 — shared with anchor: []; recurring across matches (ID/count): [{'id': 31, 'count': 2}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+Node 218045 — shared with anchor: [116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 48, 'count': 7}, {'id': 116, 'count': 10}]
 
-Node 126224 — shared with anchor: []; recurring across matches (ID/count): [{'id': 51, 'count': 10}]
+Node 73578 — shared with anchor: [39, 116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 39, 'count': 3}, {'id': 116, 'count': 10}]
 
-Node 33557 — shared with anchor: [81]; recurring across matches (ID/count): [{'id': 51, 'count': 10}, {'id': 81, 'count': 2}, {'id': 115, 'count': 8}]
+Node 88647 — shared with anchor: [116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 48, 'count': 7}, {'id': 116, 'count': 10}]
 
-Node 22699 — shared with anchor: []; recurring across matches (ID/count): [{'id': 31, 'count': 2}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+Node 164981 — shared with anchor: [116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 48, 'count': 7}, {'id': 116, 'count': 10}]
 
-Node 16193 — shared with anchor: [3, 81]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 81, 'count': 2}]
+Node 182184 — shared with anchor: [116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 48, 'count': 7}, {'id': 116, 'count': 10}]
 
-Node 34736 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+Node 66984 — shared with anchor: [39, 54, 116]; recurring across matches (ID/count): [{'id': 39, 'count': 3}, {'id': 54, 'count': 2}, {'id': 116, 'count': 10}]
 
-Node 34652 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+Node 71435 — shared with anchor: [116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 48, 'count': 7}, {'id': 116, 'count': 10}]
 
-Node 218919 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+Node 183940 — shared with anchor: [39, 54, 116]; recurring across matches (ID/count): [{'id': 39, 'count': 3}, {'id': 54, 'count': 2}, {'id': 116, 'count': 10}]
 
-Node 80012 — shared with anchor: [3]; recurring across matches (ID/count): [{'id': 3, 'count': 5}, {'id': 51, 'count': 10}, {'id': 115, 'count': 8}]
+Node 77931 — shared with anchor: [116]; recurring across matches (ID/count): [{'id': 6, 'count': 8}, {'id': 48, 'count': 7}, {'id': 116, 'count': 10}]

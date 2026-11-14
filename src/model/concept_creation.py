@@ -1,58 +1,50 @@
 """
-Visual concept creation with RGB appearance-consistency queues (N=8 by default).
+Visual concept creation with paired RGB and frozen-backbone feature queues.
 
-Appearance is measured using fixed R x R area-pooled RGB cells within each stage
-patch (R=4, 48 values by default). The RGB frame must be float32 in [0,1], already
-aligned to the backbone's resized spatial canvas, WITHOUT ImageNet mean/std.
-Patch order is batch-major, row-major, with descriptor order channel,row,column.
-The descriptor is detached and NOT L2-normalized: brightness and color matter.
-These are coarse appearance cells, not exact backbone receptive-field crops or
-semantic categories. Fine texture or translation invariance is not guaranteed.
+For every stage patch, live full-bank logits produce soft assignment weights.
+The appearance objective is:
+    loss_visual_appearance = visual_rgb * RGB_MSE + visual_feature * FEATURE_COSINE
+Its overall weight remains loss_weights['visual_appearance'] in
+loss_total_concept, so the existing training loss aggregator needs no changes.
+Defaults: visual_appearance=1.0, visual_rgb=1.0, visual_feature=1.0; these are
+starting weights, not an empirically tuned balance. Set visual_feature=0 for
+an exact RGB-only ablation (with unchanged RGB queue admissions/loss).
 
-The ONLY new loss is loss_visual_appearance. Each patch's live full-bank logits
-produce a soft distribution over populated prototype queues. The objective is
-expected average RGB MSE to the queued descriptors, so the gradient trains the
-encoder, prototype bank, and a trainable backbone THROUGH THE ASSIGNMENTS.
-Fixed pixels, hard queue ownership, queue statistics and costs are detached.
-The former embedding patch-consistency/prototype-attraction losses are removed.
-Reconstruction, diversity, entropy, usage, saliency and decoding are preserved.
+RGB descriptors preserve the original detached, unnormalized R x R area-pooled
+cells (R=4; 48 values), aligned to the resized backbone canvas. Frozen teacher
+features arrive as detached cached_backbone_features [B,C,1,H,W]. Flattening is
+batch-major/row-major, matching live patch order. Each reference vector is L2
+normalized; zero-norm vectors are excluded from feature queries and history.
+The model never substitutes trainable embeddings for missing cached targets.
 
-Use loss_weights['visual_appearance'] to tune the term (default 1.0, a starting
-value rather than a validated dataset setting). It enters loss_total_concept.
-All stages use the same objective and independent queues of capacity 8.
-No graph, image reread, extra backbone pass, or file I/O occurs in forward.
+Both components compare to PRE-FORWARD history, then perform ONE paired ring
+write under current top-1 ownership. Feature entries share RGB slots, confidence
+filtering and FIFO eviction. Missing/zero cached vectors mark their slots invalid.
+Legacy callers without cached features retain RGB-only behavior. Each bank has
+capacity visual_queue_size (8 by default); old entries are overwritten in order.
 
-At each training/grad-enabled forward with return_losses=True and supplied RGB,
-compare to the PRE-FORWARD queue snapshot, THEN enqueue current top-1 patches.
-No current entry is compared to its own just-inserted descriptor. Loss values
-use pre-forward history independently of batch ordering. The first forward
-fills queues and has zero appearance loss. Empty queues
-are masked. Queue admission optionally uses visual_queue_min_confidence; this
-threshold does not filter the loss queries. With only one populated queue there
-is no assignment choice/appearance gradient until another queue is populated.
-Eval, no_grad, missing RGB, return_losses=False and zero appearance weight do
-not update queues. Legacy callers without RGB retain ordinary concept losses.
+RGB cost is exact mean MSE to queued RGB descriptors, including queue variance.
+Feature cost is exact mean (1 - cosine) to valid frozen queue vectors:
+    C_feature(i,j) = 1 - normalized_reference_i dot mean(normalized_history_j)
+Do not L2-normalize that mean: doing so would change the pairwise-average cost.
+RGB and feature costs are detached. Gradients reach the live visual encoder,
+prototype bank and trainable backbone through their assignment logits only.
+Feature history is masked separately when a slot has no valid cached vector.
+All-empty history has zero loss and warms up on insertion; a single populated
+prototype offers no assignment choice until another prototype has history.
 
-For descriptor r and queue i, use exact average squared error:
-    cost_i(r) = (||r||^2 - 2*r dot mean_i + mean(||queue_i||^2)) / descriptor_dim.
-Maintain the last 8 descriptors, their sum, and summed squared norms per bank
-entry. Stable grouping keeps only the last 8 new entries for bounded ring writes.
-The scalar squared-norm statistic includes within-queue variance; just taking
-MSE to the mean would be a different objective. Stats are FP32 on the concept
-module's device. Queues remain rank-local under DDP, outside model state_dict.
+No history updates occur in eval, no_grad, return_losses=False, absent RGB or
+when the combined appearance objective is disabled. Existing reconstruction,
+diversity, entropy, usage, saliency alignment and decoding remain unchanged.
+There is no graph lookup, image read, extra backbone pass or file I/O in forward.
+Costs use [patches,prototypes] matrices and running sums, never a full
+[patches,prototypes,queue_size,feature_dim] pair tensor. Queue arithmetic stays
+FP32 under AMP/half(), and histories remain rank-local outside model state_dict.
 
-save_prototype_queues(model) explicitly writes all stages to
-/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/prot_queue/prototype_queues.pt
-at an epoch/checkpoint boundary. Snapshots contain pooled RGB patches, sums,
-squared-norm sums, pointers, counts, confidence and grid locations. There is no
-video/frame identity in the existing forward interface. Snapshot format is
-prototype_rgb_fifo_model_v2: OLD EMBEDDING QUEUES ARE INCOMPATIBLE. Model weight
-checkpoints retain the exact learned parameter names/shapes and load unchanged.
-Call load_prototype_queues(model) to restore NEW RGB snapshots, or start empty.
-
-Stored RGB descriptors do not drift as encoder weights change, although their
-prototype ownership can still become outdated. Keep anti-collapse regularizers
-and evaluate held-out appearance coherence and causal prototype contributions.
+Explicit queue saves use prototype_rgb_feature_fifo_model_v3 / per-stage
+prototype_rgb_feature_fifo_v3. RGB-only v2 snapshots load with feature history
+empty; learned model checkpoint keys/shapes are unchanged. Clear queue history
+when changing the frozen-reference weights or cached feature semantics.
 """
 
 from typing import Any, Dict, Optional, Tuple, Union
@@ -83,7 +75,9 @@ class VisualConceptCreation(nn.Module):
     DEFAULT_LOSS_WEIGHTS = {
         "visual": 0.1,
         "visual_div": 1.0,
-        "visual_appearance": 1.0,
+        "visual_appearance": 1.0,  # Overall weight on the combined appearance objective.
+        "visual_rgb": 1.0,
+        "visual_feature": 1.0,
     }
     DROPOUT_P = 0.2
 
@@ -187,7 +181,7 @@ class VisualConceptCreation(nn.Module):
             if removed:
                 raise ValueError("Embedding queue losses were removed; use loss_weights['visual_appearance'] instead.")
             weights.update(loss_weights)
-        for name in ("visual_appearance",):
+        for name in ("visual_appearance", "visual_rgb", "visual_feature"):
             value = weights[name]
             if not math.isfinite(float(value)) or float(value) < 0:
                 raise ValueError(f"loss_weights[{name!r}] must be finite and nonnegative.")
@@ -224,14 +218,16 @@ class VisualConceptCreation(nn.Module):
 
         self.clear_prototype_queue()
 
-    _QUEUE_FLOAT_TENSORS = ("_prototype_queue", "_prototype_queue_sum", "_prototype_queue_squared_norm_sum", "_prototype_queue_confidence")
-    _QUEUE_INT_TENSORS = ("_prototype_queue_count", "_prototype_queue_pointer", "_prototype_queue_locations")
+    _QUEUE_FLOAT_TENSORS = ("_prototype_queue", "_prototype_queue_sum", "_prototype_queue_squared_norm_sum", "_prototype_queue_confidence",
+                            "_prototype_feature_queue", "_prototype_feature_queue_sum")
+    _QUEUE_INT_TENSORS = ("_prototype_queue_count", "_prototype_queue_pointer", "_prototype_queue_locations", "_prototype_feature_count")
+    _QUEUE_BOOL_TENSORS = ("_prototype_feature_valid",)
 
     def _apply(self, fn, recurse=True):
         # Plain tensors keep queues rank-local under DDP. Device follows the
         # module, but descriptor/statistic precision stays FP32 under half()/AMP.
         result = super()._apply(fn, recurse=recurse)
-        for name in self._QUEUE_FLOAT_TENSORS + self._QUEUE_INT_TENSORS:
+        for name in self._QUEUE_FLOAT_TENSORS + self._QUEUE_INT_TENSORS + self._QUEUE_BOOL_TENSORS:
             value = getattr(self, name, None)
             if value is not None:
                 device = fn(torch.empty(0, device=value.device, dtype=value.dtype)).device
@@ -247,19 +243,62 @@ class VisualConceptCreation(nn.Module):
         if db_path is not None or settings:
             raise ValueError("Remove graph configuration; RGB appearance FIFO supervision is enabled automatically.")
 
-    def _appearance_status(self, active: bool, reason: str) -> Dict[str, Any]:
-        return {"enabled": self.loss_weights["visual_appearance"] > 0,
+    def _appearance_coverage_zero(self, device: Optional[torch.device] = None) -> Dict[str, torch.Tensor]:
+        """Detached scalar coverage counters on the model device (no .item())."""
+        device = self.visual_concepts.device if device is None else device
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        return {
+            "app_loss_patch_count_total": zero.clone(),
+            "app_loss_patch_count": zero.clone(),
+            "app_loss_rgb_patch_count": zero.clone(),
+            "app_loss_feature_patch_count": zero.clone(),
+        }
+
+    def _appearance_status(self, active: bool, reason: str,
+                           device: Optional[torch.device] = None) -> Dict[str, Any]:
+        status = {"enabled": self.loss_weights["visual_appearance"] > 0,
                 "active_this_forward": active, "reason": reason,
                 "capacity": self.visual_queue_size,
                 "training_forwards": self._prototype_queue_step,
                 "assignment": "top1_insertion_soft_full_bank_loss",
-                "representation": "area_pooled_rgb",
+                "representation": "area_pooled_rgb_and_frozen_backbone",
                 "patch_size": self.visual_appearance_patch_size,
-                "descriptor_dim": self.visual_appearance_dim}
+                "descriptor_dim": self.visual_appearance_dim,
+                "rgb_weight": self.loss_weights["visual_rgb"],
+                "feature_weight": self.loss_weights["visual_feature"],
+                "feature_dim": self.in_channels,
+                "feature_metric": "mean_cosine_distance_to_normalized_queue_entries",
+                "feature_active_this_forward": False,
+                "feature_reason": reason,
+                "feature_zero_norm_policy": "exclude from feature queries/history"}
+        status.update(self._appearance_coverage_zero(device))
+        return status
+
+    def _appearance_inactive_diagnostics(
+        self,
+        reason: str,
+        *,
+        num_patches: int = 0,
+        device: Optional[torch.device] = None,
+        feature_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Reset coverage every forward; evaluated counts stay zero when inactive."""
+        device = self.visual_concepts.device if device is None else device
+        status = self._appearance_status(False, reason, device=device)
+        zero = torch.zeros((), device=device, dtype=torch.float32)
+        status.update(
+            app_loss_patch_count_total=zero + float(num_patches),
+            app_loss_patch_count=zero.clone(),
+            app_loss_rgb_patch_count=zero.clone(),
+            app_loss_feature_patch_count=zero.clone(),
+        )
+        if feature_reason is not None:
+            status["feature_reason"] = feature_reason
+        return status
 
     @torch.no_grad()
     def clear_prototype_queue(self) -> None:
-        """Clear this stage's RGB history without any file I/O."""
+        """Clear paired RGB/reference-feature history, without any file I/O."""
         m, n, d = self.num_visual_concepts, self.visual_queue_size, self.visual_appearance_dim
         device = self.visual_concepts.device
         self._prototype_queue = torch.zeros(m, n, d, device=device, dtype=torch.float32)
@@ -269,6 +308,12 @@ class VisualConceptCreation(nn.Module):
         self._prototype_queue_count = torch.zeros(m, device=device, dtype=torch.long)
         self._prototype_queue_pointer = torch.zeros(m, device=device, dtype=torch.long)
         self._prototype_queue_locations = torch.full((m, n, 6), -1, device=device, dtype=torch.long)
+        # Same admissions/slots as RGB. Missing/zero reference vectors are marked
+        # invalid, so legacy RGB-only batches never create fictitious targets.
+        self._prototype_feature_queue = torch.zeros(m, n, self.in_channels, device=device, dtype=torch.float32)
+        self._prototype_feature_queue_sum = torch.zeros(m, self.in_channels, device=device, dtype=torch.float32)
+        self._prototype_feature_count = torch.zeros(m, device=device, dtype=torch.long)
+        self._prototype_feature_valid = torch.zeros(m, n, device=device, dtype=torch.bool)
         self._prototype_queue_step = 0
         self.visual_appearance_diagnostics = self._appearance_status(False, "empty_queues")
 
@@ -290,58 +335,146 @@ class VisualConceptCreation(nn.Module):
             descriptors = pooled.reshape(rgb.shape[0], 3, grid_h, r, grid_w, r)
             return descriptors.permute(0, 2, 4, 1, 3, 5).reshape(-1, self.visual_appearance_dim).contiguous()
 
-    def _visual_appearance_loss(self, visual_out: Dict[str, Any], rgb_last_frame: Optional[torch.Tensor]) -> torch.Tensor:
-        """Expected RGB MSE to pre-forward queues, differentiable in assignments.
+    @torch.no_grad()
+    def _cached_feature_descriptors(self, cached: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Fixed normalized [B*H*W,C] reference vectors in live patch order."""
+        with torch.autocast(device_type=cached.device.type, enabled=False):
+            vectors = cached.detach().float()[:, :, 0].permute(0, 2, 3, 1).reshape(-1, self.in_channels).contiguous()
+            if not torch.isfinite(vectors).all():
+                raise ValueError("Cached reference vectors must remain finite when converted to float32.")
+            # Scale before the norm so finite large raw features cannot overflow
+            # during squaring. This leaves the normalized vector unchanged.
+            scale = vectors.abs().amax(dim=-1, keepdim=True).clamp_min(1e-12)
+            scaled = vectors / scale
+            norms = torch.linalg.vector_norm(scaled, dim=-1, keepdim=True)
+            valid = norms.squeeze(-1) > (1e-12 / scale.squeeze(-1))
+            normalized = scaled / norms.clamp_min(1e-12)
+            normalized = torch.where(valid[:, None], normalized, torch.zeros_like(normalized))
+            return normalized, valid
 
-        Live full-bank logits are masked to populated queues, then re-softmaxed.
-        This is stable renormalization of full assignment probabilities, even
-        when unmasked probabilities would underflow. An all-empty queue mask is
-        made softmax-safe and zeroed; no host sync is needed to branch on history.
-        Queue ownership and costs are detached. After computing the loss, update
-        RGB FIFO state from current top-1 assignments. No old embedding losses.
+    @staticmethod
+    def _queue_assignment_weights(logits: torch.Tensor, populated: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Soft full-bank weights with a safe all-empty fallback; FP32 caller."""
+        has_history = populated.any()
+        fallback = (~has_history) & (torch.arange(logits.shape[1], device=logits.device) == 0)
+        safe_mask = populated | fallback
+        weights = F.softmax(logits.float().masked_fill(~safe_mask[None, :], float("-inf")), dim=-1)
+        return weights, has_history.to(torch.float32)
+
+    def _visual_appearance_losses(
+        self,
+        visual_out: Dict[str, Any],
+        rgb_last_frame: Optional[torch.Tensor],
+        cached_backbone_features: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Expected fixed RGB MSE + frozen-feature cosine distance to history.
+
+        Both costs use PRE-FORWARD queue statistics and live assignment logits.
+        Only assignments carry gradients. A single paired enqueue follows both
+        losses, preserving the no-current-self-insertion comparison protocol.
+        RGB and feature histories use separate validity masks when cached inputs
+        are absent/zero or an old RGB-only snapshot has just been restored.
         """
         logits = visual_out["visual_concept_logits"]
         zero = logits.sum() * 0.0
+        result = {"rgb": zero, "feature": zero, "combined": zero}
+        w_rgb, w_feature = self.loss_weights["visual_rgb"], self.loss_weights["visual_feature"]
+        num_patches = int(logits.shape[0])
         reason = None
         if not self.training:
             reason = "evaluation"
         elif not torch.is_grad_enabled():
             reason = "no_grad"
-        elif self.loss_weights["visual_appearance"] == 0:
+        elif self.loss_weights["visual_appearance"] == 0 or (w_rgb == 0 and w_feature == 0):
             reason = "zero_weight"
         elif rgb_last_frame is None:
             reason = "no_rgb"
+        elif w_rgb == 0 and cached_backbone_features is None:
+            reason = "no_cached_features"
         if reason is not None:
-            self.visual_appearance_diagnostics = self._appearance_status(False, reason)
-            return zero
+            self.visual_appearance_diagnostics = self._appearance_inactive_diagnostics(
+                reason, num_patches=num_patches, device=logits.device,
+            )
+            return result
         shape = visual_out["visual_metadata"]["feature_shape"]
         descriptors = self._rgb_appearance_descriptors(rgb_last_frame, int(shape["H"]), int(shape["W"]))
         if descriptors.shape[0] != logits.shape[0]:
             raise ValueError("RGB descriptors and concept patches must have the same batch-major row-major ordering.")
+        feature_descriptors = feature_valid = None
+        feature_reason = "zero_weight" if w_feature == 0 else "no_cached_features"
+        if w_feature > 0 and cached_backbone_features is not None:
+            feature_descriptors, feature_valid = self._cached_feature_descriptors(cached_backbone_features)
+            if feature_descriptors.shape[0] != logits.shape[0]:
+                raise ValueError("Cached reference descriptors must match the live batch-major row-major patch order.")
+            feature_reason = "pre_forward_queue_comparison"
+        # Coverage uses PRE-FORWARD history only. Defaults cover RGB/feature-disabled paths.
+        rgb_history = zero.detach()
+        feature_history = zero.detach()
         with torch.autocast(device_type=logits.device.type, enabled=False):
-            divisor = self._prototype_queue_count.clamp_min(1).float()
-            means = self._prototype_queue_sum / divisor[:, None]
-            mean_squared_norm = self._prototype_queue_squared_norm_sum / divisor
-            # Fixed [patches,prototypes] cost matrix; never materialize an
-            # expensive [patches,prototypes,queue_size,descriptor_dim] tensor.
-            costs = (descriptors.square().sum(-1, keepdim=True)
-                     - 2.0 * descriptors @ means.T + mean_squared_norm[None, :])
-            costs = (costs / self.visual_appearance_dim).clamp_min(0.0).detach()
-            populated = self._prototype_queue_count > 0
-            has_history = populated.any()
-            fallback = (~has_history) & (torch.arange(self.num_visual_concepts, device=logits.device) == 0)
-            safe_mask = populated | fallback
-            weights = F.softmax(logits.float().masked_fill(~safe_mask[None, :], float("-inf")), dim=-1)
-            loss = (weights * costs).sum(-1).mean() * has_history.to(torch.float32)
-        # All statistics used for this loss are pre-insertion snapshots. Changes
-        # below cannot invalidate autograd's saved costs/masks.
-        self._enqueue_rgb_descriptors(visual_out, descriptors)
-        self.visual_appearance_diagnostics = self._appearance_status(True, "pre_forward_queue_comparison")
-        return loss
+            if w_rgb > 0:
+                divisor = self._prototype_queue_count.clamp_min(1).float()
+                means = self._prototype_queue_sum / divisor[:, None]
+                mean_squared_norm = self._prototype_queue_squared_norm_sum / divisor
+                rgb_costs = (descriptors.square().sum(-1, keepdim=True)
+                             - 2.0 * descriptors @ means.T + mean_squared_norm[None, :])
+                rgb_costs = (rgb_costs / self.visual_appearance_dim).clamp_min(0.0).detach()
+                weights, rgb_history = self._queue_assignment_weights(logits, self._prototype_queue_count > 0)
+                result["rgb"] = (weights * rgb_costs).sum(-1).mean() * rgb_history
+            if feature_descriptors is not None:
+                means = self._prototype_feature_queue_sum / self._prototype_feature_count.clamp_min(1).float()[:, None]
+                # Do NOT normalize the mean: dot with the arithmetic mean of
+                # unit vectors is the exact average pairwise cosine similarity.
+                feature_costs = (1.0 - feature_descriptors @ means.T).clamp(0.0, 2.0).detach()
+                feature_weights, feature_history = self._queue_assignment_weights(logits, self._prototype_feature_count > 0)
+                query_valid = feature_valid.to(torch.float32)
+                result["feature"] = ((feature_weights * feature_costs).sum(-1) * query_valid).sum() / query_valid.sum().clamp_min(1.0)
+                result["feature"] = result["feature"] * feature_history
+            result["combined"] = w_rgb * result["rgb"] + w_feature * result["feature"]
+        # Query-patch coverage (not patch–prototype pairs). Detached; no .item().
+        with torch.no_grad():
+            cov_zero = torch.zeros((), device=logits.device, dtype=torch.float32)
+            total = cov_zero + float(num_patches)
+            rgb_count = total * rgb_history.detach() if w_rgb > 0 else cov_zero.clone()
+            if feature_descriptors is not None:
+                feature_count = feature_valid.to(torch.float32).sum() * feature_history.detach()
+            else:
+                feature_count = cov_zero.clone()
+            # RGB is all-or-nothing across the query grid; union without double-count.
+            evaluated = rgb_count + feature_count * (cov_zero + 1.0 - (rgb_history.detach() if w_rgb > 0 else cov_zero))
+        # Costs/masks above are independent snapshots. Never enqueue before
+        # either comparison, and never update the same ring twice per forward.
+        self._enqueue_rgb_descriptors(visual_out, descriptors, feature_descriptors, feature_valid)
+        self.visual_appearance_diagnostics = self._appearance_status(
+            True, "pre_forward_queue_comparison", device=logits.device,
+        )
+        self.visual_appearance_diagnostics.update(
+            feature_active_this_forward=feature_descriptors is not None,
+            feature_reason=feature_reason,
+            app_loss_patch_count_total=total,
+            app_loss_patch_count=evaluated,
+            app_loss_rgb_patch_count=rgb_count,
+            app_loss_feature_patch_count=feature_count,
+        )
+        return result
+
+    def _visual_appearance_loss(
+        self,
+        visual_out: Dict[str, Any],
+        rgb_last_frame: Optional[torch.Tensor],
+        cached_backbone_features: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Compatibility wrapper returning the combined appearance objective."""
+        return self._visual_appearance_losses(visual_out, rgb_last_frame, cached_backbone_features)["combined"]
 
     @torch.no_grad()
-    def _enqueue_rgb_descriptors(self, visual_out: Dict[str, Any], descriptors: torch.Tensor) -> None:
-        """Keep the last N RGB descriptors per top-1 prototype, via bounded writes."""
+    def _enqueue_rgb_descriptors(
+        self,
+        visual_out: Dict[str, Any],
+        descriptors: torch.Tensor,
+        feature_descriptors: Optional[torch.Tensor] = None,
+        feature_valid: Optional[torch.Tensor] = None,
+    ) -> None:
+        """Single bounded ring write: RGB and frozen features share every slot."""
         ids = visual_out["visual_concept_indices"].detach()
         confidence = visual_out["visual_assignment_probs"].detach().gather(1, ids[:, None]).squeeze(1).float()
         positions = torch.arange(ids.shape[0], device=ids.device)
@@ -366,6 +499,23 @@ class VisualConceptCreation(nn.Module):
         self._prototype_queue_squared_norm_sum.index_add_(0, owners, new.square().sum(-1) - old.square().sum(-1))
         flat_queue.index_copy_(0, flat_slots, new)
         self._prototype_queue_confidence.view(-1).index_copy_(0, flat_slots, confidence[keep])
+        selected_positions = positions[keep]
+        if feature_descriptors is None:
+            new_feature = self._prototype_feature_queue.new_zeros((owners.shape[0], self.in_channels))
+            new_valid = torch.zeros(owners.shape[0], dtype=torch.bool, device=ids.device)
+        else:
+            if feature_valid is None:
+                raise ValueError("Feature queue insertion requires an explicit validity mask.")
+            new_valid = feature_valid[selected_positions]
+            new_feature = torch.where(new_valid[:, None], feature_descriptors[selected_positions],
+                                      torch.zeros_like(feature_descriptors[selected_positions]))
+        flat_feature = self._prototype_feature_queue.view(-1, self.in_channels)
+        flat_valid = self._prototype_feature_valid.view(-1)
+        old_feature, old_valid = flat_feature[flat_slots], flat_valid[flat_slots]
+        self._prototype_feature_queue_sum.index_add_(0, owners, new_feature - old_feature)
+        self._prototype_feature_count.index_add_(0, owners, new_valid.long() - old_valid.long())
+        flat_feature.index_copy_(0, flat_slots, new_feature)
+        flat_valid.index_copy_(0, flat_slots, new_valid)
         meta, shape = visual_out["visual_metadata"], visual_out["visual_metadata"]["feature_shape"]
         locations = torch.stack((torch.full_like(positions, self._prototype_queue_step),
                                  meta["batch_idx"][positions], meta["patch_idx"][positions],
@@ -379,12 +529,14 @@ class VisualConceptCreation(nn.Module):
         if self._prototype_queue_step % 128 == 0:
             self._prototype_queue_sum.copy_(self._prototype_queue.sum(1))
             self._prototype_queue_squared_norm_sum.copy_(self._prototype_queue.square().sum((1, 2)))
+            self._prototype_feature_queue_sum.copy_(self._prototype_feature_queue.sum(1))
+            self._prototype_feature_count.copy_(self._prototype_feature_valid.sum(1))
 
     @torch.no_grad()
     def prototype_queue_state(self) -> Dict[str, Any]:
-        """Explicit CPU snapshot, including small RGB patches for inspection."""
+        """Explicit CPU snapshot of aligned RGB and frozen-feature queues."""
         m, n, r = self.num_visual_concepts, self.visual_queue_size, self.visual_appearance_patch_size
-        return {"format": "prototype_rgb_fifo_v2", "num_prototypes": m, "capacity": n,
+        return {"format": "prototype_rgb_feature_fifo_v3", "num_prototypes": m, "capacity": n,
                 "patch_size": r, "descriptor_dim": self.visual_appearance_dim,
                 "in_channels": self.in_channels, "step": self._prototype_queue_step,
                 "rgb_patches": self._prototype_queue.detach().cpu().clone().reshape(m, n, 3, r, r),
@@ -395,51 +547,102 @@ class VisualConceptCreation(nn.Module):
                 "confidence": self._prototype_queue_confidence.detach().cpu().clone(),
                 "locations": self._prototype_queue_locations.detach().cpu().clone(),
                 "location_columns": ["forward_step", "batch_idx", "patch_idx", "grid_h", "grid_w", "window_T"],
-                "assignment": "top1", "representation": "area_pooled_rgb",
-                "descriptor_order": ["channel", "subrow", "subcolumn"]}
+                "assignment": "top1", "representation": "area_pooled_rgb_and_frozen_backbone",
+                "descriptor_order": ["channel", "subrow", "subcolumn"],
+                "feature_dim": self.in_channels,
+                "feature_metric": "mean_cosine_distance",
+                "feature_vectors": self._prototype_feature_queue.detach().cpu().clone(),
+                "feature_sum": self._prototype_feature_queue_sum.detach().cpu().clone(),
+                "feature_count": self._prototype_feature_count.detach().cpu().clone(),
+                "feature_valid": self._prototype_feature_valid.detach().cpu().clone()}
 
     @torch.no_grad()
-    def load_prototype_queue_state(self, state: Dict[str, Any]) -> None:
-        """Explicit restore of RGB queues; learned-embedding snapshots are rejected."""
+    def _validated_queue_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate completely before mutating any queue; migrate RGB-only v2."""
         m, n, r, d = self.num_visual_concepts, self.visual_queue_size, self.visual_appearance_patch_size, self.visual_appearance_dim
-        if (state.get("format") != "prototype_rgb_fifo_v2" or state.get("num_prototypes") != m
-                or state.get("capacity") != n or state.get("patch_size") != r
-                or state.get("descriptor_dim") != d or state.get("in_channels") != self.in_channels):
-            raise ValueError("RGB queue snapshot format/dimensions do not match. Old embedding queues cannot be reused.")
-        specs = {"rgb_patches": ((m, n, 3, r, r), "_prototype_queue"),
-                 "sum": ((m, d), "_prototype_queue_sum"),
-                 "squared_norm_sum": ((m,), "_prototype_queue_squared_norm_sum"),
-                 "count": ((m,), "_prototype_queue_count"),
-                 "pointer": ((m,), "_prototype_queue_pointer"),
-                 "confidence": ((m, n), "_prototype_queue_confidence"),
-                 "locations": ((m, n, 6), "_prototype_queue_locations")}
-        for key, (shape, _) in specs.items():
+        if not isinstance(state, dict):
+            raise ValueError("Queue snapshot must be a dictionary.")
+        legacy = state.get("format") == "prototype_rgb_fifo_v2"
+        if (state.get("format") not in ("prototype_rgb_fifo_v2", "prototype_rgb_feature_fifo_v3")
+                or state.get("num_prototypes") != m or state.get("capacity") != n
+                or state.get("patch_size") != r or state.get("descriptor_dim") != d
+                or state.get("in_channels") != self.in_channels):
+            raise ValueError("Queue snapshot format/dimensions do not match. Learned-embedding queues cannot be reused.")
+        specs = {"rgb_patches": (m, n, 3, r, r), "sum": (m, d),
+                 "squared_norm_sum": (m,), "count": (m,), "pointer": (m,),
+                 "confidence": (m, n), "locations": (m, n, 6)}
+        for key, shape in specs.items():
             value = state.get(key)
             if not torch.is_tensor(value) or tuple(value.shape) != shape or not torch.isfinite(value).all():
                 raise ValueError(f"Invalid RGB queue snapshot tensor: {key}.")
         for key in ("count", "pointer", "locations"):
             if state[key].dtype != torch.long:
                 raise ValueError(f"Queue snapshot {key} must be int64.")
-        if ((state["count"] < 0) | (state["count"] > n)).any() or ((state["pointer"] < 0) | (state["pointer"] >= n)).any():
+        count, pointer = state["count"].detach().cpu(), state["pointer"].detach().cpu()
+        if ((count < 0) | (count > n)).any() or ((pointer < 0) | (pointer >= n)).any():
             raise ValueError("Invalid RGB queue counts/pointers.")
-        rgb = state["rgb_patches"].float().reshape(m, n, d)
+        if (pointer[count < n] != count[count < n]).any():
+            raise ValueError("Partially filled queue pointers must equal their counts.")
+        rgb = state["rgb_patches"].detach().cpu().float().reshape(m, n, d)
         if ((rgb < -1e-6) | (rgb > 1.0 + 1e-6)).any():
             raise ValueError("Saved RGB descriptors must be in [0,1].")
-        if not torch.allclose(state["sum"].float(), rgb.sum(1), rtol=1e-4, atol=1e-4):
+        if not torch.allclose(state["sum"].detach().cpu().float(), rgb.sum(1), rtol=1e-4, atol=1e-4):
             raise ValueError("RGB queue sum does not match patches.")
-        if not torch.allclose(state["squared_norm_sum"].float(), rgb.square().sum((1, 2)), rtol=1e-4, atol=1e-4):
+        if not torch.allclose(state["squared_norm_sum"].detach().cpu().float(), rgb.square().sum((1, 2)), rtol=1e-4, atol=1e-4):
             raise ValueError("RGB queue squared-norm sum does not match patches.")
         step = state.get("step")
         if isinstance(step, bool) or not isinstance(step, int) or step < 0:
-            raise ValueError("Invalid RGB queue step.")
-        for key, (_, name) in specs.items():
+            raise ValueError("Invalid queue step.")
+        if legacy:
+            feature = torch.zeros(m, n, self.in_channels, dtype=torch.float32)
+            valid = torch.zeros(m, n, dtype=torch.bool)
+        else:
+            if state.get("feature_dim") != self.in_channels or state.get("feature_metric") != "mean_cosine_distance":
+                raise ValueError("Frozen-feature queue descriptor semantics/dimensions do not match.")
+            feature_specs = {"feature_vectors": (m, n, self.in_channels), "feature_sum": (m, self.in_channels),
+                             "feature_count": (m,), "feature_valid": (m, n)}
+            for key, shape in feature_specs.items():
+                value = state.get(key)
+                if not torch.is_tensor(value) or tuple(value.shape) != shape or not torch.isfinite(value).all():
+                    raise ValueError(f"Invalid frozen-feature queue snapshot tensor: {key}.")
+            if state["feature_valid"].dtype != torch.bool or state["feature_count"].dtype != torch.long:
+                raise ValueError("Feature validity/counts must have bool/int64 dtypes.")
+            feature = state["feature_vectors"].detach().cpu().float()
+            valid = state["feature_valid"].detach().cpu()
+            occupied = (torch.arange(n)[None, :] < count[:, None]) | (count[:, None] == n)
+            if (valid & ~occupied).any():
+                raise ValueError("Feature validity cannot occupy an empty RGB queue slot.")
+            if (feature[~valid] != 0).any():
+                raise ValueError("Invalid feature queue slots must contain zero vectors.")
+            norms = torch.linalg.vector_norm(feature[valid], dim=-1)
+            if not torch.allclose(norms, torch.ones_like(norms), rtol=1e-4, atol=1e-4):
+                raise ValueError("Valid feature queue vectors must be L2 normalized.")
+            if not torch.equal(state["feature_count"].detach().cpu(), valid.sum(1)):
+                raise ValueError("Feature queue counts do not match validity masks.")
+            if not torch.allclose(state["feature_sum"].detach().cpu().float(), feature.sum(1), rtol=1e-4, atol=1e-4):
+                raise ValueError("Feature queue sums do not match vectors.")
+        return {"step": step, "legacy": legacy,
+                "_prototype_queue": rgb, "_prototype_queue_sum": rgb.sum(1),
+                "_prototype_queue_squared_norm_sum": rgb.square().sum((1, 2)),
+                "_prototype_queue_count": count, "_prototype_queue_pointer": pointer,
+                "_prototype_queue_confidence": state["confidence"].detach().cpu().float(),
+                "_prototype_queue_locations": state["locations"].detach().cpu(),
+                "_prototype_feature_queue": feature, "_prototype_feature_queue_sum": feature.sum(1),
+                "_prototype_feature_count": valid.sum(1), "_prototype_feature_valid": valid}
+
+    @torch.no_grad()
+    def _restore_validated_queue_state(self, state: Dict[str, Any]) -> None:
+        for name in self._QUEUE_FLOAT_TENSORS + self._QUEUE_INT_TENSORS + self._QUEUE_BOOL_TENSORS:
             target = getattr(self, name)
-            value = rgb if key == "rgb_patches" else state[key]
-            target.copy_(value.to(device=target.device, dtype=target.dtype))
-        self._prototype_queue_sum.copy_(self._prototype_queue.sum(1))
-        self._prototype_queue_squared_norm_sum.copy_(self._prototype_queue.square().sum((1, 2)))
-        self._prototype_queue_step = step
-        self.visual_appearance_diagnostics = self._appearance_status(False, "restored_rgb_queue")
+            target.copy_(state[name].to(device=target.device, dtype=target.dtype))
+        self._prototype_queue_step = state["step"]
+        reason = "restored_rgb_only_feature_warmup" if state["legacy"] else "restored_rgb_feature_queue"
+        self.visual_appearance_diagnostics = self._appearance_status(False, reason)
+
+    @torch.no_grad()
+    def load_prototype_queue_state(self, state: Dict[str, Any]) -> None:
+        """Restore v3 paired queues or v2 RGB queues with empty feature history."""
+        self._restore_validated_queue_state(self._validated_queue_state(state))
 
     def save_prototype_queue(self, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
                              filename: str = "prototype_queue.pt") -> str:
@@ -927,10 +1130,12 @@ class VisualConceptCreation(nn.Module):
                 gradients reach model parameters through live soft assignments.
             cached_backbone_features: optional detached frozen-reference last-slice
                 tensor shaped [B, C, 1, H, W], aligned with ``features[:, :, -1:]``.
-                Flattening order for a future feature-similarity loss must match the
-                live visual patch order: [B,C,1,H,W] -> [B,H,W,C] -> [B*H*W,C].
-                Kept separate from learned ``visual_patch_embeddings``; unused for
-                loss in this plumbing step.
+                Flattening order matches live visual patches:
+                [B,C,1,H,W] -> [B,H,W,C] -> [B*H*W,C]. Each frozen vector is
+                L2 normalized for cosine-distance queue supervision. It remains
+                separate from learned ``visual_patch_embeddings``. Missing cached
+                features retain RGB-only behavior and feature history warms up
+                when cached inputs become available.
         Returns:
             Visual concept outputs plus legacy temporal keys set to None.
         """
@@ -950,6 +1155,8 @@ class VisualConceptCreation(nn.Module):
                 raise ValueError(
                     "cached_backbone_features must be detached (requires_grad=False)."
                 )
+            if not cached_backbone_features.is_floating_point():
+                raise TypeError("cached_backbone_features must be a floating-point tensor.")
             ref = cached_backbone_features.detach()
             if ref.dim() != 5 or ref.shape[2] != 1:
                 raise ValueError(
@@ -980,7 +1187,7 @@ class VisualConceptCreation(nn.Module):
                 )
             if not torch.isfinite(ref).all():
                 raise ValueError("cached_backbone_features contains non-finite values.")
-            # Local only for a subsequent loss edit; do not store on self.
+            # Fixed reference targets only; no graph or retained batch attribute.
             cached_backbone_features = ref
         else:
             cached_backbone_features = None
@@ -1007,17 +1214,18 @@ class VisualConceptCreation(nn.Module):
                     f"{rgb_last_frame.device} vs {features.device}"
                 )
         visual_out = self._build_visual_concepts_from_patches(features)
-        # Reserved for a subsequent feature-similarity loss against live embeddings.
-        # Kept local/validated only; does not affect current losses or queues.
-        _ = cached_backbone_features
         align_out: Dict[str, Any] = {
             "loss_visual_saliency_align": None,
             "visual_saliency_patch_logits": None,
             "visual_saliency_align_valid_frac": None,
         }
         losses: Dict[str, torch.Tensor] = {}
-        self.visual_appearance_diagnostics = self._appearance_status(
-            False, "return_losses_false" if not return_losses else "not_computed"
+        _fs = visual_out["visual_metadata"]["feature_shape"]
+        _n_query = int(_fs["B"]) * int(_fs["H"]) * int(_fs["W"])  # last-slice grid only (T=1)
+        self.visual_appearance_diagnostics = self._appearance_inactive_diagnostics(
+            "return_losses_false" if not return_losses else "not_computed",
+            num_patches=_n_query,
+            device=visual_out["visual_concept_logits"].device,
         )
         if return_losses:
             loss_visual = self._visual_concept_loss(
@@ -1036,7 +1244,8 @@ class VisualConceptCreation(nn.Module):
                 reference=loss_visual,
             )
             loss_visual_saliency_align = align_out["loss_visual_saliency_align"]
-            loss_appearance = self._visual_appearance_loss(visual_out, rgb_last_frame)
+            appearance = self._visual_appearance_losses(visual_out, rgb_last_frame, cached_backbone_features)
+            loss_appearance = appearance["combined"]
             graph_losses = {
                 "loss_visual_graph_assignment": loss_visual * 0.0,
                 "loss_visual_graph_feature": loss_visual * 0.0,
@@ -1050,6 +1259,8 @@ class VisualConceptCreation(nn.Module):
                 "loss_visual_saliency_align": loss_visual_saliency_align,
                 **graph_losses,
                 "loss_visual_appearance": loss_appearance,
+                "loss_visual_appearance_rgb": appearance["rgb"],
+                "loss_visual_feature": appearance["feature"],
                 "loss_total_concept": (
                     w["visual"] * loss_visual
                     + w["visual_div"] * loss_visual_div
@@ -1177,7 +1388,7 @@ def save_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
     if not modules:
         raise ValueError("No VisualConceptCreation modules found in model.")
     states = {name: module.prototype_queue_state() for name, module in modules.items()}
-    return _atomic_queue_save({"format": "prototype_rgb_fifo_model_v2", "stages": states}, directory, filename)
+    return _atomic_queue_save({"format": "prototype_rgb_feature_fifo_model_v3", "stages": states}, directory, filename)
 
 
 def load_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
@@ -1191,8 +1402,19 @@ def load_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
         raise ValueError("Queue snapshot filename must be a simple .pt filename.")
     payload = torch.load(Path(directory).expanduser() / filename, map_location="cpu", weights_only=True)
     modules = _queue_modules(model)
-    if payload.get("format") != "prototype_rgb_fifo_model_v2" or set(payload.get("stages", {})) != set(modules):
-        raise ValueError("RGB queue snapshot format/stages do not match. Old embedding queues cannot be reused; start with empty RGB queues.")
+    if (not isinstance(payload, dict) or payload.get("format") not in
+            ("prototype_rgb_fifo_model_v2", "prototype_rgb_feature_fifo_model_v3")
+            or not isinstance(payload.get("stages"), dict) or set(payload["stages"]) != set(modules)):
+        raise ValueError("Queue snapshot format/stages do not match. Learned-embedding queues cannot be reused.")
+    # Validate every stage before restoring any, including legacy RGB migration.
+    expected_format = ("prototype_rgb_fifo_v2" if payload["format"] == "prototype_rgb_fifo_model_v2"
+                       else "prototype_rgb_feature_fifo_v3")
+    validated = {}
     for name, module in modules.items():
-        module.load_prototype_queue_state(payload["stages"][name])
+        state = payload["stages"][name]
+        if not isinstance(state, dict) or state.get("format") != expected_format:
+            raise ValueError(f"Queue stage {name!r} format disagrees with its model snapshot.")
+        validated[name] = module._validated_queue_state(state)
+    for name, module in modules.items():
+        module._restore_validated_queue_state(validated[name])
 

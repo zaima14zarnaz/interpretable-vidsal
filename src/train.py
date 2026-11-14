@@ -87,7 +87,15 @@ OUTPUT_DIR = "training_outputs"
 CKPTS_DIR = os.path.join(OUTPUT_DIR, "ckpts")
 MAP_SAVE_INTERVAL = 1000
 VAL_EVERY_N_EPOCHS = 1
-VAL_METRICS_CSV_COLUMNS = ("Epoch_no", "Val Loss", "CC", "SIM", "NSS")
+VAL_METRICS_CSV_COLUMNS = (
+    "Epoch_no",
+    "Val Loss",
+    "CC",
+    "SIM",
+    "NSS",
+    "App_loss_patch_count",
+    "app_loss",
+)
 OVERFIT_ONE_BATCH = False
 OVERFIT_STEPS = 300
 MAX_SAMPLES = 500
@@ -362,10 +370,22 @@ def _unpack_loader_batch(batch):
     )
 
 
+def _needs_reference_features(model: ExplainableVidSalModel) -> bool:
+    """Only training with an enabled feature objective needs reference I/O."""
+    if not USE_CACHED_BACKBONE_FEATURES or not model.training or not _return_concept_losses():
+        return False
+    return any(
+        module.loss_weights.get("visual_appearance", 0.0) > 0
+        and module.loss_weights.get("visual_feature", 0.0) > 0
+        for module in model.concept_creations.values()
+    )
+
+
 def _build_reference_cache(
     device: torch.device,
+    model: Optional[ExplainableVidSalModel] = None,
 ) -> Optional[FrozenBackboneFeatureCache]:
-    if not USE_CACHED_BACKBONE_FEATURES:
+    if not USE_CACHED_BACKBONE_FEATURES or (model is not None and not _needs_reference_features(model)):
         return None
     cache = FrozenBackboneFeatureCache(
         root=BACKBONE_FEATURE_CACHE_ROOT,
@@ -474,6 +494,8 @@ def _resolve_cached_backbone_features(
             view_id=view_id,
             force=False,
             allow_compute=not BACKBONE_FEATURE_CACHE_READ_ONLY,
+            # Identity was hashed from this exact CPU view immediately above.
+            verify_identity_content=False,
         )
 
 
@@ -1163,6 +1185,157 @@ def _compute_batch_metrics_excluding_empty_fixations(
     )
 
 
+def _detached_diag_scalar(value: Any) -> float:
+    """Convert a diagnostics scalar to a Python float without retaining graphs."""
+    if value is None:
+        return 0.0
+    if torch.is_tensor(value):
+        return float(value.detach().float().reshape(()).cpu())
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _iter_train_concept_stages(
+    concept_out: Any,
+) -> List[Tuple[str, Dict[str, Any]]]:
+    """Stage outputs from the main training forward's concept_out dict."""
+    if not isinstance(concept_out, dict) or not concept_out:
+        return []
+    first_val = next(iter(concept_out.values()))
+    if isinstance(first_val, dict) and (
+        "losses" in first_val
+        or "visual_appearance_diagnostics" in first_val
+        or "visual_concept_logits" in first_val
+    ):
+        return [
+            (str(stage), stage_out)
+            for stage, stage_out in concept_out.items()
+            if isinstance(stage_out, dict)
+        ]
+    return [("default", concept_out)] if isinstance(concept_out, dict) else []
+
+
+def _collect_main_forward_appearance_stats(model_out: dict) -> Dict[str, Any]:
+    """Detached appearance coverage + equal-stage mean loss from the main forward only.
+
+    Reads diagnostics/losses embedded in ``model_out`` immediately so flipped or
+    diagnostic forwards cannot overwrite mutable module state after the fact.
+    Uses raw ``loss_visual_appearance`` (internal RGB/feature weights included;
+    before ``loss_weights['visual_appearance']`` and before grad-accum division).
+    """
+    stage_rows: Dict[str, Dict[str, float]] = {}
+    appearance_losses: List[torch.Tensor] = []
+    patch_count_sum = 0.0
+
+    for stage, stage_out in _iter_train_concept_stages(model_out.get("concept_out")):
+        diag = stage_out.get("visual_appearance_diagnostics")
+        if not isinstance(diag, dict):
+            diag = {}
+        evaluated = _detached_diag_scalar(diag.get("app_loss_patch_count"))
+        total = _detached_diag_scalar(diag.get("app_loss_patch_count_total"))
+        rgb = _detached_diag_scalar(diag.get("app_loss_rgb_patch_count"))
+        feature = _detached_diag_scalar(diag.get("app_loss_feature_patch_count"))
+        stage_rows[stage] = {
+            "evaluated": evaluated,
+            "total": total,
+            "rgb": rgb,
+            "feature": feature,
+        }
+        patch_count_sum += evaluated
+
+        losses = stage_out.get("losses")
+        if isinstance(losses, dict):
+            loss_app = losses.get("loss_visual_appearance")
+            if torch.is_tensor(loss_app):
+                appearance_losses.append(loss_app.detach().float().reshape(()))
+
+    if appearance_losses:
+        batch_app_loss = float(torch.stack(appearance_losses).mean().cpu())
+    else:
+        batch_app_loss = None
+
+    return {
+        "App_loss_patch_count": patch_count_sum,
+        "app_loss": batch_app_loss,
+        "stages": stage_rows,
+    }
+
+
+def _new_appearance_epoch_accumulator() -> Dict[str, Any]:
+    return {
+        "patch_count_sum": 0.0,
+        "app_loss_sum": 0.0,
+        "num_batches": 0,
+        "stages": {},  # stage -> evaluated/total/rgb/feature sums
+    }
+
+
+def _accumulate_appearance_epoch_stats(
+    acc: Dict[str, Any],
+    batch_stats: Dict[str, Any],
+) -> None:
+    """Accumulate one microbatch of main-forward appearance stats (no graph)."""
+    acc["num_batches"] += 1
+    acc["patch_count_sum"] += float(batch_stats.get("App_loss_patch_count", 0.0))
+    batch_app = batch_stats.get("app_loss")
+    # Match train-loss averaging: one equal-stage mean per microbatch. Missing
+    # appearance tensors contribute 0.0 to the running sum (warmup-compatible).
+    acc["app_loss_sum"] += float(batch_app) if batch_app is not None else 0.0
+    for stage, row in batch_stats.get("stages", {}).items():
+        slot = acc["stages"].setdefault(
+            stage, {"evaluated": 0.0, "total": 0.0, "rgb": 0.0, "feature": 0.0}
+        )
+        for key in ("evaluated", "total", "rgb", "feature"):
+            slot[key] += float(row.get(key, 0.0))
+
+
+def _finalize_appearance_epoch_stats(acc: Dict[str, Any]) -> Dict[str, Any]:
+    """Epoch totals: sum patch counts; mean app_loss like train loss (over microbatches).
+
+    If no appearance queries were evaluated in the epoch, ``app_loss`` is NaN
+    (do not report a misleading measured zero from empty-history warmup).
+    """
+    patch_count = float(acc["patch_count_sum"])
+    num_batches = max(int(acc["num_batches"]), 1)
+    if patch_count > 0.0:
+        app_loss = float(acc["app_loss_sum"]) / float(num_batches)
+    else:
+        app_loss = float("nan")
+    return {
+        "App_loss_patch_count": patch_count,
+        "app_loss": app_loss,
+        "stages": {
+            stage: {
+                "evaluated": float(row["evaluated"]),
+                "total": float(row["total"]),
+                "rgb": float(row["rgb"]),
+                "feature": float(row["feature"]),
+            }
+            for stage, row in acc["stages"].items()
+        },
+    }
+
+
+def _print_appearance_coverage_summary(epoch: int, appearance_stats: Dict[str, Any]) -> None:
+    """One concise per-stage coverage line for the training epoch."""
+    stages = appearance_stats.get("stages") or {}
+    if not stages:
+        print(f"Appearance coverage epoch {epoch}: (no stage diagnostics)")
+        return
+    parts: List[str] = []
+    for stage in sorted(stages.keys()):
+        row = stages[stage]
+        total = max(float(row.get("total", 0.0)), 0.0)
+        parts.append(
+            f"{stage}: combined {row.get('evaluated', 0.0):.0f}/{total:.0f} | "
+            f"rgb {row.get('rgb', 0.0):.0f}/{total:.0f} | "
+            f"feature {row.get('feature', 0.0):.0f}/{total:.0f}"
+        )
+    print(f"Appearance coverage epoch {epoch}: " + " || ".join(parts), flush=True)
+
+
 def train_one_epoch(
     model: ExplainableVidSalModel,
     loader: DataLoader,
@@ -1174,11 +1347,13 @@ def train_one_epoch(
     calculate_metrics: bool = True,
     scaler: Optional[GradScaler] = None,
     feature_cache: Optional[FrozenBackboneFeatureCache] = None,
-) -> Tuple[float, Optional[Dict[str, float]]]:
+) -> Tuple[float, Optional[Dict[str, float]], Dict[str, Any]]:
     model.train()
+    reference_stats_before = dict(feature_cache.stats) if feature_cache is not None else {}
     running_loss = 0.0
     num_batches = 0
     metric_averager = MetricAverager()
+    appearance_acc = _new_appearance_epoch_accumulator()
     accum_steps = _grad_accum_steps()
     optimizer.zero_grad(set_to_none=True)
 
@@ -1200,21 +1375,20 @@ def train_one_epoch(
         ) = _unpack_loader_batch(batch)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
+        # Hash/read before uploading RGB; retain the CPU view for optional flips.
+        rgb_batch_cpu, n_frames_cpu = rgb_batch, n_frames
+        cached_backbone_features = None
+        if _needs_reference_features(model):
+            cached_backbone_features = _resolve_cached_backbone_features(
+                feature_cache, rgb_batch_cpu, sample_metadata, n_frames_cpu,
+                view_id="identity",
+            )
         rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
             rgb_batch,
             sal_batch,
             fix_batch,
         )
         fix_batch = (fix_batch > 0).float()
-        n_frames = n_frames.to(device=rgb_batch.device, non_blocking=True)
-
-        cached_backbone_features = _resolve_cached_backbone_features(
-            feature_cache,
-            rgb_batch,
-            sample_metadata,
-            n_frames,
-            view_id="identity",
-        )
 
         equiv_model_out = None
         with autocast(
@@ -1230,16 +1404,18 @@ def train_one_epoch(
                 return_decoder_diagnostics=(batch_idx == 0),
                 cached_backbone_features=cached_backbone_features,
             )
+            # Capture main-forward appearance stats before any flipped forward.
+            appearance_batch_stats = _collect_main_forward_appearance_stats(model_out)
+            _accumulate_appearance_epoch_stats(appearance_acc, appearance_batch_stats)
 
             if _should_run_visual_equiv(model, epoch):
                 rgb_batch_flip = torch.flip(rgb_batch, dims=[-1])
-                cached_backbone_features_flip = _resolve_cached_backbone_features(
-                    feature_cache,
-                    rgb_batch_flip,
-                    sample_metadata,
-                    n_frames,
-                    view_id="hflip",
-                )
+                cached_backbone_features_flip = None
+                if _needs_reference_features(model):
+                    cached_backbone_features_flip = _resolve_cached_backbone_features(
+                        feature_cache, torch.flip(rgb_batch_cpu, dims=[-1]),
+                        sample_metadata, n_frames_cpu, view_id="hflip",
+                    )
                 equiv_model_out = model(
                     rgb_batch_flip,
                     saliency_maps=sal_batch,
@@ -1334,22 +1510,30 @@ def train_one_epoch(
         pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         # Drop graph references so activations can be freed before the next batch.
-        del model_out, loss_dict, loss, rgb_batch, sal_batch, fix_batch
+        del model_out, loss_dict, loss, rgb_batch, sal_batch, fix_batch, rgb_batch_cpu, cached_backbone_features
         if equiv_model_out is not None:
             del equiv_model_out
 
     mean_loss = running_loss / max(num_batches, 1)
+    appearance_stats = _finalize_appearance_epoch_stats(appearance_acc)
+    _print_appearance_coverage_summary(epoch, appearance_stats)
     save_prototype_queues(model)
+    if feature_cache is not None:
+        delta = {k: int(v) - int(reference_stats_before.get(k, 0)) for k, v in feature_cache.stats.items()}
+        print(f"Reference cache epoch {epoch}: hits={delta.get('hits', 0)} "
+              f"misses={delta.get('misses', 0)} rejected={delta.get('rejected', 0)} "
+              f"teacher_forwards={delta.get('reference_forwards', 0)} writes={delta.get('writes', 0)}", flush=True)
     if calculate_metrics:
-        return mean_loss, metric_averager.mean()
+        return mean_loss, metric_averager.mean(), appearance_stats
     else:
-        return mean_loss, None
+        return mean_loss, None, appearance_stats
 
 
 def _format_val_metrics_csv_row(
     epoch: int,
     val_loss: Optional[float],
     val_metrics: Optional[Dict[str, float]],
+    appearance_stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, object]:
     row: Dict[str, object] = {"Epoch_no": epoch}
     if val_loss is None or val_loss != val_loss:
@@ -1365,6 +1549,22 @@ def _format_val_metrics_csv_row(
         row["CC"] = "-"
         row["SIM"] = "-"
         row["NSS"] = "-"
+
+    # Training-epoch appearance columns (empty when unavailable / no queries).
+    if appearance_stats is None:
+        row["App_loss_patch_count"] = ""
+        row["app_loss"] = ""
+    else:
+        patch_count = appearance_stats.get("App_loss_patch_count")
+        app_loss = appearance_stats.get("app_loss")
+        if patch_count is None:
+            row["App_loss_patch_count"] = ""
+        else:
+            row["App_loss_patch_count"] = float(patch_count)
+        if app_loss is None or app_loss != app_loss:
+            row["app_loss"] = ""
+        else:
+            row["app_loss"] = float(app_loss)
     return row
 
 
@@ -1406,16 +1606,9 @@ def validate_one_epoch(
             fix_batch,
         )
         fix_batch = (fix_batch > 0).float()
-        n_frames = n_frames.to(device=rgb_batch.device, non_blocking=True)
+        # Appearance losses skip eval/no_grad. Keep ordinary validation losses,
+        # but never load or compute unused frozen-reference targets here.
         cached_backbone_features = None
-        if _return_concept_losses():
-            cached_backbone_features = _resolve_cached_backbone_features(
-                feature_cache,
-                rgb_batch,
-                sample_metadata,
-                n_frames,
-                view_id="identity",
-            )
 
         with autocast(
             device.type,
@@ -1597,7 +1790,7 @@ def main() -> None:
         num_concepts=128,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=8,
+        top_k=3,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -1672,7 +1865,7 @@ def main() -> None:
         f"scheduler T_max={scheduler_t_max} eta_min={scheduler_eta_min:.1e}"
     )
     scaler = GradScaler(device.type, enabled=_amp_enabled(device))
-    feature_cache = _build_reference_cache(device)
+    feature_cache = _build_reference_cache(device, model=model)
 
     if OVERFIT_ONE_BATCH:
         _run_overfit_one_batch(
@@ -1691,6 +1884,12 @@ def main() -> None:
     train_metrics_history: list = []
     val_metrics_history: list = []
     best_val_loss = float("inf")
+    # Older history rows may omit appearance columns; DataFrame(columns=...) leaves
+    # those cells empty rather than fabricating zeros.
+    if is_resume and isinstance(checkpoint, dict):
+        prior_rows = checkpoint.get("val_metrics_history")
+        if isinstance(prior_rows, list) and prior_rows:
+            val_metrics_history = [dict(row) for row in prior_rows if isinstance(row, dict)]
 
     for epoch in range(1, num_epochs + 1):
         print(f"\nEpoch {epoch}/{num_epochs}")
@@ -1709,7 +1908,7 @@ def main() -> None:
         if epoch >= 48:
             val_every_n_epochs = 1
 
-        train_loss, train_metrics = train_one_epoch(
+        train_loss, train_metrics, appearance_stats = train_one_epoch(
             model,
             train_loader,
             optimizer,
@@ -1740,7 +1939,9 @@ def main() -> None:
         val_losses.append(val_loss if val_loss is not None else float("nan"))
         train_metrics_history.append(train_metrics)
         val_metrics_history.append(
-            _format_val_metrics_csv_row(epoch, val_loss, val_metrics)
+            _format_val_metrics_csv_row(
+                epoch, val_loss, val_metrics, appearance_stats=appearance_stats
+            )
         )
 
         current_lr = optimizer.param_groups[0]["lr"]
@@ -1828,20 +2029,18 @@ def _run_overfit_one_batch(
         valid_mask,
         sample_metadata,
     ) = _unpack_loader_batch(batch)
+    model.train()
+    cached_backbone_features = None
+    if _needs_reference_features(model):
+        cached_backbone_features = _resolve_cached_backbone_features(
+            feature_cache, rgb_batch, sample_metadata, n_frames, view_id="identity",
+        )
     rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
         rgb_batch,
         sal_batch,
         fix_batch,
     )
     fix_batch = (fix_batch > 0).float()
-    n_frames = n_frames.to(device=rgb_batch.device, non_blocking=True)
-    cached_backbone_features = _resolve_cached_backbone_features(
-        feature_cache,
-        rgb_batch,
-        sample_metadata,
-        n_frames,
-        view_id="identity",
-    )
 
     model.train()
     for step in range(1, OVERFIT_STEPS + 1):
@@ -1878,3 +2077,4 @@ def _run_overfit_one_batch(
 
 if __name__ == "__main__":
     main()
+

@@ -9,7 +9,7 @@ python generate_vis_sim_graph.py
 python find_vis_pattern.py \
   --video-id 001 \
   --frame-name 0032.png \
-  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261111_182327/best_checkpoint.pth \
+  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261112_191642/epoch_189.pth \
   --top-k 5 \
   --device cuda:0 \
   --api-image-max-side 256 \

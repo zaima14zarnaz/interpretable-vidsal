@@ -402,6 +402,7 @@ class FrozenBackboneFeatureCache:
             "legacy_hits": 0,
             "writes": 0,
             "rejected": 0,
+            "reference_forwards": 0,
         }
 
     def _adopt_legacy_reference_fingerprint(self) -> Optional[str]:
@@ -664,6 +665,7 @@ class FrozenBackboneFeatureCache:
         video = video.detach().to(device=self.device, dtype=torch.float32)
         if video.numel() > 0 and float(video.max()) > 2.0:
             video = video / 255.0
+        self.stats["reference_forwards"] += 1
         outputs = self.reference.forward_features(video)
         packed: Dict[str, torch.Tensor] = {}
         for stage in STAGES:
@@ -688,6 +690,7 @@ class FrozenBackboneFeatureCache:
         identity: Optional[SampleIdentity] = None,
         force: bool = False,
         allow_compute: bool = True,
+        _verified_content_sha256: Optional[str] = None,
     ) -> Dict[str, torch.Tensor]:
         clip = rgb_btchw.detach()
         if clip.dim() == 5:
@@ -699,7 +702,8 @@ class FrozenBackboneFeatureCache:
         clip = clip.to(dtype=torch.float32)
         if clip.numel() > 0 and float(clip.max()) > 2.0:
             clip = clip / 255.0
-        content_sha = fingerprint_rgb_clip(clip)
+        content_sha = (_verified_content_sha256 if _verified_content_sha256 is not None
+                       else fingerprint_rgb_clip(clip))
         if identity is not None and identity.content_sha256 != content_sha:
             raise ValueError(
                 "SampleIdentity.content_sha256 does not match the provided RGB clip."
@@ -770,6 +774,7 @@ class FrozenBackboneFeatureCache:
         view_id: Union[str, Sequence[str]] = "identity",
         force: bool = False,
         allow_compute: bool = True,
+        verify_identity_content: bool = True,
     ) -> Dict[str, torch.Tensor]:
         """Resolve a BTCHW batch into stage tensors [B,C,1,H,W].
 
@@ -777,6 +782,11 @@ class FrozenBackboneFeatureCache:
         ``content_hw`` when provided; otherwise the full H,W of the batch tensor
         is used (callers should avoid accidental pad collisions). Temporal pad is
         stripped with ``n_frames``.
+
+        Hash once by default. Internal training callers can set
+        verify_identity_content=False only when identities were just hashed
+        from the exact supplied CPU clips. Direct get_or_compute calls still
+        verify input content normally.
         """
         if rgb_batch.dim() != 5 or rgb_batch.shape[2] != 3:
             raise ValueError(
@@ -804,10 +814,14 @@ class FrozenBackboneFeatureCache:
             clip = rgb_batch[index, :frames, :, :height, :width].detach().to(dtype=torch.float32)
             if clip.numel() > 0 and float(clip.max()) > 2.0:
                 clip = clip / 255.0
-            content_sha = fingerprint_rgb_clip(clip)
             if identities is not None:
                 identity = identities[index]
+                content_sha = (fingerprint_rgb_clip(clip) if verify_identity_content
+                               else identity.content_sha256)
+                if content_sha != identity.content_sha256:
+                    raise ValueError("SampleIdentity.content_sha256 does not match the provided RGB clip.")
             else:
+                content_sha = fingerprint_rgb_clip(clip)
                 identity = SampleIdentity(
                     dataset_root="batch",
                     video_id=f"batch_{index}",
@@ -830,6 +844,7 @@ class FrozenBackboneFeatureCache:
                     identity=identity,
                     force=force,
                     allow_compute=allow_compute,
+                    _verified_content_sha256=content_sha,
                 )
             )
 
@@ -897,3 +912,4 @@ def make_identity_from_loader_sample(
         preprocess=dict(preprocess or preprocess_config()),
     )
     return identity, rgb
+
