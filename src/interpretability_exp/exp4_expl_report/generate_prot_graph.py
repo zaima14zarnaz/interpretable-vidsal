@@ -9,11 +9,13 @@ No command-line arguments. Actions:
            Replays only missing frames, verifies checkpoint/window/assignments,
            preserves original nodes, memberships and IDs. Run once for old DBs.
   view / serve: no inference; show ALL stage4 prototypes by default, each linked
-           to its N strongest patches across all cached target-frame patches.
+           to up to N strongest positive matches across all cached patches.
   export_edges: export the new graph's two edge types to CSV.
   selftest: test exact rankings, ties, similarity, filtering, migration and HTML.
 
-PATCHES_PER_PROTOTYPE is N. Ranking uses native visual_activations across the
+PATCHES_PER_PROTOTYPE is a maximum N. Only strictly positive activations (or
+values above MIN_PROTOTYPE_ACTIVATION) are eligible; sparse groups are never
+padded with inactive patches. Ranking uses native visual_activations across the
 entire prototype bank, never just a patch's top-K list and never logits as a
 fallback. These links describe strongest matches; forward validity is separately
 reported. Every stage4 prototype appears, including banks with no valid matches.
@@ -78,10 +80,10 @@ ACTION = "serve"  # extract | cache_similarity | view | serve | export_edges | s
 SCRIPT_DIR = Path(__file__).resolve().parent
 SRC_DIR = SCRIPT_DIR.parents[1]
 EVALUATION_FILE = SRC_DIR / "evaluation.py"
-CHECKPOINT_PATH = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261113_143711/epoch_200.pth"
+CHECKPOINT_PATH = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261113_143711/epoch_020.pth"
 DATASET_ROOTS = "/data/quantization/zaima/videosal_datasets/dhf1k/train"
 STAGES = ("stage4",)
-WINDOW_STRIDE = 128
+WINDOW_STRIDE = 64
 BATCH_SIZE = 1
 NUM_WORKERS = None
 GPU_ID = 0
@@ -93,7 +95,9 @@ SAVE_FRAME_THUMBNAILS = True
 FRAME_THUMB_WIDTH = 384
 SEED = 42
 SERVER_PORT = 8765
-PATCHES_PER_PROTOTYPE = 10  # N: exact strongest matches per stage4 prototype
+PATCHES_PER_PROTOTYPE = 10  # Maximum N; fewer positive matches remain a smaller group.
+MIN_PROTOTYPE_ACTIVATION = 0.0  # Strict > cutoff; 0.0 excludes zero/negative activations.
+RANKING_VERSION = "positive_activation_v1"
 RANK_CACHE_CAPACITY = 50  # speed future changes of N; not a gallery limit
 GALLERY_COLUMNS = 8
 # None = displayed-edge min/max; each tooltip also shows the raw score.
@@ -104,7 +108,7 @@ STAGE4_FEATURE_OUTPUT_PATH = ("stage4",)
 STAGE4_FEATURE_LAYOUT = "auto"  # auto | BCTHW | BTCHW | BTHWC | BCHW | BHWC
 SIMILARITY_VERSION = "stage4_rgb_structure_v1"
 SIMILARITY_FORMULA = "stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine"
-GRAPH_VERSION = "prototype_patch_v2"
+GRAPH_VERSION = "prototype_patch_v3_positive"
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -719,18 +723,40 @@ def require_dense_cache(con):
     return int(m[0])
 
 
+def activation_cutoff():
+    value = float(MIN_PROTOTYPE_ACTIVATION)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("MIN_PROTOTYPE_ACTIVATION must be finite and nonnegative.")
+    return value
+
+
+def positive_rank_counts(metadata, prototype_count):
+    """Validate the eligibility contract, including isolated prototype counts."""
+    counts = metadata.get("positive_patch_counts")
+    if (metadata.get("version") != RANKING_VERSION
+            or metadata.get("min_activation") != activation_cutoff()
+            or not isinstance(counts, list) or len(counts) != prototype_count
+            or any(type(count) is not int or count < 0 for count in counts)
+            or any(count > metadata.get("patch_count", -1) for count in counts)):
+        raise RuntimeError("Prototype ranks use an old/invalid eligibility policy. Run ACTION='view' or 'serve' with the updated generator; ranks rebuild from cached activations without inference.")
+    return counts
+
+
 def rebuild_rank_cache(con, capacity):
+    cutoff = activation_cutoff()
     m = require_dense_cache(con)
     capacity = int(capacity)
     if capacity < 1:
         raise ValueError("N / ranking capacity must be positive.")
     old_ids = old_scores = None
     count = 0
+    positive_counts = np.zeros(m, dtype=np.int64)
     for frame in con.execute("SELECT * FROM prototype_activation_frames WHERE stage='stage4' ORDER BY frame_id"):
         ids = np.frombuffer(zlib.decompress(frame["node_ids"]), dtype='<i8')
         a = np.frombuffer(zlib.decompress(frame["activations"]), dtype='<f4').reshape(frame["patch_count"], m)
         if len(ids) != len(a) or not np.isfinite(a).all():
             raise ValueError("Corrupt activation cache.")
+        positive_counts += np.count_nonzero(a > cutoff, axis=0)
         old_ids, old_scores = merge_top_matches(old_ids, old_scores, ids, a, capacity)
         count += len(ids)
     if old_ids is None:
@@ -738,13 +764,16 @@ def rebuild_rank_cache(con, capacity):
     con.execute("DELETE FROM prototype_patches WHERE stage='stage4'")
     con.executemany("INSERT INTO prototype_patches VALUES (?,?,?,?,?)",
         (("stage4", p, r+1, int(old_ids[r, p]), float(old_scores[r, p]))
-         for p in range(m) for r in range(len(old_ids))))
-    metadata = {"capacity": capacity, "patch_count": count, "prototype_count": m,
+         for p in range(m) for r in range(len(old_ids)) if float(old_scores[r, p]) > cutoff))
+    metadata = {"version": RANKING_VERSION, "min_activation": cutoff,
+                "positive_patch_counts": positive_counts.tolist(),
+                "eligible_match_count": int(np.minimum(positive_counts, capacity).sum()),
+                "capacity": capacity, "patch_count": count, "prototype_count": m,
                 "activation_source": "visual_activations", "ties": "ascending patch node ID",
                 "created_at": now()}
     con.execute("INSERT OR REPLACE INTO prototype_graph_metadata VALUES ('ranking',?)", (json.dumps(metadata),))
     con.commit()
-    print(f"Indexed exact top-{min(capacity,count)} matches for {m} prototypes across {count:,} patches.", flush=True)
+    print(f"Indexed up to {capacity} positive matches for {m} prototypes across {count:,} patches; {metadata['eligible_match_count']:,} retained edges, {int(np.count_nonzero(positive_counts == 0))} isolated prototypes.", flush=True)
 
 
 def ensure_rank_cache(directory, con=None):
@@ -760,8 +789,16 @@ def ensure_rank_cache(directory, con=None):
         meta = json.loads(row[0]) if row else {}
         patches = int(con.execute("SELECT COUNT(*) FROM nodes WHERE stage='stage4'").fetchone()[0])
         cached = int(con.execute("SELECT COUNT(*) FROM prototype_patches WHERE stage='stage4'").fetchone()[0])
-        if (meta.get("capacity", 0) < PATCHES_PER_PROTOTYPE or meta.get("patch_count") != patches
-                or meta.get("prototype_count") != m or cached != m*min(patches, meta.get("capacity", 0))):
+        try:
+            positive_counts = positive_rank_counts(meta, m)
+            expected_rows = sum(min(meta.get("capacity", 0), count) for count in positive_counts)
+            policy_valid = True
+        except RuntimeError:
+            expected_rows, policy_valid = -1, False
+        invalid_row = con.execute("SELECT 1 FROM prototype_patches WHERE stage='stage4' AND activation<=? LIMIT 1", (activation_cutoff(),)).fetchone()
+        if (not policy_valid or meta.get("capacity", 0) < PATCHES_PER_PROTOTYPE
+                or meta.get("patch_count") != patches or meta.get("prototype_count") != m
+                or cached != expected_rows or invalid_row is not None):
             rebuild_rank_cache(con, max(PATCHES_PER_PROTOTYPE, RANK_CACHE_CAPACITY))
     finally:
         if own:
@@ -1040,7 +1077,9 @@ def build_graph(con, directory, n=None):
     row = con.execute("SELECT value FROM prototype_graph_metadata WHERE key='ranking'").fetchone()
     if not row or json.loads(row[0]).get("capacity",0) < n:
         raise RuntimeError("Rank cache capacity too small; regenerate view/serve to rebuild it without inference.")
-    matches = list(con.execute("SELECT * FROM prototype_patches WHERE stage='stage4' AND rank<=? ORDER BY prototype_id,rank",(n,)))
+    rank_metadata = json.loads(row[0])
+    positive_counts = positive_rank_counts(rank_metadata, m)
+    matches = list(con.execute("SELECT * FROM prototype_patches WHERE stage='stage4' AND rank<=? AND activation>? ORDER BY prototype_id,rank",(n, activation_cutoff())))
     node_ids = sorted({int(r["node_id"]) for r in matches})
     # Fetch nodes in chunks, not one connection/query per patch.
     patches = {}
@@ -1064,6 +1103,7 @@ def build_graph(con, directory, n=None):
         pid = f"prototype:stage4:{p}"
         linked = [patches[int(r["node_id"])] for r in ranked[p]]
         signature,stats = summarize_prototype(linked,descriptors)
+        stats.update(positive_patch_count_total=positive_counts[p], requested_patch_count=n)
         signatures[p] = signature
         prototypes.append({"id":pid,"node_type":"prototype","stage":"stage4","prototype_id":p,
                            "label":f"P{p}","stats":stats,
@@ -1089,10 +1129,11 @@ def build_graph(con, directory, n=None):
     return {"graph_version":GRAPH_VERSION,"nodes":prototypes+patch_nodes,"edges":edges,
             "image_pool":image_pool,"prototype_options":[p["prototype_id"] for p in prototypes],
             "selected_prototypes":None,"patches_per_prototype":n,"gallery_columns":GALLERY_COLUMNS,
+            "activation_filter":{"version":RANKING_VERSION,"min_activation":activation_cutoff(),"operator":">"},
             "total_prototypes":m,"total_stored_patches":int(con.execute("SELECT COUNT(*) FROM nodes WHERE stage='stage4'").fetchone()[0]),
             "visual_similarity":{"formula":SIMILARITY_FORMULA,"signature":"mean feature and RGB descriptors of each prototype's N linked patches",
                                  "color_range":list(EDGE_COLOR_RANGE) if EDGE_COLOR_RANGE is not None else None},
-            "scope":"All stage4 prototypes; exact top-N matches over all cached target-frame patch occurrences. No prototype frequency filtering."}
+            "scope":"All stage4 prototypes; up to N positive-activation matches each. Inactive patches are excluded; groups are never padded. No prototype frequency filtering."}
 
 
 def select_prototypes(graph, selection=None):
@@ -1352,7 +1393,7 @@ def selftest():
         rebuild_rank_cache(con,5)
         for p in range(4):
             rows = list(con.execute("SELECT node_id,activation FROM prototype_patches WHERE stage='stage4' AND prototype_id=? ORDER BY rank",(p,)))
-            expected = sorted(enumerate(a[:,p]),key=lambda x:(-float(x[1]),x[0]))[:5]
+            expected = sorted(((i,v) for i,v in enumerate(a[:,p]) if float(v)>activation_cutoff()),key=lambda x:(-float(x[1]),x[0]))[:5]
             assert [(int(r[0]),float(r[1])) for r in rows]==[(i,float(v)) for i,v in expected]
         assert con.execute("SELECT node_id FROM prototype_patches WHERE prototype_id=3 AND rank=1").fetchone()[0]==17
         assert con.execute("SELECT COUNT(*) FROM memberships WHERE prototype_id=3").fetchone()[0]==0
@@ -1405,8 +1446,31 @@ def selftest():
         except RuntimeError as exc:
             assert 'cache_similarity' in str(exc)
         con.close()
+    # Sparse eligibility: inactive prototypes remain isolated; no zero padding.
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        con, a, _ = _selftest_fixture(d)
+        a[:] = 0.
+        a[1, 1] = .8
+        a[:3, 2] = [.7, .5, .1]
+        for frame in range(3):
+            con.execute("UPDATE prototype_activation_frames SET activations=? WHERE frame_id=?",
+                        (pack_vector(a[frame*6:(frame+1)*6]), frame))
+        con.commit()
+        rebuild_rank_cache(con, max(10, RANK_CACHE_CAPACITY))
+        sparse = build_graph(con, d, n=5)
+        proto = {node["prototype_id"]: node for node in sparse["nodes"] if node["node_type"] == "prototype"}
+        assert proto[0]["stats"]["patch_count"] == 0
+        assert proto[1]["stats"]["patch_count"] == 1
+        assert proto[2]["stats"]["patch_count"] == 3
+        assert proto[3]["stats"]["patch_count"] == 0
+        links = [edge for edge in sparse["edges"] if edge["edge_type"] == "prototype_patch"]
+        assert len(links) == 4 and all(edge["activation"] > 0 for edge in links)
+        assert not con.execute("SELECT 1 FROM prototype_patches WHERE activation<=0").fetchone()
+        assert proto[0]["stats"]["mean_saliency_percentile"] is None
+        con.close()
     print('PASS: exact streaming top-N vs brute force; deterministic ties; all prototypes; shared patches; '
-          'two edge types; pairwise similarity; mean ± population SD; filtering; offline HTML; incomplete-cache detection; preserved original nodes.')
+          'two edge types; pairwise similarity; mean ± population SD; sparse positive-only groups; filtering; offline HTML; incomplete-cache detection; preserved original nodes.')
 
 
 def main():

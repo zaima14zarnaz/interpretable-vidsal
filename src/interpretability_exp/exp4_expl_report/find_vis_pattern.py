@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Find recurring visual patterns using the prototype graph and one Gemini request per salient anchor.
 
-Place beside generate_prot_graph.py. No visual-similarity graph/script is
+Place beside generate_prot_overlap_graph.py. No visual-similarity graph/script is
 needed. The prototype graph must have the new all-prototype activation cache,
 ranked prototype_patches index, visual_descriptors and generated neighborhood.json.
 Run ACTION='cache_similarity' and then ACTION='view'/'serve' in the prototype
@@ -314,7 +314,7 @@ class PrototypeGroupRetriever:
                     "visual_metrics", "Stage4Capture", "rgb_descriptor", "extract_stage")
         missing = [name for name in required if not hasattr(helper, name)]
         if missing:
-            raise ValueError(f"Prototype generator is outdated (missing {missing}). Use the updated generate_prot_graph.py.")
+            raise ValueError(f"Prototype generator is outdated (missing {missing}). Use the updated generate_prot_overlap_graph.py.")
         self.manifest = json.loads((self.directory / "manifest.json").read_text())
         if self.manifest.get("status") != "complete":
             raise ValueError("Prototype graph extraction is not complete.")
@@ -1652,7 +1652,7 @@ def arguments():
     parser.add_argument('--checkpoint', help='Defaults to graph checkpoint; must have the same SHA256')
     parser.add_argument('--evaluation', help='Defaults to evaluation.py path in graph manifest')
     parser.add_argument('--visual-script', type=Path, default=SCRIPT_DIR/'generate_vis_sim_graph.py', help=argparse.SUPPRESS)
-    parser.add_argument('--prototype-script', type=Path, default=SCRIPT_DIR/'generate_prot_graph.py')
+    parser.add_argument('--prototype-script', type=Path, default=SCRIPT_DIR/'generate_prot_overlap_graph.py')
     parser.add_argument('--visual-graph-dir', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--prototype-graph-dir', type=Path, help='Prototype graph output directory (defaults to the prototype generator OUTPUT_DIR)')
     parser.add_argument('--top-k', type=int, default=TOP_K, help='Legacy compatibility option; new retrieval uses every patch connected to the chosen prototype. Use --patch-grid-cols for layout.')

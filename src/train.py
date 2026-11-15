@@ -128,7 +128,7 @@ PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
 
 # Epochs 1..N: zero dense/CC/SIM/NSS/KL, side-stage, and priority-map loss weights.
 # From epoch N+1 onward, restore the values configured in LOSS_LAMBDA below.
-INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 5
+INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 20
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -1790,7 +1790,7 @@ def main() -> None:
         num_concepts=128,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
-        top_k=3,
+        top_k=1,
         max_source_patches=64,
         tau_pi=0.5,
         tau_alpha=0.07,
@@ -1884,12 +1884,24 @@ def main() -> None:
     train_metrics_history: list = []
     val_metrics_history: list = []
     best_val_loss = float("inf")
-    # Older history rows may omit appearance columns; DataFrame(columns=...) leaves
-    # those cells empty rather than fabricating zeros.
-    if is_resume and isinstance(checkpoint, dict):
-        prior_rows = checkpoint.get("val_metrics_history")
-        if isinstance(prior_rows, list) and prior_rows:
-            val_metrics_history = [dict(row) for row in prior_rows if isinstance(row, dict)]
+    val_metrics_csv_path = os.path.join(OUTPUT_DIR, "val_metrics_hw2.csv")
+    csv_epoch_offset = 0
+    if is_resume and os.path.isfile(val_metrics_csv_path):
+        # Keep prior CSV rows. Newly added appearance columns stay empty for
+        # older measurements (never back-fill fabricated zeros).
+        prior_df = pd.read_csv(val_metrics_csv_path)
+        for col in VAL_METRICS_CSV_COLUMNS:
+            if col not in prior_df.columns:
+                prior_df[col] = pd.NA
+        prior_df = prior_df.reindex(columns=list(VAL_METRICS_CSV_COLUMNS))
+        val_metrics_history = prior_df.where(prior_df.notna(), other=None).to_dict(
+            orient="records"
+        )
+        if "Epoch_no" in prior_df.columns and len(prior_df) > 0:
+            try:
+                csv_epoch_offset = int(pd.to_numeric(prior_df["Epoch_no"], errors="coerce").max())
+            except (TypeError, ValueError):
+                csv_epoch_offset = len(prior_df)
 
     for epoch in range(1, num_epochs + 1):
         print(f"\nEpoch {epoch}/{num_epochs}")
@@ -1940,7 +1952,10 @@ def main() -> None:
         train_metrics_history.append(train_metrics)
         val_metrics_history.append(
             _format_val_metrics_csv_row(
-                epoch, val_loss, val_metrics, appearance_stats=appearance_stats
+                csv_epoch_offset + epoch,
+                val_loss,
+                val_metrics,
+                appearance_stats=appearance_stats,
             )
         )
 
@@ -1992,13 +2007,16 @@ def main() -> None:
             torch.save(checkpoint, best_ckpt_path)
             print(f"  New best val loss: {best_val_loss:.6f} (saved {best_ckpt_path})")
         
+        # columns= forces the full header. Older resumed/history rows that omit
+        # App_loss_patch_count / app_loss become empty cells (NaN), not zeros.
         val_metrics_df = pd.DataFrame(
             val_metrics_history,
             columns=list(VAL_METRICS_CSV_COLUMNS),
         )
         val_metrics_df.to_csv(
-            os.path.join(OUTPUT_DIR, "val_metrics_hw2.csv"),
+            val_metrics_csv_path,
             index=False,
+            na_rep="",
         )
 
     print(f"\nTraining complete. Outputs saved to {OUTPUT_DIR}/")

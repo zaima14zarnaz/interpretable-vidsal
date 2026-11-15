@@ -1,50 +1,54 @@
 """
-Visual concept creation with paired RGB and frozen-backbone feature queues.
+Stage4 visual consistency supervised by fixed appearance-based patch clusters.
 
-For every stage patch, live full-bank logits produce soft assignment weights.
-The appearance objective is:
-    loss_visual_appearance = visual_rgb * RGB_MSE + visual_feature * FEATURE_COSINE
-Its overall weight remains loss_weights['visual_appearance'] in
-loss_total_concept, so the existing training loss aggregator needs no changes.
-Defaults: visual_appearance=1.0, visual_rgb=1.0, visual_feature=1.0; these are
-starting weights, not an empirically tuned balance. Set visual_feature=0 for
-an exact RGB-only ablation (with unchanged RGB queue admissions/loss).
+References: /data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster
+(output of form_patch_clusters.py). Learned prototype j corresponds to fixed
+reference cluster j. RGB, structure and cached-feature distances are averaged
+over every member by default, then weighted by the current full-bank assignment
+probabilities. Model assignments never add, remove or relabel reference patches.
 
-RGB descriptors preserve the original detached, unnormalized R x R area-pooled
-cells (R=4; 48 values), aligned to the resized backbone canvas. Frozen teacher
-features arrive as detached cached_backbone_features [B,C,1,H,W]. Flattening is
-batch-major/row-major, matching live patch order. Each reference vector is L2
-normalized; zero-norm vectors are excluded from feature queries and history.
-The model never substitutes trainable embeddings for missing cached targets.
+L_app = mean_i sum_j pi_ij * [w_rgb*mean_q RGB_MAE(i,q)
+          + w_feature*mean_q (1-stage4_cosine(i,q))
+          + w_structure*mean_q (1-centered_RGB_structure_cosine(i,q))], q in G_j.
+Its existing overall visual_appearance weight is applied in loss_total_concept.
+All costs are fixed targets; gradients flow through live assignment logits to
+the encoder/prototypes/backbone. No additional raw-backbone alignment is added.
 
-Both components compare to PRE-FORWARD history, then perform ONE paired ring
-write under current top-1 ownership. Feature entries share RGB slots, confidence
-filtering and FIFO eviction. Missing/zero cached vectors mark their slots invalid.
-Legacy callers without cached features retain RGB-only behavior. Each bank has
-capacity visual_queue_size (8 by default); old entries are overwritten in order.
+Only stage4 receives this objective. Other concept losses and prediction outputs
+are preserved. Existing model.py callers work via the project channel mapping:
+96/192/384/768 -> stage1/2/3/4; an explicit stage_name overrides that mapping.
 
-RGB cost is exact mean MSE to queued RGB descriptors, including queue variance.
-Feature cost is exact mean (1 - cosine) to valid frozen queue vectors:
-    C_feature(i,j) = 1 - normalized_reference_i dot mean(normalized_history_j)
-Do not L2-normalize that mean: doing so would change the pairwise-average cost.
-RGB and feature costs are detached. Gradients reach the live visual encoder,
-prototype bank and trainable backbone through their assignment logits only.
-Feature history is masked separately when a slot has no valid cached vector.
-All-empty history has zero loss and warms up on insertion; a single populated
-prototype offers no assignment choice until another prototype has history.
+The bank loads once in the constructor if present. If created later, call
+module.load_visual_patch_clusters(path) outside forward. Training with supplied
+appearance inputs fails explicitly when a required bank is not loaded; there
+is no FIFO fallback. Evaluation/no_grad/return_losses=False do not use targets.
 
-No history updates occur in eval, no_grad, return_losses=False, absent RGB or
-when the combined appearance objective is disabled. Existing reconstruction,
-diversity, entropy, usage, saliency alignment and decoding remain unchanged.
-There is no graph lookup, image read, extra backbone pass or file I/O in forward.
-Costs use [patches,prototypes] matrices and running sums, never a full
-[patches,prototypes,queue_size,feature_dim] pair tensor. Queue arithmetic stays
-FP32 under AMP/half(), and histories remain rank-local outside model state_dict.
+Cluster count, channels, RGB size, source resize convention, file hashes, and
+SQLite/NPY membership identity are checked. RGB uses rounded uniform-grid crops
+and antialiased bilinear resizing, matching the source graph's PIL float32 RGB
+semantics (up to numerical roundoff); bank HWC vectors are converted to CHW.
+Cached query features MUST come from the same reference backbone/checkpoint
+and preprocessing as the cluster source. Their provenance cannot be inferred
+from a bare tensor. Optional visual_cluster_expected_checkpoint_sha256 checks
+the bank's declared source against a caller-supplied expected checkpoint hash.
+No live/trainable feature fallback is used as an appearance target.
 
-Explicit queue saves use prototype_rgb_feature_fifo_model_v3 / per-stage
-prototype_rgb_feature_fifo_v3. RGB-only v2 snapshots load with feature history
-empty; learned model checkpoint keys/shapes are unchanged. Clear queue history
-when changing the frozen-reference weights or cached feature semantics.
+All fixed members are used by default (visual_cluster_max_patches_per_prototype=0).
+A positive cap explicitly selects a seeded fixed subset, shared by all terms.
+Cosine means and flat fractions are precomputed without renormalizing means.
+Exact mean RGB MAE uses sorted coordinate values and prefix sums, avoiding an
+O(queries*references*RGB_dim) pair tensor and direct query-to-every-reference
+comparisons. FP32 reference memory is about 8*N_reference*RGB_dim bytes for MAE,
+plus small cosine statistics. The optional reference cap bounds this memory.
+There is no file I/O, inference, insertion or target update in forward, and
+there is no empty-queue warmup. Zero cached query vectors are excluded from all
+three components. Coverage and existing loss names remain available to train.py.
+
+Reference tensors remain rank-local, immutable, FP32 and outside state_dict;
+their device follows module.to()/cuda()/half(). Learned checkpoint keys/shapes
+are unchanged. Keep the bank fixed during a run and across resume. Legacy queue
+save/load APIs now save/check the reference fingerprint and counters; old FIFO
+snapshots are explicitly ignored rather than becoming training targets.
 """
 
 from typing import Any, Dict, Optional, Tuple, Union
@@ -56,6 +60,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .diagnostic_trace import record as _diag_record
+
+DEFAULT_PATCH_CLUSTER_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster"
 
 DEFAULT_PROTOTYPE_QUEUE_DIR = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/prot_queue"
 
@@ -78,6 +84,7 @@ class VisualConceptCreation(nn.Module):
         "visual_appearance": 1.0,  # Overall weight on the combined appearance objective.
         "visual_rgb": 1.0,
         "visual_feature": 1.0,
+        "visual_structure": 1.0,
     }
     DROPOUT_P = 0.2
 
@@ -118,12 +125,26 @@ class VisualConceptCreation(nn.Module):
         visual_graph_weight: float = 1.0,
         visual_graph_feature_weight: float = 0.1,
         visual_graph_settings: Optional[Dict[str, Any]] = None,
-        visual_queue_size: int = 8,
+        visual_queue_size: int = 12,
         visual_queue_min_confidence: float = 0.0,
-        visual_appearance_patch_size: int = 4,
+        visual_appearance_patch_size: int = 16,
+        stage_name: Optional[str] = None,
+        visual_appearance_query_chunk_size: int = 64,
+        visual_cluster_dir: Optional[str] = None,
+        visual_cluster_max_patches_per_prototype: int = 0,
+        visual_cluster_seed: int = 42,
+        visual_cluster_expected_checkpoint_sha256: Optional[str] = None,
     ):
         super().__init__()
         self.in_channels = in_channels
+        if stage_name is not None and stage_name not in ("stage1", "stage2", "stage3", "stage4"):
+            raise ValueError("stage_name must be stage1, stage2, stage3, stage4, or None.")
+        # model.py currently supplies raw Video Swin stage channels but no name.
+        # Do not infer a stage from H,W: feature grids vary with input resolution.
+        self.stage_name = stage_name if stage_name is not None else {
+            96: "stage1", 192: "stage2", 384: "stage3", 768: "stage4",
+        }.get(in_channels)
+        self._appearance_stage_source = "explicit" if stage_name is not None else "video_swin_channels"
         self.concept_dim = concept_dim
         self.num_concepts = num_concepts
         self.hidden_dim = hidden_dim
@@ -166,26 +187,41 @@ class VisualConceptCreation(nn.Module):
         if not math.isfinite(float(visual_queue_min_confidence)) or not 0 <= visual_queue_min_confidence <= 1:
             raise ValueError("visual_queue_min_confidence must lie in [0,1].")
         if visual_graph_db_path is not None or visual_graph_settings:
-            raise ValueError("Graph supervision was replaced by per-prototype FIFO queues; remove graph configuration.")
+            raise ValueError("Use visual_cluster_dir for fixed patch-cluster supervision; remove graph configuration.")
         if (isinstance(visual_appearance_patch_size, bool) or
                 not isinstance(visual_appearance_patch_size, int) or visual_appearance_patch_size < 1):
             raise ValueError("visual_appearance_patch_size must be a positive integer.")
         self.visual_appearance_patch_size = visual_appearance_patch_size
+        if (isinstance(visual_appearance_query_chunk_size, bool) or
+                not isinstance(visual_appearance_query_chunk_size, int) or
+                visual_appearance_query_chunk_size < 1):
+            raise ValueError("visual_appearance_query_chunk_size must be a positive integer.")
+        self.visual_appearance_query_chunk_size = visual_appearance_query_chunk_size
         self.visual_appearance_dim = 3 * visual_appearance_patch_size ** 2
         self.visual_queue_size = visual_queue_size
         self.visual_queue_min_confidence = float(visual_queue_min_confidence)
-        self.visual_graph_diagnostics = {"enabled": False, "reason": "replaced_by_prototype_queue"}
+        self.visual_graph_diagnostics = {"enabled": False, "reason": "replaced_by_fixed_patch_clusters"}
         weights = dict(self.DEFAULT_LOSS_WEIGHTS)
         if loss_weights is not None:
             removed = {"visual_queue", "visual_queue_prototype"}.intersection(loss_weights)
             if removed:
                 raise ValueError("Embedding queue losses were removed; use loss_weights['visual_appearance'] instead.")
             weights.update(loss_weights)
-        for name in ("visual_appearance", "visual_rgb", "visual_feature"):
+        for name in ("visual_appearance", "visual_rgb", "visual_feature", "visual_structure"):
             value = weights[name]
             if not math.isfinite(float(value)) or float(value) < 0:
                 raise ValueError(f"loss_weights[{name!r}] must be finite and nonnegative.")
         self.loss_weights = weights
+        if (isinstance(visual_cluster_max_patches_per_prototype, bool) or
+                not isinstance(visual_cluster_max_patches_per_prototype, int) or
+                visual_cluster_max_patches_per_prototype < 0):
+            raise ValueError("visual_cluster_max_patches_per_prototype must be an integer >= 0 (0 means all members).")
+        if isinstance(visual_cluster_seed, bool) or not isinstance(visual_cluster_seed, int) or visual_cluster_seed < 0:
+            raise ValueError("visual_cluster_seed must be a nonnegative integer.")
+        self.visual_cluster_dir = str(Path(visual_cluster_dir or DEFAULT_PATCH_CLUSTER_DIR).expanduser().resolve())
+        self.visual_cluster_max_patches_per_prototype = visual_cluster_max_patches_per_prototype
+        self.visual_cluster_seed = visual_cluster_seed
+        self.visual_cluster_expected_checkpoint_sha256 = visual_cluster_expected_checkpoint_sha256
         self.visual_encoder = nn.Sequential(
             nn.Linear(in_channels, hidden_dim),
             nn.GELU(),
@@ -216,22 +252,42 @@ class VisualConceptCreation(nn.Module):
             persistent=False,
         )
 
+        self._cluster_loaded = False
+        self._cluster_metadata = {}
+        self._cluster_feature_mean = torch.empty(0, dtype=torch.float32)
+        self._cluster_structure_mean = torch.empty(0, dtype=torch.float32)
+        self._cluster_flat_fraction = torch.empty(0, dtype=torch.float32)
+        self._cluster_counts = torch.empty(0, dtype=torch.long)
+        self._cluster_rgb_sorted = ()
+        self._cluster_rgb_prefix = ()
         self.clear_prototype_queue()
+        if (self.stage_name == "stage4" and self.loss_weights["visual_appearance"] > 0
+                and any(self.loss_weights[k] > 0 for k in ("visual_rgb", "visual_feature", "visual_structure"))
+                and (Path(self.visual_cluster_dir) / "manifest.json").is_file()):
+            self.load_visual_patch_clusters()
 
-    _QUEUE_FLOAT_TENSORS = ("_prototype_queue", "_prototype_queue_sum", "_prototype_queue_squared_norm_sum", "_prototype_queue_confidence",
-                            "_prototype_feature_queue", "_prototype_feature_queue_sum")
-    _QUEUE_INT_TENSORS = ("_prototype_queue_count", "_prototype_queue_pointer", "_prototype_queue_locations", "_prototype_feature_count")
-    _QUEUE_BOOL_TENSORS = ("_prototype_feature_valid",)
+    _QUEUE_FLOAT_TENSORS = ()  # Legacy introspection: moving queues were removed.
+    _QUEUE_INT_TENSORS = ()
+    _QUEUE_BOOL_TENSORS = ()
+    _CLUSTER_FLOAT_TENSORS = ("_cluster_feature_mean", "_cluster_structure_mean", "_cluster_flat_fraction")
+    _CLUSTER_INT_TENSORS = ("_cluster_counts",)
 
     def _apply(self, fn, recurse=True):
-        # Plain tensors keep queues rank-local under DDP. Device follows the
-        # module, but descriptor/statistic precision stays FP32 under half()/AMP.
         result = super()._apply(fn, recurse=recurse)
-        for name in self._QUEUE_FLOAT_TENSORS + self._QUEUE_INT_TENSORS + self._QUEUE_BOOL_TENSORS:
+        # Fixed reference statistics are plain, nonpersistent tensors. Device
+        # follows the module, while targets retain FP32 precision under half().
+        for name in self._CLUSTER_FLOAT_TENSORS + self._CLUSTER_INT_TENSORS:
             value = getattr(self, name, None)
             if value is not None:
                 device = fn(torch.empty(0, device=value.device, dtype=value.dtype)).device
                 setattr(self, name, value.to(device=device))
+        for name in ("_cluster_rgb_sorted", "_cluster_rgb_prefix"):
+            values = getattr(self, name, ())
+            moved = []
+            for value in values:
+                device = fn(torch.empty(0, device=value.device, dtype=value.dtype)).device
+                moved.append(value.to(device=device))
+            setattr(self, name, tuple(moved))
         return result
 
     def _init_concept_parameters(self) -> None:
@@ -239,9 +295,9 @@ class VisualConceptCreation(nn.Module):
             self.visual_concepts.copy_(F.normalize(self.visual_concepts, dim=-1))
 
     def configure_visual_graph(self, db_path: Optional[str], **settings: Any) -> None:
-        """Compatibility shim; RGB FIFO supervision does not use graphs."""
+        """Legacy shim; use load_visual_patch_clusters for fixed references."""
         if db_path is not None or settings:
-            raise ValueError("Remove graph configuration; RGB appearance FIFO supervision is enabled automatically.")
+            raise ValueError("Use visual_cluster_dir/load_visual_patch_clusters, not graph configuration.")
 
     def _appearance_coverage_zero(self, device: Optional[torch.device] = None) -> Dict[str, torch.Tensor]:
         """Detached scalar coverage counters on the model device (no .item())."""
@@ -252,25 +308,47 @@ class VisualConceptCreation(nn.Module):
             "app_loss_patch_count": zero.clone(),
             "app_loss_rgb_patch_count": zero.clone(),
             "app_loss_feature_patch_count": zero.clone(),
+            "app_loss_structure_patch_count": zero.clone(),
         }
 
     def _appearance_status(self, active: bool, reason: str,
                            device: Optional[torch.device] = None) -> Dict[str, Any]:
-        status = {"enabled": self.loss_weights["visual_appearance"] > 0,
-                "active_this_forward": active, "reason": reason,
-                "capacity": self.visual_queue_size,
-                "training_forwards": self._prototype_queue_step,
-                "assignment": "top1_insertion_soft_full_bank_loss",
-                "representation": "area_pooled_rgb_and_frozen_backbone",
-                "patch_size": self.visual_appearance_patch_size,
-                "descriptor_dim": self.visual_appearance_dim,
-                "rgb_weight": self.loss_weights["visual_rgb"],
-                "feature_weight": self.loss_weights["visual_feature"],
-                "feature_dim": self.in_channels,
-                "feature_metric": "mean_cosine_distance_to_normalized_queue_entries",
-                "feature_active_this_forward": False,
-                "feature_reason": reason,
-                "feature_zero_norm_policy": "exclude from feature queries/history"}
+        stage_enabled = self.stage_name == "stage4"
+        metadata = self._cluster_metadata
+        status = {
+            "enabled": stage_enabled and self.loss_weights["visual_appearance"] > 0,
+            "stage_name": self.stage_name, "appearance_scope": "stage4_only",
+            "stage_source": self._appearance_stage_source,
+            "active_this_forward": active and stage_enabled,
+            "reason": reason if stage_enabled else "stage_excluded",
+            "reference_mode": "fixed_patch_clusters", "reference_loaded": self._cluster_loaded,
+            "reference_directory": self.visual_cluster_dir,
+            "reference_fingerprint": metadata.get("fingerprint"),
+            "source_checkpoint_sha256": metadata.get("source_checkpoint_sha256"),
+            "source_feature_semantics": metadata.get("source_feature_semantics"),
+            "reference_patch_counts": metadata.get("selected_counts", []),
+            "full_cluster_patch_counts": metadata.get("full_counts", []),
+            "reference_subset": self.visual_cluster_max_patches_per_prototype > 0,
+            "capacity": 0, "training_forwards": self._prototype_queue_step,
+            "assignment": "soft_full_bank_to_fixed_reference_cluster_ids",
+            "representation": "bilinear_rgb_crops_and_frozen_reference_backbone",
+            "patch_size": self.visual_appearance_patch_size,
+            "descriptor_dim": self.visual_appearance_dim,
+            "rgb_weight": self.loss_weights["visual_rgb"],
+            "rgb_metric": "exact_mean_absolute_error_to_fixed_reference_members",
+            "rgb_computation": "sorted_values_and_prefix_sums_no_patch_pair_tensor",
+            "structure_weight": self.loss_weights["visual_structure"],
+            "structure_metric": "per_channel_centered_rgb_cosine_both_flat_1_one_flat_0",
+            "structure_active_this_forward": False,
+            "query_chunk_size": self.visual_appearance_query_chunk_size,
+            "metric_history": "immutable_same_reference_members_for_all_components",
+            "feature_weight": self.loss_weights["visual_feature"],
+            "feature_dim": self.in_channels,
+            "feature_metric": "mean_cosine_distance_to_fixed_normalized_reference_members",
+            "feature_active_this_forward": False,
+            "feature_reason": reason if stage_enabled else "stage_excluded",
+            "feature_zero_norm_policy": "exclude invalid queries from all components",
+        }
         status.update(self._appearance_coverage_zero(device))
         return status
 
@@ -285,12 +363,17 @@ class VisualConceptCreation(nn.Module):
         """Reset coverage every forward; evaluated counts stay zero when inactive."""
         device = self.visual_concepts.device if device is None else device
         status = self._appearance_status(False, reason, device=device)
+        # Non-stage4 patches are outside this objective, including its coverage
+        # denominator. Epoch coverage therefore measures stage4 patches only.
+        if self.stage_name != "stage4":
+            num_patches = 0
         zero = torch.zeros((), device=device, dtype=torch.float32)
         status.update(
             app_loss_patch_count_total=zero + float(num_patches),
             app_loss_patch_count=zero.clone(),
             app_loss_rgb_patch_count=zero.clone(),
             app_loss_feature_patch_count=zero.clone(),
+            app_loss_structure_patch_count=zero.clone(),
         )
         if feature_reason is not None:
             status["feature_reason"] = feature_reason
@@ -298,42 +381,47 @@ class VisualConceptCreation(nn.Module):
 
     @torch.no_grad()
     def clear_prototype_queue(self) -> None:
-        """Clear paired RGB/reference-feature history, without any file I/O."""
-        m, n, d = self.num_visual_concepts, self.visual_queue_size, self.visual_appearance_dim
-        device = self.visual_concepts.device
-        self._prototype_queue = torch.zeros(m, n, d, device=device, dtype=torch.float32)
-        self._prototype_queue_sum = torch.zeros(m, d, device=device, dtype=torch.float32)
-        self._prototype_queue_squared_norm_sum = torch.zeros(m, device=device, dtype=torch.float32)
-        self._prototype_queue_confidence = torch.zeros(m, n, device=device, dtype=torch.float32)
-        self._prototype_queue_count = torch.zeros(m, device=device, dtype=torch.long)
-        self._prototype_queue_pointer = torch.zeros(m, device=device, dtype=torch.long)
-        self._prototype_queue_locations = torch.full((m, n, 6), -1, device=device, dtype=torch.long)
-        # Same admissions/slots as RGB. Missing/zero reference vectors are marked
-        # invalid, so legacy RGB-only batches never create fictitious targets.
-        self._prototype_feature_queue = torch.zeros(m, n, self.in_channels, device=device, dtype=torch.float32)
-        self._prototype_feature_queue_sum = torch.zeros(m, self.in_channels, device=device, dtype=torch.float32)
-        self._prototype_feature_count = torch.zeros(m, device=device, dtype=torch.long)
-        self._prototype_feature_valid = torch.zeros(m, n, device=device, dtype=torch.bool)
+        """Legacy API: reset counters only; fixed reference clusters never clear."""
         self._prototype_queue_step = 0
-        self.visual_appearance_diagnostics = self._appearance_status(False, "empty_queues")
+        self.visual_appearance_diagnostics = self._appearance_status(False, "fixed_references_unchanged")
 
     @torch.no_grad()
     def _rgb_appearance_descriptors(self, rgb: torch.Tensor, grid_h: int, grid_w: int) -> torch.Tensor:
-        """Fixed RGB descriptor for every cell of the actual stage concept grid.
+        """Uniform-grid crops resized like the bank's PIL float32 bilinear RGB.
 
-        Area-pool the spatial canvas to [grid_h*R,grid_w*R], then tile into R x R
-        cells. For the normal divisible backbone canvas this is exactly a local
-        area-pooled patch. For other sizes, adaptive-area bins define alignment.
-        Flatten output in [batch,row,column,channel,subrow,subcolumn] order.
-        No learned feature extraction, L2 normalization, image read or resize of
-        neural features is involved. RGB values and resulting descriptors are
-        fixed targets; the assignment probabilities supply the model gradient.
+        Output is batch-major/row-major, channel-major within each crop. Equal
+        crop sizes use one batched resize. Odd sizes use matching round() grid
+        boundaries. Constant channel offsets are preserved exactly.
         """
         r = self.visual_appearance_patch_size
         with torch.autocast(device_type=rgb.device.type, enabled=False):
-            pooled = F.adaptive_avg_pool2d(rgb.detach().float(), (grid_h * r, grid_w * r))
-            descriptors = pooled.reshape(rgb.shape[0], 3, grid_h, r, grid_w, r)
-            return descriptors.permute(0, 2, 4, 1, 3, 5).reshape(-1, self.visual_appearance_dim).contiguous()
+            image = rgb.detach().float()
+            if not torch.isfinite(image).all() or image.min() < -0.01 or image.max() > 1.01:
+                raise ValueError("Appearance RGB must be finite and unnormalized in [0,1].")
+            image = image.clamp(0., 1.)
+            b, _, h, w = image.shape
+            def resize(patches):
+                origin = patches[:, :, :1, :1]
+                resized = F.interpolate(patches - origin, size=(r, r), mode="bilinear", align_corners=False, antialias=True)
+                return (resized + origin).clamp(0., 1.)
+            if h % grid_h == 0 and w % grid_w == 0:
+                ph, pw = h // grid_h, w // grid_w
+                if ph < 1 or pw < 1:
+                    raise ValueError("Empty input RGB patch grid.")
+                patches = image.unfold(2, ph, ph).unfold(3, pw, pw)
+                patches = patches.permute(0, 2, 3, 1, 4, 5).reshape(-1, 3, ph, pw)
+                resized = resize(patches)
+            else:
+                patches = []
+                for row in range(grid_h):
+                    y0, y1 = round(row*h/grid_h), round((row+1)*h/grid_h)
+                    for col in range(grid_w):
+                        x0, x1 = round(col*w/grid_w), round((col+1)*w/grid_w)
+                        if y1 <= y0 or x1 <= x0:
+                            raise ValueError("Empty input RGB patch under the reference grid mapping.")
+                        patches.append(resize(image[:, :, y0:y1, x0:x1]))
+                resized = torch.stack(patches, dim=1).reshape(b*grid_h*grid_w, 3, r, r)
+            return resized.reshape(-1, self.visual_appearance_dim).contiguous()
 
     @torch.no_grad()
     def _cached_feature_descriptors(self, cached: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -361,100 +449,111 @@ class VisualConceptCreation(nn.Module):
         weights = F.softmax(logits.float().masked_fill(~safe_mask[None, :], float("-inf")), dim=-1)
         return weights, has_history.to(torch.float32)
 
-    def _visual_appearance_losses(
-        self,
-        visual_out: Dict[str, Any],
-        rgb_last_frame: Optional[torch.Tensor],
-        cached_backbone_features: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """Expected fixed RGB MSE + frozen-feature cosine distance to history.
+    @torch.no_grad()
+    def _rgb_structure_descriptors(self, descriptors: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Channel-major RGB -> unit spatially centered RGB; flag flat patches."""
+        rgb = descriptors.float().reshape(-1, 3, self.visual_appearance_patch_size ** 2)
+        # Subtract a channel reference first. This is algebraically identical
+        # to centering RGB, but keeps constant float32 colors exactly flat even
+        # when a long reduction would round their channel mean slightly.
+        offsets = rgb - rgb[:, :, :1]
+        centered = (offsets - offsets.mean(dim=-1, keepdim=True)).reshape(-1, self.visual_appearance_dim)
+        norms = torch.linalg.vector_norm(centered, dim=-1, keepdim=True)
+        flat = norms.squeeze(-1) < 1e-12
+        unit = centered / norms.clamp_min(1e-12)
+        unit = torch.where(flat[:, None], torch.zeros_like(unit), unit)
+        return unit, flat
 
-        Both costs use PRE-FORWARD queue statistics and live assignment logits.
-        Only assignments carry gradients. A single paired enqueue follows both
-        losses, preserving the no-current-self-insertion comparison protocol.
-        RGB and feature histories use separate validity masks when cached inputs
-        are absent/zero or an old RGB-only snapshot has just been restored.
+    @torch.no_grad()
+    def _fixed_appearance_costs(self, descriptors: torch.Tensor,
+                                feature_descriptors: Optional[torch.Tensor]) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        """Exact average distances to immutable cluster members, not medoids."""
+        if not self._cluster_loaded:
+            raise RuntimeError("Fixed patch clusters are not loaded; call load_visual_patch_clusters outside forward.")
+        queries = descriptors.shape[0]
+        costs = {name: descriptors.new_zeros((queries, self.num_visual_concepts)) for name in ("rgb", "feature", "structure")}
+        if self.loss_weights["visual_rgb"] > 0:
+            for start in range(0, queries, self.visual_appearance_query_chunk_size):
+                stop = min(queries, start + self.visual_appearance_query_chunk_size)
+                values = descriptors[start:stop].T.contiguous()
+                for j, (ordered, prefix, count) in enumerate(zip(self._cluster_rgb_sorted,
+                        self._cluster_rgb_prefix, self._cluster_metadata["selected_counts"])):
+                    position = torch.searchsorted(ordered, values, right=False)
+                    below = torch.gather(prefix, 1, position)
+                    absolute_sum = (2.0 * position.float() - count) * values + prefix[:, -1:] - 2.0 * below
+                    costs["rgb"][start:stop, j] = (absolute_sum.sum(0) / (count*self.visual_appearance_dim)).clamp(0., 1.)
+        if self.loss_weights["visual_structure"] > 0:
+            structure, flat = self._rgb_structure_descriptors(descriptors)
+            similarity = structure @ self._cluster_structure_mean.T
+            similarity += flat.float()[:, None] * self._cluster_flat_fraction[None, :]
+            costs["structure"] = (1.0 - similarity).clamp(0., 2.)
+        if feature_descriptors is not None:
+            costs["feature"] = (1.0 - feature_descriptors @ self._cluster_feature_mean.T).clamp(0., 2.)
+        return costs, self._cluster_counts > 0
+
+    def _visual_appearance_losses(self, visual_out: Dict[str, Any],
+                                   rgb_last_frame: Optional[torch.Tensor],
+                                   cached_backbone_features: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+        """E_assignment[mean fixed-cluster appearance distance], stage4 only.
+
+        Reference membership is independent of current assignments. No queue
+        insertion, warmup, target drift or reference file I/O occurs in forward.
         """
         logits = visual_out["visual_concept_logits"]
         zero = logits.sum() * 0.0
-        result = {"rgb": zero, "feature": zero, "combined": zero}
+        result = {"rgb": zero, "feature": zero, "structure": zero, "combined": zero}
         w_rgb, w_feature = self.loss_weights["visual_rgb"], self.loss_weights["visual_feature"]
+        w_structure = self.loss_weights["visual_structure"]
         num_patches = int(logits.shape[0])
         reason = None
-        if not self.training:
+        if self.stage_name != "stage4":
+            reason = "stage_excluded"
+        elif not self.training:
             reason = "evaluation"
         elif not torch.is_grad_enabled():
             reason = "no_grad"
-        elif self.loss_weights["visual_appearance"] == 0 or (w_rgb == 0 and w_feature == 0):
+        elif self.loss_weights["visual_appearance"] == 0 or (w_rgb == 0 and w_feature == 0 and w_structure == 0):
             reason = "zero_weight"
         elif rgb_last_frame is None:
             reason = "no_rgb"
-        elif w_rgb == 0 and cached_backbone_features is None:
+        elif w_feature > 0 and cached_backbone_features is None:
             reason = "no_cached_features"
         if reason is not None:
-            self.visual_appearance_diagnostics = self._appearance_inactive_diagnostics(
-                reason, num_patches=num_patches, device=logits.device,
-            )
+            self.visual_appearance_diagnostics = self._appearance_inactive_diagnostics(reason, num_patches=num_patches, device=logits.device)
             return result
+        if not self._cluster_loaded:
+            raise FileNotFoundError(f"Fixed cluster bank not loaded from {self.visual_cluster_dir}. Run form_patch_clusters.py before constructing the model, or call load_visual_patch_clusters(path) before training.")
         shape = visual_out["visual_metadata"]["feature_shape"]
         descriptors = self._rgb_appearance_descriptors(rgb_last_frame, int(shape["H"]), int(shape["W"]))
-        if descriptors.shape[0] != logits.shape[0]:
-            raise ValueError("RGB descriptors and concept patches must have the same batch-major row-major ordering.")
+        if descriptors.shape[0] != num_patches:
+            raise ValueError("RGB descriptors and assignment logits have different patch counts.")
         feature_descriptors = feature_valid = None
-        feature_reason = "zero_weight" if w_feature == 0 else "no_cached_features"
-        if w_feature > 0 and cached_backbone_features is not None:
+        if w_feature > 0:
             feature_descriptors, feature_valid = self._cached_feature_descriptors(cached_backbone_features)
-            if feature_descriptors.shape[0] != logits.shape[0]:
-                raise ValueError("Cached reference descriptors must match the live batch-major row-major patch order.")
-            feature_reason = "pre_forward_queue_comparison"
-        # Coverage uses PRE-FORWARD history only. Defaults cover RGB/feature-disabled paths.
-        rgb_history = zero.detach()
-        feature_history = zero.detach()
+            if feature_descriptors.shape[0] != num_patches:
+                raise ValueError("Cached reference features and assignment logits have different patch counts.")
         with torch.autocast(device_type=logits.device.type, enabled=False):
-            if w_rgb > 0:
-                divisor = self._prototype_queue_count.clamp_min(1).float()
-                means = self._prototype_queue_sum / divisor[:, None]
-                mean_squared_norm = self._prototype_queue_squared_norm_sum / divisor
-                rgb_costs = (descriptors.square().sum(-1, keepdim=True)
-                             - 2.0 * descriptors @ means.T + mean_squared_norm[None, :])
-                rgb_costs = (rgb_costs / self.visual_appearance_dim).clamp_min(0.0).detach()
-                weights, rgb_history = self._queue_assignment_weights(logits, self._prototype_queue_count > 0)
-                result["rgb"] = (weights * rgb_costs).sum(-1).mean() * rgb_history
-            if feature_descriptors is not None:
-                means = self._prototype_feature_queue_sum / self._prototype_feature_count.clamp_min(1).float()[:, None]
-                # Do NOT normalize the mean: dot with the arithmetic mean of
-                # unit vectors is the exact average pairwise cosine similarity.
-                feature_costs = (1.0 - feature_descriptors @ means.T).clamp(0.0, 2.0).detach()
-                feature_weights, feature_history = self._queue_assignment_weights(logits, self._prototype_feature_count > 0)
-                query_valid = feature_valid.to(torch.float32)
-                result["feature"] = ((feature_weights * feature_costs).sum(-1) * query_valid).sum() / query_valid.sum().clamp_min(1.0)
-                result["feature"] = result["feature"] * feature_history
-            result["combined"] = w_rgb * result["rgb"] + w_feature * result["feature"]
-        # Query-patch coverage (not patch–prototype pairs). Detached; no .item().
-        with torch.no_grad():
-            cov_zero = torch.zeros((), device=logits.device, dtype=torch.float32)
-            total = cov_zero + float(num_patches)
-            rgb_count = total * rgb_history.detach() if w_rgb > 0 else cov_zero.clone()
-            if feature_descriptors is not None:
-                feature_count = feature_valid.to(torch.float32).sum() * feature_history.detach()
-            else:
-                feature_count = cov_zero.clone()
-            # RGB is all-or-nothing across the query grid; union without double-count.
-            evaluated = rgb_count + feature_count * (cov_zero + 1.0 - (rgb_history.detach() if w_rgb > 0 else cov_zero))
-        # Costs/masks above are independent snapshots. Never enqueue before
-        # either comparison, and never update the same ring twice per forward.
-        self._enqueue_rgb_descriptors(visual_out, descriptors, feature_descriptors, feature_valid)
-        self.visual_appearance_diagnostics = self._appearance_status(
-            True, "pre_forward_queue_comparison", device=logits.device,
-        )
+            costs, populated = self._fixed_appearance_costs(descriptors, feature_descriptors)
+            weights, has_references = self._queue_assignment_weights(logits, populated)
+            valid = feature_valid.float() if feature_valid is not None else torch.ones(num_patches, device=logits.device, dtype=torch.float32)
+            query_count = valid.sum()
+            for name, weight in (("rgb", w_rgb), ("feature", w_feature), ("structure", w_structure)):
+                if weight > 0:
+                    result[name] = ((weights * costs[name]).sum(-1) * valid).sum() / query_count.clamp_min(1.)
+                    result[name] = result[name] * has_references
+            result["combined"] = w_rgb * result["rgb"] + w_feature * result["feature"] + w_structure * result["structure"]
+        evaluated = query_count.detach() * has_references.detach()
+        cov_zero = evaluated.new_zeros(())
+        self._prototype_queue_step += 1  # Compatibility counter; no queue exists.
+        self.visual_appearance_diagnostics = self._appearance_status(True, "fixed_reference_cluster_comparison", device=logits.device)
         self.visual_appearance_diagnostics.update(
             feature_active_this_forward=feature_descriptors is not None,
-            feature_reason=feature_reason,
-            app_loss_patch_count_total=total,
-            app_loss_patch_count=evaluated,
-            app_loss_rgb_patch_count=rgb_count,
-            app_loss_feature_patch_count=feature_count,
-        )
+            feature_reason="fixed_reference_cluster_comparison" if w_feature > 0 else "zero_weight",
+            structure_active_this_forward=w_structure > 0,
+            app_loss_patch_count_total=cov_zero + float(num_patches), app_loss_patch_count=evaluated,
+            app_loss_rgb_patch_count=evaluated if w_rgb > 0 else cov_zero.clone(),
+            app_loss_feature_patch_count=evaluated if w_feature > 0 else cov_zero.clone(),
+            app_loss_structure_patch_count=evaluated if w_structure > 0 else cov_zero.clone())
         return result
 
     def _visual_appearance_loss(
@@ -467,177 +566,52 @@ class VisualConceptCreation(nn.Module):
         return self._visual_appearance_losses(visual_out, rgb_last_frame, cached_backbone_features)["combined"]
 
     @torch.no_grad()
-    def _enqueue_rgb_descriptors(
-        self,
-        visual_out: Dict[str, Any],
-        descriptors: torch.Tensor,
-        feature_descriptors: Optional[torch.Tensor] = None,
-        feature_valid: Optional[torch.Tensor] = None,
-    ) -> None:
-        """Single bounded ring write: RGB and frozen features share every slot."""
-        ids = visual_out["visual_concept_indices"].detach()
-        confidence = visual_out["visual_assignment_probs"].detach().gather(1, ids[:, None]).squeeze(1).float()
-        positions = torch.arange(ids.shape[0], device=ids.device)
-        if self.visual_queue_min_confidence > 0:
-            keep = confidence >= self.visual_queue_min_confidence
-            ids, descriptors = ids[keep], descriptors[keep]
-            confidence, positions = confidence[keep], positions[keep]
-        order = torch.argsort(ids, stable=True)
-        ids, descriptors = ids[order], descriptors[order]
-        confidence, positions = confidence[order], positions[order]
-        m, n, d = self.num_visual_concepts, self.visual_queue_size, self.visual_appearance_dim
-        incoming = torch.bincount(ids, minlength=m)
-        starts = incoming.cumsum(0) - incoming
-        rank = torch.arange(ids.shape[0], device=ids.device) - starts[ids]
-        keep = rank >= (incoming[ids] - n).clamp_min(0)
-        owners, new = ids[keep], descriptors[keep]
-        slots = (self._prototype_queue_pointer[owners] + rank[keep]) % n
-        flat_slots = owners * n + slots
-        flat_queue = self._prototype_queue.view(-1, d)
-        old = flat_queue[flat_slots]
-        self._prototype_queue_sum.index_add_(0, owners, new - old)
-        self._prototype_queue_squared_norm_sum.index_add_(0, owners, new.square().sum(-1) - old.square().sum(-1))
-        flat_queue.index_copy_(0, flat_slots, new)
-        self._prototype_queue_confidence.view(-1).index_copy_(0, flat_slots, confidence[keep])
-        selected_positions = positions[keep]
-        if feature_descriptors is None:
-            new_feature = self._prototype_feature_queue.new_zeros((owners.shape[0], self.in_channels))
-            new_valid = torch.zeros(owners.shape[0], dtype=torch.bool, device=ids.device)
-        else:
-            if feature_valid is None:
-                raise ValueError("Feature queue insertion requires an explicit validity mask.")
-            new_valid = feature_valid[selected_positions]
-            new_feature = torch.where(new_valid[:, None], feature_descriptors[selected_positions],
-                                      torch.zeros_like(feature_descriptors[selected_positions]))
-        flat_feature = self._prototype_feature_queue.view(-1, self.in_channels)
-        flat_valid = self._prototype_feature_valid.view(-1)
-        old_feature, old_valid = flat_feature[flat_slots], flat_valid[flat_slots]
-        self._prototype_feature_queue_sum.index_add_(0, owners, new_feature - old_feature)
-        self._prototype_feature_count.index_add_(0, owners, new_valid.long() - old_valid.long())
-        flat_feature.index_copy_(0, flat_slots, new_feature)
-        flat_valid.index_copy_(0, flat_slots, new_valid)
-        meta, shape = visual_out["visual_metadata"], visual_out["visual_metadata"]["feature_shape"]
-        locations = torch.stack((torch.full_like(positions, self._prototype_queue_step),
-                                 meta["batch_idx"][positions], meta["patch_idx"][positions],
-                                 torch.full_like(positions, int(shape["H"])),
-                                 torch.full_like(positions, int(shape["W"])),
-                                 torch.full_like(positions, int(meta["window_T"]))), dim=1)
-        self._prototype_queue_locations.view(-1, 6).index_copy_(0, flat_slots, locations[keep])
-        self._prototype_queue_pointer.add_(incoming).remainder_(n)
-        self._prototype_queue_count.add_(incoming).clamp_max_(n)
-        self._prototype_queue_step += 1
-        if self._prototype_queue_step % 128 == 0:
-            self._prototype_queue_sum.copy_(self._prototype_queue.sum(1))
-            self._prototype_queue_squared_norm_sum.copy_(self._prototype_queue.square().sum((1, 2)))
-            self._prototype_feature_queue_sum.copy_(self._prototype_feature_queue.sum(1))
-            self._prototype_feature_count.copy_(self._prototype_feature_valid.sum(1))
+    def _enqueue_rgb_descriptors(self, visual_out: Dict[str, Any], descriptors: torch.Tensor,
+                                 feature_descriptors: Optional[torch.Tensor] = None,
+                                 feature_valid: Optional[torch.Tensor] = None) -> None:
+        """Deprecated no-op: current predictions never modify fixed clusters."""
+        return None
 
     @torch.no_grad()
     def prototype_queue_state(self) -> Dict[str, Any]:
-        """Explicit CPU snapshot of aligned RGB and frozen-feature queues."""
-        m, n, r = self.num_visual_concepts, self.visual_queue_size, self.visual_appearance_patch_size
-        return {"format": "prototype_rgb_feature_fifo_v3", "num_prototypes": m, "capacity": n,
-                "patch_size": r, "descriptor_dim": self.visual_appearance_dim,
-                "in_channels": self.in_channels, "step": self._prototype_queue_step,
-                "rgb_patches": self._prototype_queue.detach().cpu().clone().reshape(m, n, 3, r, r),
-                "sum": self._prototype_queue_sum.detach().cpu().clone(),
-                "squared_norm_sum": self._prototype_queue_squared_norm_sum.detach().cpu().clone(),
-                "count": self._prototype_queue_count.detach().cpu().clone(),
-                "pointer": self._prototype_queue_pointer.detach().cpu().clone(),
-                "confidence": self._prototype_queue_confidence.detach().cpu().clone(),
-                "locations": self._prototype_queue_locations.detach().cpu().clone(),
-                "location_columns": ["forward_step", "batch_idx", "patch_idx", "grid_h", "grid_w", "window_T"],
-                "assignment": "top1", "representation": "area_pooled_rgb_and_frozen_backbone",
-                "descriptor_order": ["channel", "subrow", "subcolumn"],
-                "feature_dim": self.in_channels,
-                "feature_metric": "mean_cosine_distance",
-                "feature_vectors": self._prototype_feature_queue.detach().cpu().clone(),
-                "feature_sum": self._prototype_feature_queue_sum.detach().cpu().clone(),
-                "feature_count": self._prototype_feature_count.detach().cpu().clone(),
-                "feature_valid": self._prototype_feature_valid.detach().cpu().clone()}
+        """Legacy save API now records immutable reference identity, not history."""
+        return {"format": "fixed_patch_cluster_reference_v1", "stage_name": self.stage_name,
+                "num_prototypes": self.num_visual_concepts, "in_channels": self.in_channels,
+                "stage_enabled": self.stage_name == "stage4", "loaded": self._cluster_loaded,
+                "reference_directory": self.visual_cluster_dir,
+                "reference_fingerprint": self._cluster_metadata.get("fingerprint"),
+                "max_patches_per_prototype": self.visual_cluster_max_patches_per_prototype,
+                "reference_seed": self.visual_cluster_seed, "step": self._prototype_queue_step}
 
     @torch.no_grad()
     def _validated_queue_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate completely before mutating any queue; migrate RGB-only v2."""
-        m, n, r, d = self.num_visual_concepts, self.visual_queue_size, self.visual_appearance_patch_size, self.visual_appearance_dim
+        """Validate reference identity; explicitly ignore obsolete FIFO history."""
         if not isinstance(state, dict):
-            raise ValueError("Queue snapshot must be a dictionary.")
-        legacy = state.get("format") == "prototype_rgb_fifo_v2"
-        if (state.get("format") not in ("prototype_rgb_fifo_v2", "prototype_rgb_feature_fifo_v3")
-                or state.get("num_prototypes") != m or state.get("capacity") != n
-                or state.get("patch_size") != r or state.get("descriptor_dim") != d
+            raise ValueError("Reference snapshot must be a dictionary.")
+        if state.get("format") in ("prototype_rgb_fifo_v2", "prototype_rgb_feature_fifo_v3"):
+            if state.get("num_prototypes") != self.num_visual_concepts or state.get("in_channels") != self.in_channels:
+                raise ValueError("Legacy snapshot dimensions differ from the model.")
+            import warnings
+            warnings.warn("Ignoring obsolete FIFO history; fixed patch clusters remain the appearance targets.", RuntimeWarning, stacklevel=2)
+            return {"step": 0, "legacy_ignored": True}
+        if (state.get("format") != "fixed_patch_cluster_reference_v1"
+                or state.get("stage_name") != self.stage_name
+                or state.get("num_prototypes") != self.num_visual_concepts
                 or state.get("in_channels") != self.in_channels):
-            raise ValueError("Queue snapshot format/dimensions do not match. Learned-embedding queues cannot be reused.")
-        specs = {"rgb_patches": (m, n, 3, r, r), "sum": (m, d),
-                 "squared_norm_sum": (m,), "count": (m,), "pointer": (m,),
-                 "confidence": (m, n), "locations": (m, n, 6)}
-        for key, shape in specs.items():
-            value = state.get(key)
-            if not torch.is_tensor(value) or tuple(value.shape) != shape or not torch.isfinite(value).all():
-                raise ValueError(f"Invalid RGB queue snapshot tensor: {key}.")
-        for key in ("count", "pointer", "locations"):
-            if state[key].dtype != torch.long:
-                raise ValueError(f"Queue snapshot {key} must be int64.")
-        count, pointer = state["count"].detach().cpu(), state["pointer"].detach().cpu()
-        if ((count < 0) | (count > n)).any() or ((pointer < 0) | (pointer >= n)).any():
-            raise ValueError("Invalid RGB queue counts/pointers.")
-        if (pointer[count < n] != count[count < n]).any():
-            raise ValueError("Partially filled queue pointers must equal their counts.")
-        rgb = state["rgb_patches"].detach().cpu().float().reshape(m, n, d)
-        if ((rgb < -1e-6) | (rgb > 1.0 + 1e-6)).any():
-            raise ValueError("Saved RGB descriptors must be in [0,1].")
-        if not torch.allclose(state["sum"].detach().cpu().float(), rgb.sum(1), rtol=1e-4, atol=1e-4):
-            raise ValueError("RGB queue sum does not match patches.")
-        if not torch.allclose(state["squared_norm_sum"].detach().cpu().float(), rgb.square().sum((1, 2)), rtol=1e-4, atol=1e-4):
-            raise ValueError("RGB queue squared-norm sum does not match patches.")
+            raise ValueError("Reference snapshot stage/dimensions differ from the model.")
+        if self.stage_name == "stage4" and state.get("loaded"):
+            if not self._cluster_loaded or state.get("reference_fingerprint") != self._cluster_metadata.get("fingerprint"):
+                raise ValueError("Fixed cluster bank changed since the snapshot; restore the original bank/settings before resuming.")
         step = state.get("step")
         if isinstance(step, bool) or not isinstance(step, int) or step < 0:
-            raise ValueError("Invalid queue step.")
-        if legacy:
-            feature = torch.zeros(m, n, self.in_channels, dtype=torch.float32)
-            valid = torch.zeros(m, n, dtype=torch.bool)
-        else:
-            if state.get("feature_dim") != self.in_channels or state.get("feature_metric") != "mean_cosine_distance":
-                raise ValueError("Frozen-feature queue descriptor semantics/dimensions do not match.")
-            feature_specs = {"feature_vectors": (m, n, self.in_channels), "feature_sum": (m, self.in_channels),
-                             "feature_count": (m,), "feature_valid": (m, n)}
-            for key, shape in feature_specs.items():
-                value = state.get(key)
-                if not torch.is_tensor(value) or tuple(value.shape) != shape or not torch.isfinite(value).all():
-                    raise ValueError(f"Invalid frozen-feature queue snapshot tensor: {key}.")
-            if state["feature_valid"].dtype != torch.bool or state["feature_count"].dtype != torch.long:
-                raise ValueError("Feature validity/counts must have bool/int64 dtypes.")
-            feature = state["feature_vectors"].detach().cpu().float()
-            valid = state["feature_valid"].detach().cpu()
-            occupied = (torch.arange(n)[None, :] < count[:, None]) | (count[:, None] == n)
-            if (valid & ~occupied).any():
-                raise ValueError("Feature validity cannot occupy an empty RGB queue slot.")
-            if (feature[~valid] != 0).any():
-                raise ValueError("Invalid feature queue slots must contain zero vectors.")
-            norms = torch.linalg.vector_norm(feature[valid], dim=-1)
-            if not torch.allclose(norms, torch.ones_like(norms), rtol=1e-4, atol=1e-4):
-                raise ValueError("Valid feature queue vectors must be L2 normalized.")
-            if not torch.equal(state["feature_count"].detach().cpu(), valid.sum(1)):
-                raise ValueError("Feature queue counts do not match validity masks.")
-            if not torch.allclose(state["feature_sum"].detach().cpu().float(), feature.sum(1), rtol=1e-4, atol=1e-4):
-                raise ValueError("Feature queue sums do not match vectors.")
-        return {"step": step, "legacy": legacy,
-                "_prototype_queue": rgb, "_prototype_queue_sum": rgb.sum(1),
-                "_prototype_queue_squared_norm_sum": rgb.square().sum((1, 2)),
-                "_prototype_queue_count": count, "_prototype_queue_pointer": pointer,
-                "_prototype_queue_confidence": state["confidence"].detach().cpu().float(),
-                "_prototype_queue_locations": state["locations"].detach().cpu(),
-                "_prototype_feature_queue": feature, "_prototype_feature_queue_sum": feature.sum(1),
-                "_prototype_feature_count": valid.sum(1), "_prototype_feature_valid": valid}
+            raise ValueError("Invalid appearance-forward count in reference snapshot.")
+        return {"step": step, "legacy_ignored": False}
 
     @torch.no_grad()
     def _restore_validated_queue_state(self, state: Dict[str, Any]) -> None:
-        for name in self._QUEUE_FLOAT_TENSORS + self._QUEUE_INT_TENSORS + self._QUEUE_BOOL_TENSORS:
-            target = getattr(self, name)
-            target.copy_(state[name].to(device=target.device, dtype=target.dtype))
         self._prototype_queue_step = state["step"]
-        reason = "restored_rgb_only_feature_warmup" if state["legacy"] else "restored_rgb_feature_queue"
-        self.visual_appearance_diagnostics = self._appearance_status(False, reason)
+        self.visual_appearance_diagnostics = self._appearance_status(False,
+            "legacy_fifo_ignored" if state["legacy_ignored"] else "fixed_reference_identity_restored")
 
     @torch.no_grad()
     def load_prototype_queue_state(self, state: Dict[str, Any]) -> None:
@@ -1132,10 +1106,11 @@ class VisualConceptCreation(nn.Module):
                 tensor shaped [B, C, 1, H, W], aligned with ``features[:, :, -1:]``.
                 Flattening order matches live visual patches:
                 [B,C,1,H,W] -> [B,H,W,C] -> [B*H*W,C]. Each frozen vector is
-                L2 normalized for cosine-distance queue supervision. It remains
-                separate from learned ``visual_patch_embeddings``. Missing cached
-                features retain RGB-only behavior and feature history warms up
-                when cached inputs become available.
+                L2 normalized for fixed-cluster cosine-distance supervision. It remains
+                separate from learned ``visual_patch_embeddings``. When the
+                feature component is enabled, missing cached features skip the
+                appearance objective; zero vectors are excluded from every term.
+                Set visual_feature=0 for an RGB/structure-only ablation.
         Returns:
             Visual concept outputs plus legacy temporal keys set to None.
         """
@@ -1146,6 +1121,11 @@ class VisualConceptCreation(nn.Module):
             )
         if features.size(2) < 1:
             raise ValueError(f"Need T>=1 for visual concepts, got T={features.size(2)}")
+        # Appearance inputs are unused outside stage4. Skip their validation,
+        # finite-value reductions and descriptor work for the excluded stages.
+        if self.stage_name != "stage4":
+            rgb_last_frame = None
+            cached_backbone_features = None
         if cached_backbone_features is not None:
             if not torch.is_tensor(cached_backbone_features):
                 raise TypeError(
@@ -1260,6 +1240,7 @@ class VisualConceptCreation(nn.Module):
                 **graph_losses,
                 "loss_visual_appearance": loss_appearance,
                 "loss_visual_appearance_rgb": appearance["rgb"],
+                "loss_visual_appearance_structure": appearance["structure"],
                 "loss_visual_feature": appearance["feature"],
                 "loss_total_concept": (
                     w["visual"] * loss_visual
@@ -1306,6 +1287,7 @@ class VisualConceptCreation(nn.Module):
             "visual_graph_diagnostics": dict(self.visual_graph_diagnostics),
             "visual_queue_diagnostics": dict(self.visual_appearance_diagnostics),
             "visual_appearance_diagnostics": dict(self.visual_appearance_diagnostics),
+            "visual_patch_cluster_diagnostics": dict(self.visual_appearance_diagnostics),
         }
 
     @torch.no_grad()
@@ -1347,6 +1329,177 @@ class VisualConceptCreation(nn.Module):
         }
 
 
+    @torch.no_grad()
+    def load_visual_patch_clusters(self, directory: Optional[str] = None) -> Dict[str, Any]:
+        """Load/precompute immutable reference groups OUTSIDE forward.
+
+        All members are used by default. An explicit positive reference cap
+        selects a seeded, fixed subset per cluster, shared by all three terms.
+        Loading is transactional: failed validation preserves any existing bank.
+        An already loaded bank may only be reloaded with the same fingerprint.
+        This method loads targets only; learned prototype parameters are untouched.
+        """
+        if self.stage_name != "stage4":
+            return {"loaded": False, "reason": "stage_excluded"}
+        import hashlib
+        import json
+        import sqlite3
+        import numpy as np
+
+        root = Path(directory or self.visual_cluster_dir).expanduser().resolve()
+        manifest_path = root / "manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"Fixed patch clusters not found: {manifest_path}. Run form_patch_clusters.py first.")
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+        if manifest.get("format_version") != "fixed_stage4_patch_clusters_v1" or manifest.get("status") != "complete":
+            raise ValueError("Expected a complete fixed_stage4_patch_clusters_v1 reference bank.")
+        if manifest.get("stage") != "stage4" or manifest.get("rgb_order") != "HWC":
+            raise ValueError("Reference bank must use stage4 and HWC RGB descriptors.")
+        if int(manifest["num_prototypes"]) != self.num_visual_concepts:
+            raise ValueError(f"Cluster count {manifest['num_prototypes']} != stage4 prototype count {self.num_visual_concepts}.")
+        if int(manifest["feature_dim"]) != self.in_channels:
+            raise ValueError(f"Cluster feature dimension {manifest['feature_dim']} != stage4 channels {self.in_channels}.")
+        if int(manifest["rgb_descriptor_size"]) != self.visual_appearance_patch_size:
+            raise ValueError(f"Cluster RGB size {manifest['rgb_descriptor_size']} != visual_appearance_patch_size {self.visual_appearance_patch_size}; use matching settings.")
+        resize = str((manifest.get("rgb_settings") or {}).get("rgb_resize", "")).lower()
+        if "bilinear" not in resize:
+            raise ValueError("Cluster bank must document bilinear RGB crop resizing to match the training descriptor.")
+        checkpoint = (manifest.get("source_manifest") or {}).get("checkpoint_sha256")
+        expected = self.visual_cluster_expected_checkpoint_sha256
+        if expected is not None and checkpoint != expected:
+            raise ValueError("Reference bank checkpoint SHA does not match visual_cluster_expected_checkpoint_sha256.")
+        references_path = root / "cluster_references.npz"
+        if not references_path.is_file():
+            raise FileNotFoundError(f"Cluster references missing: {references_path}")
+        h = hashlib.sha256()
+        with references_path.open("rb") as stream:
+            for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                h.update(block)
+        if h.hexdigest() != manifest.get("references_sha256"):
+            raise ValueError("cluster_references.npz fingerprint differs from the completed manifest.")
+
+        count, m, d = int(manifest["num_patches"]), self.num_visual_concepts, self.visual_appearance_dim
+        if count < m:
+            raise ValueError("Reference bank has fewer patches than prototypes.")
+        feature = np.load(root / "descriptors/feature.npy", mmap_mode="r", allow_pickle=False)
+        rgb = np.load(root / "descriptors/rgb.npy", mmap_mode="r", allow_pickle=False)
+        labels = np.load(root / "descriptors/prototype_ids.npy", mmap_mode="r", allow_pickle=False)
+        node_ids = np.load(root / "descriptors/node_ids.npy", mmap_mode="r", allow_pickle=False)
+        if (feature.shape != (count, self.in_channels) or rgb.shape != (count, d)
+                or labels.shape != (count,) or node_ids.shape != (count,)):
+            raise ValueError("Cluster descriptor arrays disagree with manifest dimensions.")
+        if feature.dtype.kind != "f" or rgb.dtype.kind != "f" or labels.dtype.kind not in "iu" or node_ids.dtype.kind not in "iu":
+            raise ValueError("Invalid reference descriptor/identity dtypes.")
+        if np.any(labels < 0) or np.any(labels >= m):
+            raise ValueError("Reference prototype IDs are outside the model bank.")
+        full_counts = np.bincount(labels.astype(np.int64), minlength=m)
+        if (full_counts == 0).any():
+            raise ValueError("Every stage4 prototype requires a nonempty fixed reference cluster.")
+        # Verify that the loss uses precisely the membership vocabulary shown
+        # by view_patch_clusters.py, including stable source-node identities.
+        con = sqlite3.connect((root / "patch_clusters.sqlite").as_uri() + "?mode=ro", uri=True)
+        try:
+            cursor = con.execute("SELECT descriptor_index,node_id,prototype_id FROM patches ORDER BY descriptor_index")
+            start = 0
+            while True:
+                rows = cursor.fetchmany(16384)
+                if not rows:
+                    break
+                actual = np.asarray(rows, dtype=np.int64)
+                stop = start + len(rows)
+                if (stop > count or not np.array_equal(actual[:, 0], np.arange(start, stop))
+                        or not np.array_equal(actual[:, 1], node_ids[start:stop])
+                        or not np.array_equal(actual[:, 2], labels[start:stop])):
+                    raise ValueError("Reference memberships disagree with patch_clusters.sqlite.")
+                start = stop
+            if start != count:
+                raise ValueError("Cluster database row count differs from descriptor arrays.")
+            if con.execute("SELECT id,patch_count FROM prototypes ORDER BY id").fetchall() != [(j, int(full_counts[j])) for j in range(m)]:
+                raise ValueError("Prototype summary counts disagree with reference memberships.")
+        finally:
+            con.close()
+
+        feature_means, structure_means, flat_fractions = [], [], []
+        sorted_values, prefix_sums, selected_counts = [], [], []
+        digest = hashlib.sha256(manifest_bytes)
+        digest.update(str((self.visual_cluster_max_patches_per_prototype, self.visual_cluster_seed)).encode())
+        order = np.argsort(labels, kind="stable")
+        boundaries = np.concatenate(([0], np.cumsum(full_counts)))
+        for j in range(m):
+            indices = order[boundaries[j]:boundaries[j + 1]]
+            limit = self.visual_cluster_max_patches_per_prototype
+            if limit > 0 and len(indices) > limit:
+                rng = np.random.default_rng(np.random.SeedSequence([self.visual_cluster_seed, j]))
+                indices = np.sort(rng.choice(indices, size=limit, replace=False))
+            f = np.asarray(feature[indices], dtype=np.float64)
+            r_hwc = np.asarray(rgb[indices], dtype=np.float64)
+            if (not np.isfinite(f).all() or not np.isfinite(r_hwc).all()
+                    or r_hwc.min() < 0 or r_hwc.max() > 1):
+                raise ValueError(f"Invalid feature/RGB values in reference cluster {j}.")
+            scales = np.max(np.abs(f), axis=1, keepdims=True)
+            scaled = f / np.maximum(scales, 1e-12)
+            norms = np.linalg.norm(scaled, axis=1, keepdims=True)
+            if (norms[:, 0] * scales[:, 0] < 1e-12).any():
+                raise ValueError(f"Zero stage4 reference feature in cluster {j}.")
+            unit_feature = scaled / norms
+            r = self.visual_appearance_patch_size
+            pixels = r_hwc.reshape(-1, r*r, 3)
+            centered = pixels - pixels.mean(axis=1, keepdims=True)
+            structure_norms = np.linalg.norm(centered.reshape(len(indices), -1), axis=1)
+            flat = structure_norms < 1e-12
+            unit_structure = centered / np.maximum(structure_norms[:, None, None], 1e-12)
+            unit_structure[flat] = 0.
+            # Convert external HWC vectors to the internal channel-major order.
+            structure_chw = unit_structure.reshape(-1, r, r, 3).transpose(0, 3, 1, 2).reshape(-1, d)
+            rgb_chw = r_hwc.reshape(-1, r, r, 3).transpose(0, 3, 1, 2).reshape(-1, d)
+            feature_means.append(unit_feature.mean(axis=0).astype(np.float32))
+            structure_means.append(structure_chw.mean(axis=0).astype(np.float32))
+            flat_fractions.append(float(flat.mean()))
+            # Exact mean L1 can be recovered from each coordinate's sorted
+            # values and cumulative sums, with O(log n) lookup per query.
+            ordered_rgb = np.sort(rgb_chw.astype(np.float32).T, axis=1)
+            prefix = np.concatenate((np.zeros((d, 1), dtype=np.float64),
+                                     np.cumsum(ordered_rgb, axis=1, dtype=np.float64)), axis=1).astype(np.float32)
+            sorted_values.append(torch.from_numpy(np.ascontiguousarray(ordered_rgb)))
+            prefix_sums.append(torch.from_numpy(np.ascontiguousarray(prefix)))
+            selected_counts.append(len(indices))
+            digest.update(np.asarray(indices, dtype="<i8").tobytes())
+            digest.update(np.asarray(f, dtype="<f4").tobytes())
+            digest.update(np.asarray(rgb_chw, dtype="<f4").tobytes())
+
+        fingerprint = digest.hexdigest()
+        if self._cluster_loaded and self._cluster_metadata.get("fingerprint") != fingerprint:
+            raise ValueError("Cannot replace an already loaded fixed cluster bank; construct a new model for a different bank/reference subset.")
+        device = self.visual_concepts.device
+        # Prepare all tensors before replacing an existing loaded bank.
+        fixed_feature = torch.from_numpy(np.stack(feature_means)).to(device=device)
+        fixed_structure = torch.from_numpy(np.stack(structure_means)).to(device=device)
+        fixed_flat = torch.tensor(flat_fractions, dtype=torch.float32, device=device)
+        fixed_counts = torch.tensor(selected_counts, dtype=torch.long, device=device)
+        fixed_sorted = tuple(value.to(device=device) for value in sorted_values)
+        fixed_prefix = tuple(value.to(device=device) for value in prefix_sums)
+        metadata = {"fingerprint": fingerprint, "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                    "source_checkpoint_sha256": checkpoint,
+                    "source_feature_semantics": manifest.get("source_feature_semantics"),
+                    "selected_counts": selected_counts, "full_counts": full_counts.tolist(),
+                    "num_reference_patches": int(sum(selected_counts)),
+                    "rgb_resize": "bilinear_crop_antialias", "descriptor_order": "CHW (converted from bank HWC)",
+                    "cluster_seed": self.visual_cluster_seed,
+                    "max_patches_per_prototype": self.visual_cluster_max_patches_per_prototype,
+                    "source_clustering_weights": manifest.get("weights"),
+                    "reference_tensor_bytes": sum(v.numel()*v.element_size() for v in
+                        (fixed_feature, fixed_structure, fixed_flat, fixed_counts, *fixed_sorted, *fixed_prefix))}
+        self._cluster_feature_mean, self._cluster_structure_mean = fixed_feature, fixed_structure
+        self._cluster_flat_fraction, self._cluster_counts = fixed_flat, fixed_counts
+        self._cluster_rgb_sorted, self._cluster_rgb_prefix = fixed_sorted, fixed_prefix
+        self._cluster_metadata, self._cluster_loaded = metadata, True
+        self.visual_cluster_dir = str(root)
+        self.visual_appearance_diagnostics = self._appearance_status(False, "fixed_clusters_loaded")
+        return dict(metadata)
+
+
+
 # Backward-compatible alias for existing imports.
 ConceptCreation = VisualConceptCreation
 
@@ -1377,9 +1530,9 @@ def _queue_modules(model):
 
 def save_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
                           filename: str = "prototype_queues.pt") -> Optional[str]:
-    """One explicit snapshot for ALL stage queues; no training-forward file I/O.
+    """Legacy API: save fixed-reference identities/counters for all stages.
 
-    Under DDP, rank 0 saves its local queue; there is no inter-rank gather or
+    Under DDP, rank 0 saves reference identity/counters; there is no inter-rank gather or
     forward-time queue broadcast. Other ranks return None without writing.
     """
     if torch.distributed.is_available() and torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
@@ -1388,32 +1541,33 @@ def save_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
     if not modules:
         raise ValueError("No VisualConceptCreation modules found in model.")
     states = {name: module.prototype_queue_state() for name, module in modules.items()}
-    return _atomic_queue_save({"format": "prototype_rgb_feature_fifo_model_v3", "stages": states}, directory, filename)
+    return _atomic_queue_save({"format": "fixed_patch_cluster_model_v1", "stages": states}, directory, filename)
 
 
 def load_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
                           filename: str = "prototype_queues.pt") -> None:
     """Explicit resume after model weights load. Never called from forward.
 
-    All DDP ranks may load the rank-0 snapshot and then maintain local queues.
-    Missing files fail explicitly; omit this call when starting empty queues.
+    All DDP ranks validate the same immutable reference-bank identity.
+    Missing files fail explicitly; references themselves live in visual_cluster_dir.
     """
     if Path(filename).name != filename or not filename.endswith(".pt"):
         raise ValueError("Queue snapshot filename must be a simple .pt filename.")
     payload = torch.load(Path(directory).expanduser() / filename, map_location="cpu", weights_only=True)
     modules = _queue_modules(model)
     if (not isinstance(payload, dict) or payload.get("format") not in
-            ("prototype_rgb_fifo_model_v2", "prototype_rgb_feature_fifo_model_v3")
+            ("prototype_rgb_fifo_model_v2", "prototype_rgb_feature_fifo_model_v3", "fixed_patch_cluster_model_v1")
             or not isinstance(payload.get("stages"), dict) or set(payload["stages"]) != set(modules)):
-        raise ValueError("Queue snapshot format/stages do not match. Learned-embedding queues cannot be reused.")
-    # Validate every stage before restoring any, including legacy RGB migration.
-    expected_format = ("prototype_rgb_fifo_v2" if payload["format"] == "prototype_rgb_fifo_model_v2"
-                       else "prototype_rgb_feature_fifo_v3")
+        raise ValueError("Reference snapshot format/stages do not match the model.")
+    # Validate every stage before restoring any counters/reference identities.
+    expected_format = {"prototype_rgb_fifo_model_v2": "prototype_rgb_fifo_v2",
+                       "prototype_rgb_feature_fifo_model_v3": "prototype_rgb_feature_fifo_v3",
+                       "fixed_patch_cluster_model_v1": "fixed_patch_cluster_reference_v1"}[payload["format"]]
     validated = {}
     for name, module in modules.items():
         state = payload["stages"][name]
         if not isinstance(state, dict) or state.get("format") != expected_format:
-            raise ValueError(f"Queue stage {name!r} format disagrees with its model snapshot.")
+            raise ValueError(f"Reference stage {name!r} format disagrees with its model snapshot.")
         validated[name] = module._validated_queue_state(state)
     for name, module in modules.items():
         module._restore_validated_queue_state(validated[name])
