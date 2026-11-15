@@ -79,7 +79,11 @@ def _parse_args() -> argparse.Namespace:
         "--reference-checkpoint",
         type=Path,
         default=Path(DEFAULT_REFERENCE_CHECKPOINT),
-        help="Frozen reference VideoSwin weights.",
+        help=(
+            "Frozen reference VideoSwin weights. Must match "
+            "reference_feature_provenance.backbone_fingerprint in the fixed "
+            "patch-cluster bank (default: Kinetics pack used by training)."
+        ),
     )
     parser.add_argument(
         "--device",

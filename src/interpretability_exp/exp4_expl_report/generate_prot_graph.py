@@ -80,7 +80,7 @@ ACTION = "serve"  # extract | cache_similarity | view | serve | export_edges | s
 SCRIPT_DIR = Path(__file__).resolve().parent
 SRC_DIR = SCRIPT_DIR.parents[1]
 EVALUATION_FILE = SRC_DIR / "evaluation.py"
-CHECKPOINT_PATH = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261113_143711/epoch_020.pth"
+CHECKPOINT_PATH = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261115_030905/epoch_086.pth"
 DATASET_ROOTS = "/data/quantization/zaima/videosal_datasets/dhf1k/train"
 STAGES = ("stage4",)
 WINDOW_STRIDE = 64
@@ -106,6 +106,11 @@ RGB_DESCRIPTOR_SIZE = 16
 STAGE4_FEATURE_MODULE = "backbone"
 STAGE4_FEATURE_OUTPUT_PATH = ("stage4",)
 STAGE4_FEATURE_LAYOUT = "auto"  # auto | BCTHW | BTCHW | BTHWC | BCHW | BHWC
+# frozen_reference: descriptors from the same Kinetics VideoSwin used by
+# FrozenBackboneFeatureCache (recommended for fixed-cluster training).
+# model_backbone: descriptors from the loaded eval checkpoint's backbone
+# (legacy; must fingerprint that backbone and rebuild the training cache to match).
+DESCRIPTOR_FEATURE_SOURCE = "frozen_reference"  # frozen_reference | model_backbone
 SIMILARITY_VERSION = "stage4_rgb_structure_v1"
 SIMILARITY_FORMULA = "stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine"
 GRAPH_VERSION = "prototype_patch_v3_positive"
@@ -352,6 +357,21 @@ def extract_graph():
         if stage not in model.backbone_stages:
             raise ValueError(f"{stage} not in model.backbone_stages={model.backbone_stages}.")
     capture = Stage4Capture(model)
+    feature_provenance, reference_backbone = build_descriptor_feature_provenance(model, device, ckpt)
+    if reference_backbone is not None:
+        print(
+            "Descriptor features: frozen_reference "
+            f"fingerprint={feature_provenance['backbone_fingerprint'][:16]}… "
+            f"checkpoint={feature_provenance['source_checkpoint_path']}",
+            flush=True,
+        )
+    else:
+        print(
+            "Descriptor features: model_backbone "
+            f"fingerprint={feature_provenance['backbone_fingerprint'][:16]}… "
+            "(whole-model checkpoint SHA is NOT the backbone identity)",
+            flush=True,
+        )
     roots = normalize_dataset_roots(DATASET_ROOTS, ev.VAL_DATASET_DIR)
     workers = int(ev.NUM_WORKERS if NUM_WORKERS is None else NUM_WORKERS)
     window_len = int(ev.WINDOW_LEN)
@@ -366,6 +386,7 @@ def extract_graph():
                 "amp_enabled": amp_enabled, "amp_dtype": str(amp_dtype) if amp_enabled else None,
                 "graph_representation": "prototype-patch top-N incidence plus complete stage4 prototype graph",
                 "graph_version": GRAPH_VERSION, "similarity_settings": similarity_settings(),
+                "reference_feature_provenance": feature_provenance,
                 "edge_weight": "native prototype activation",
                 "edge_color": SIMILARITY_FORMULA,
                 "prototype_signature": "mean descriptors of top-N strongest matches",
@@ -480,7 +501,11 @@ def extract_graph():
                     info = extract_stage(detail, b, stage)
                     h, w = info["h"], info["w"]
                     patch_pred = F.adaptive_avg_pool2d(pred, (h,w))[:,0].numpy()
-                    features = capture.last_frame(info, b) if stage == "stage4" else None
+                    features = (
+                        stage4_features_bhwc(
+                            rgb, info, b, capture=capture, reference_backbone=reference_backbone,
+                        ) if stage == "stage4" else None
+                    )
                     records, memberships = [], []
                     stage_first_node = node_id
                     for bi in range(b):
@@ -516,7 +541,7 @@ def extract_graph():
                 processed += b
                 con.commit()
                 progress.set_postfix(patches=f"{node_id:,}", refresh=False)
-                del result, pred, batch, rgb, sal, last_rgb
+                del result, pred, batch, rgb, sal, last_rgb, features
         if node_id == 0:
             raise RuntimeError("No full windows/patches were extracted.")
         con.execute("ANALYZE")
@@ -570,7 +595,132 @@ def similarity_settings():
             "structure": "cosine of per-channel spatially centered RGB",
             "feature_module": STAGE4_FEATURE_MODULE,
             "feature_output_path": list(STAGE4_FEATURE_OUTPUT_PATH),
-            "feature_layout": STAGE4_FEATURE_LAYOUT}
+            "feature_layout": STAGE4_FEATURE_LAYOUT,
+            "descriptor_feature_source": DESCRIPTOR_FEATURE_SOURCE}
+
+
+def _import_reference_feature_tools():
+    sys.path.insert(0, str(SRC_DIR))
+    from model.backbone_feature_cache import (
+        DEFAULT_REFERENCE_CHECKPOINT,
+        build_reference_backbone,
+        build_reference_feature_provenance,
+        fingerprint_state_dict,
+        preprocess_config,
+        sha256_file as cache_sha256_file,
+    )
+    return {
+        "DEFAULT_REFERENCE_CHECKPOINT": DEFAULT_REFERENCE_CHECKPOINT,
+        "build_reference_backbone": build_reference_backbone,
+        "build_reference_feature_provenance": build_reference_feature_provenance,
+        "fingerprint_state_dict": fingerprint_state_dict,
+        "preprocess_config": preprocess_config,
+        "sha256_file": cache_sha256_file,
+    }
+
+
+def build_descriptor_feature_provenance(model, device, ckpt):
+    """Record the backbone that produces stored stage4 descriptor vectors."""
+    tools = _import_reference_feature_tools()
+    if DESCRIPTOR_FEATURE_SOURCE == "frozen_reference":
+        ref_ckpt = tools["DEFAULT_REFERENCE_CHECKPOINT"]
+        reference = tools["build_reference_backbone"](
+            checkpoint=ref_ckpt, device=device, resize_to=(224, 384), normalize=True,
+        )
+        fingerprint = tools["fingerprint_state_dict"](reference.state_dict())
+        provenance = tools["build_reference_feature_provenance"](
+            backbone_fingerprint=fingerprint,
+            checkpoint_path=str(Path(ref_ckpt).resolve()),
+            checkpoint_sha256=tools["sha256_file"](ref_ckpt),
+            weight_scope="FrozenBackboneFeatureCache / build_reference_backbone state_dict",
+            preprocess=tools["preprocess_config"](
+                resize_to=(224, 384), normalize=True, input_format="BTCHW", output_format="BCTHW",
+            ),
+            temporal_selection="last_backbone_step",
+            feature_module="frozen_reference_backbone",
+            feature_output_path=["stage4"],
+            feature_layout="BCTHW_last_slice_to_BHWC",
+            spatial_grid="native_stage4_HxW; must match concept grid",
+            verified=True,
+            notes=(
+                "Descriptors use the fixed Kinetics VideoSwin reference, independent of "
+                "the eval checkpoint used for prototype assignments. Training must use "
+                "the same FrozenBackboneFeatureCache fingerprint."
+            ),
+        )
+        return provenance, reference
+    if DESCRIPTOR_FEATURE_SOURCE != "model_backbone":
+        raise ValueError(
+            "DESCRIPTOR_FEATURE_SOURCE must be 'frozen_reference' or 'model_backbone'."
+        )
+    fingerprint = tools["fingerprint_state_dict"](model.backbone.state_dict())
+    bb = model.backbone
+    provenance = tools["build_reference_feature_provenance"](
+        backbone_fingerprint=fingerprint,
+        checkpoint_path=str(Path(ckpt).resolve()),
+        checkpoint_sha256=sha256_file(ckpt),
+        weight_scope="ExplainableVidSalModel.backbone.state_dict after load_checkpoint",
+        preprocess=tools["preprocess_config"](
+            resize_to=getattr(bb, "resize_to", (224, 384)),
+            normalize=bool(getattr(bb, "normalize", True)),
+            input_format=getattr(bb, "input_format", "BTCHW"),
+            output_format=getattr(bb, "output_format", "BCTHW"),
+        ),
+        temporal_selection="last_backbone_step",
+        feature_module=STAGE4_FEATURE_MODULE,
+        feature_output_path=list(STAGE4_FEATURE_OUTPUT_PATH),
+        feature_layout=STAGE4_FEATURE_LAYOUT,
+        spatial_grid="native_stage4_HxW_matching_concept_grid",
+        verified=True,
+        notes=(
+            "Descriptors come from the eval model's backbone weights. "
+            "source_checkpoint_sha256 is the whole-model file hash and is NOT the "
+            "backbone fingerprint. Training cache must load these same backbone "
+            "weights (or rebuild descriptors with frozen_reference)."
+        ),
+    )
+    return provenance, None
+
+
+def stage4_features_bhwc(rgb_btchw, info, batch_size, *, capture=None, reference_backbone=None):
+    """Return [B,H,W,C] stage4 last-slice features for descriptor storage."""
+    import torch
+    import torch.nn.functional as F
+
+    h, w = int(info["h"]), int(info["w"])
+    if reference_backbone is not None:
+        # Loader RGB may be on CPU while the frozen reference lives on CUDA.
+        ref_param = next(reference_backbone.parameters(), None)
+        ref_device = ref_param.device if ref_param is not None else torch.device("cpu")
+        video = rgb_btchw.detach()
+        if video.dim() != 5:
+            raise RuntimeError(f"Expected BTCHW/BTHWC RGB batch, got {tuple(video.shape)}")
+        if video.shape[2] == 3:
+            pass  # BTCHW
+        elif video.shape[-1] == 3:
+            video = video.permute(0, 1, 4, 2, 3).contiguous()
+        else:
+            raise RuntimeError(f"Expected BTCHW or BTHWC RGB, got {tuple(video.shape)}")
+        video = video.to(device=ref_device, dtype=torch.float32, non_blocking=(ref_device.type == "cuda"))
+        if video.numel() > 0 and float(video.max()) > 2.0:
+            video = video / 255.0
+        with torch.no_grad():
+            feats = reference_backbone(video)
+            stage4 = feats["stage4"]
+            if stage4.dim() != 5:
+                raise RuntimeError(f"Frozen reference stage4 must be BCTHW, got {tuple(stage4.shape)}")
+            last = stage4[:, :, -1].float()
+            if tuple(last.shape[-2:]) != (h, w):
+                last = F.interpolate(last, size=(h, w), mode="bilinear", align_corners=False)
+            out = last.permute(0, 2, 3, 1).detach().cpu().numpy()
+        if out.shape[0] != batch_size:
+            raise RuntimeError("Frozen reference batch size mismatch.")
+        if not np.isfinite(out).all():
+            raise ValueError("Non-finite frozen-reference stage4 features.")
+        return out
+    if capture is None:
+        raise RuntimeError("stage4_features_bhwc requires capture or reference_backbone.")
+    return capture.last_frame(info, batch_size)
 
 
 def ensure_graph_schema(con):
@@ -964,9 +1114,24 @@ def cache_similarity(directory):
             if amp and manifest.get("amp_dtype") and manifest["amp_dtype"] != str(dtype):
                 raise ValueError("Backfill requires original AMP dtype.")
             capture = Stage4Capture(model)
+            feature_provenance, reference_backbone = build_descriptor_feature_provenance(model, device, ckpt)
+            existing_prov = manifest.get("reference_feature_provenance")
+            if (
+                isinstance(existing_prov, dict)
+                and existing_prov.get("backbone_fingerprint")
+                and existing_prov.get("backbone_fingerprint") != feature_provenance["backbone_fingerprint"]
+            ):
+                raise RuntimeError(
+                    "Backfill descriptor backbone_fingerprint differs from the graph manifest. "
+                    "Use a new OUTPUT_DIR rather than mixing reference sources."
+                )
             window_len, stride = int(manifest["window_len"]), int(manifest["stride"])
             workers = int(ev.NUM_WORKERS if NUM_WORKERS is None else NUM_WORKERS)
-            manifest.update(prototype_cache_status="building")
+            manifest.update(
+                prototype_cache_status="building",
+                reference_feature_provenance=feature_provenance,
+                similarity_settings=similarity_settings(),
+            )
             dump_json(directory/"manifest.json", manifest)
             for label in dict.fromkeys(r["dataset"] for r in pending):
                 frames = [dict(r) for r in pending if r["dataset"] == label]
@@ -1004,7 +1169,13 @@ def cache_similarity(directory):
                         if ((n["grid_h"],n["grid_w"],n["row"],n["col"]) != (info["h"],info["w"],row,col)
                                 or top != n["topk_ids"] or active != n["active_ids"]):
                             raise RuntimeError(f"Native assignments/grid changed for node {n['id']}; refusing mixed cache.")
-                    features = capture.last_frame(info,1)
+                    features = stage4_features_bhwc(
+                        rgb.to(device, non_blocking=True),
+                        info,
+                        1,
+                        capture=capture,
+                        reference_backbone=reference_backbone,
+                    )
                     store_frame_cache(con,f["id"],"stage4",[n["id"] for n in stored],info,0,
                                       features[0],last[0].permute(1,2,0).numpy(),preserve_descriptors=True)
                     con.commit()

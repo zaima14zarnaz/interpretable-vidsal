@@ -106,6 +106,12 @@ class ExplainableVidSalModel(nn.Module):
         prototype_application_position: str = "pre_refine",
         fine_unary_mask_strength: float = 0.6,
         stage2_backbone_fusion_enabled: bool = True,
+        # Fixed stage4 patch-cluster appearance references (immutable memberships).
+        visual_cluster_dir: Optional[str] = None,
+        visual_cluster_max_patches_per_prototype: int = 0,
+        visual_cluster_seed: int = 42,
+        visual_cluster_expected_checkpoint_sha256: Optional[str] = None,
+        visual_appearance_patch_size: int = 16,
         **_deprecated_saliency_kwargs: Any,
     ):
         super().__init__()
@@ -145,6 +151,15 @@ class ExplainableVidSalModel(nn.Module):
         self.use_temporal_feature_infusion = bool(use_temporal_feature_infusion)
         self.use_shared_concept_activations = bool(use_shared_concept_activations)
         self.stage2_backbone_fusion_enabled = bool(stage2_backbone_fusion_enabled)
+        self.visual_cluster_dir = visual_cluster_dir
+        self.visual_cluster_max_patches_per_prototype = int(
+            visual_cluster_max_patches_per_prototype
+        )
+        self.visual_cluster_seed = int(visual_cluster_seed)
+        self.visual_cluster_expected_checkpoint_sha256 = (
+            visual_cluster_expected_checkpoint_sha256
+        )
+        self.visual_appearance_patch_size = int(visual_appearance_patch_size)
         if not self.visual_concept_on and not self.temporal_concepts_on:
             raise ValueError(
                 "At least one concept branch must be enabled: "
@@ -192,6 +207,16 @@ class ExplainableVidSalModel(nn.Module):
                 visual_usage_weight=visual_usage_weight,
                 use_visual_saliency_alignment=use_visual_saliency_alignment,
                 visual_saliency_align_weight=visual_saliency_align_weight,
+                stage_name=stage,
+                visual_appearance_patch_size=self.visual_appearance_patch_size,
+                visual_cluster_dir=self.visual_cluster_dir,
+                visual_cluster_max_patches_per_prototype=(
+                    self.visual_cluster_max_patches_per_prototype
+                ),
+                visual_cluster_seed=self.visual_cluster_seed,
+                visual_cluster_expected_checkpoint_sha256=(
+                    self.visual_cluster_expected_checkpoint_sha256
+                ),
             )
 
         self.temporal_feature_infusers = nn.ModuleDict()

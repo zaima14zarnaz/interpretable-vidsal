@@ -32,13 +32,19 @@ from model.metrics import (
 from metrics import prepare_target_last_map
 from model.model import ExplainableVidSalModel
 from pre_process.dataloader import DatasetLoader
-from model.concept_creation import save_prototype_queues
+from model.concept_creation import (
+    DEFAULT_PATCH_CLUSTER_DIR,
+    VisualConceptCreation,
+    build_patch_cluster_reference_checkpoint_metadata,
+)
 from model.backbone_feature_cache import (
     CACHE_ROOT as DEFAULT_BACKBONE_FEATURE_CACHE_ROOT,
     DEFAULT_REFERENCE_CHECKPOINT,
     FrozenBackboneFeatureCache,
     SampleIdentity,
+    compare_reference_feature_provenance,
     fingerprint_rgb_clip,
+    provenance_from_cache,
 )
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -78,6 +84,11 @@ REFERENCE_BACKBONE_CHECKPOINT = DEFAULT_REFERENCE_CHECKPOINT
 # True: load only; miss raises. False: compute missing with the frozen reference.
 BACKBONE_FEATURE_CACHE_READ_ONLY = False
 BACKBONE_FEATURE_CACHE_STORAGE_DTYPE = "float16"
+
+# Fixed stage4 patch-cluster appearance references (immutable memberships).
+VISUAL_CLUSTER_DIR = DEFAULT_PATCH_CLUSTER_DIR
+VISUAL_CLUSTER_MAX_PATCHES_PER_PROTOTYPE = 0  # 0 = all fixed reference members
+VISUAL_CLUSTER_SEED = 42
 LR = 5e-5
 FINETUNE_LR = 5e-5
 WEIGHT_DECAY = 1e-4
@@ -128,7 +139,7 @@ PRIORITY_LOSS_WEIGHT = PRIORITY_MAP_LOSS_WEIGHT
 
 # Epochs 1..N: zero dense/CC/SIM/NSS/KL, side-stage, and priority-map loss weights.
 # From epoch N+1 onward, restore the values configured in LOSS_LAMBDA below.
-INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 20
+INTERPRETABILITY_LOSS_WARMUP_EPOCHS = 0
 
 FIXATION_THRESHOLD = 0.5
 TOP_PERCENT = 0.05
@@ -314,10 +325,37 @@ def _effective_loss_lambda(epoch: Optional[int] = None) -> dict:
     return loss_lambda
 
 
-def _return_concept_losses() -> bool:
-    """True only when enabled concept regularizers need auxiliary losses."""
-    loss_lambda = _effective_loss_lambda()
+def _concept_stage(model: ExplainableVidSalModel, stage: str):
+    """Look up a concept module from ``nn.ModuleDict`` (no dict ``.get``)."""
+    modules = model.concept_creations
+    if stage not in modules:
+        return None
+    return modules[stage]
+
+
+def _stage4_appearance_enabled(
+    model: Optional[ExplainableVidSalModel] = None,
+) -> bool:
+    """True when stage4's combined appearance objective has any active component."""
+    stage4 = _concept_stage(model, "stage4") if model is not None else None
+    if stage4 is not None:
+        weights = stage4.loss_weights
+    else:
+        weights = VisualConceptCreation.DEFAULT_LOSS_WEIGHTS
+    if float(weights.get("visual_appearance", 0.0)) <= 0.0:
+        return False
     return any(
+        float(weights.get(name, 0.0)) > 0.0
+        for name in ("visual_rgb", "visual_feature", "visual_structure")
+    )
+
+
+def _return_concept_losses(
+    model: Optional[ExplainableVidSalModel] = None,
+) -> bool:
+    """True when concept auxiliaries or stage4 appearance need return_losses=True."""
+    loss_lambda = _effective_loss_lambda()
+    if any(
         loss_lambda.get(k, 0) > 0
         for k in (
             "lambda_align",
@@ -330,7 +368,11 @@ def _return_concept_losses() -> bool:
             "lambda_visual_usage",
             "lambda_visual_equiv",
         )
-    )
+    ):
+        return True
+    # Appearance lives inside loss_total_concept; allow appearance-only training
+    # even when entropy/usage/equiv lambdas are all zero.
+    return _stage4_appearance_enabled(model)
 
 
 def _unpack_loader_batch(batch):
@@ -371,13 +413,65 @@ def _unpack_loader_batch(batch):
 
 
 def _needs_reference_features(model: ExplainableVidSalModel) -> bool:
-    """Only training with an enabled feature objective needs reference I/O."""
-    if not USE_CACHED_BACKBONE_FEATURES or not model.training or not _return_concept_losses():
+    """Only training with stage4's enabled feature appearance term needs cache I/O."""
+    if not USE_CACHED_BACKBONE_FEATURES or not model.training:
         return False
-    return any(
-        module.loss_weights.get("visual_appearance", 0.0) > 0
-        and module.loss_weights.get("visual_feature", 0.0) > 0
-        for module in model.concept_creations.values()
+    if not _return_concept_losses(model):
+        return False
+    stage4 = _concept_stage(model, "stage4")
+    if stage4 is None:
+        return False
+    weights = stage4.loss_weights
+    return (
+        float(weights.get("visual_appearance", 0.0)) > 0.0
+        and float(weights.get("visual_feature", 0.0)) > 0.0
+    )
+
+
+def _verify_stage4_patch_cluster_bank(model: ExplainableVidSalModel) -> None:
+    """Fail before the first batch if required stage4 fixed references are missing."""
+    if "stage4" not in model.concept_creations:
+        raise RuntimeError(
+            "ExplainableVidSalModel has no stage4 concept module; "
+            "fixed patch-cluster appearance requires stage4."
+        )
+    stage4 = model.concept_creations["stage4"]
+    if stage4.stage_name != "stage4":
+        raise RuntimeError(
+            f"stage4 concept module reports stage_name={stage4.stage_name!r}; "
+            "pass stage_name='stage4' explicitly."
+        )
+    if not _stage4_appearance_enabled(model):
+        print(
+            "Stage4 appearance objective disabled "
+            "(visual_appearance / component weights); skipping reference-bank check.",
+            flush=True,
+        )
+        return
+    if not stage4._cluster_loaded:
+        # Constructor loads when the bank exists; missing bank must fail here.
+        stage4.load_visual_patch_clusters()
+    if not stage4._cluster_loaded:
+        raise RuntimeError(
+            f"Stage4 fixed patch-cluster bank failed to load from {stage4.visual_cluster_dir}."
+        )
+    meta = dict(stage4._cluster_metadata)
+    full_counts = meta.get("full_counts") or []
+    selected_counts = meta.get("selected_counts") or meta.get("reference_patch_counts") or []
+    bytes_used = int(meta.get("reference_tensor_bytes") or 0)
+    print(
+        "Stage4 fixed patch-cluster bank | "
+        f"dir={stage4.visual_cluster_dir} | "
+        f"fingerprint={meta.get('fingerprint')} | "
+        f"clusters={len(selected_counts)} | "
+        f"full_members={int(sum(full_counts)) if full_counts else 0} | "
+        f"selected_members={int(meta.get('num_reference_patches', sum(selected_counts) if selected_counts else 0))} | "
+        f"rgb_descriptor_size={stage4.visual_appearance_patch_size} | "
+        f"reference_memory_bytes={bytes_used} "
+        f"({bytes_used / (1024 ** 2):.2f} MiB) | "
+        f"max_patches_per_prototype={stage4.visual_cluster_max_patches_per_prototype} | "
+        f"seed={stage4.visual_cluster_seed}",
+        flush=True,
     )
 
 
@@ -405,6 +499,43 @@ def _build_reference_cache(
         flush=True,
     )
     return cache
+
+
+def _verify_reference_feature_provenance(
+    model: ExplainableVidSalModel,
+    feature_cache: Optional[FrozenBackboneFeatureCache],
+) -> None:
+    """Once at startup: cluster descriptors vs training cache must share a backbone."""
+    if not _needs_reference_features(model):
+        print(
+            "Reference-feature provenance check skipped "
+            "(stage4 feature appearance term inactive or cache unused).",
+            flush=True,
+        )
+        return
+    if feature_cache is None:
+        raise RuntimeError(
+            "Stage4 visual_feature appearance is enabled but FrozenBackboneFeatureCache "
+            "was not constructed. Enable USE_CACHED_BACKBONE_FEATURES and keep "
+            "REFERENCE_BACKBONE_CHECKPOINT aligned with the cluster bank."
+        )
+    stage4 = _concept_stage(model, "stage4")
+    if stage4 is None or not stage4._cluster_loaded:
+        raise RuntimeError(
+            "Stage4 feature appearance requires a loaded fixed patch-cluster bank "
+            "before provenance verification."
+        )
+    cluster_prov = (stage4._cluster_metadata or {}).get("reference_feature_provenance")
+    cache_prov = provenance_from_cache(feature_cache)
+    print(
+        "Reference-feature provenance | "
+        f"cache_fp={cache_prov.get('backbone_fingerprint', '')[:16]}… | "
+        f"cluster_status={(stage4._cluster_metadata or {}).get('reference_feature_provenance_status')} | "
+        f"cluster_fp="
+        f"{(cluster_prov or {}).get('backbone_fingerprint', 'MISSING')[:16] if cluster_prov else 'MISSING'}…",
+        flush=True,
+    )
+    compare_reference_feature_provenance(cluster_prov, cache_prov)
 
 
 def _content_hw_from_meta(meta: Dict[str, Any]) -> Tuple[int, int]:
@@ -527,11 +658,42 @@ def _parse_args() -> argparse.Namespace:
             f"Default: {DEFAULT_GPU_ID}."
         ),
     )
+    parser.add_argument(
+        "--visual-cluster-dir",
+        type=str,
+        default=VISUAL_CLUSTER_DIR,
+        help=(
+            "Directory with fixed stage4 patch-cluster references "
+            f"(manifest.json + descriptors). Default: {VISUAL_CLUSTER_DIR}."
+        ),
+    )
+    parser.add_argument(
+        "--visual-cluster-max-patches-per-prototype",
+        type=int,
+        default=VISUAL_CLUSTER_MAX_PATCHES_PER_PROTOTYPE,
+        help=(
+            "Cap on fixed reference members per prototype (0 = use all). "
+            f"Default: {VISUAL_CLUSTER_MAX_PATCHES_PER_PROTOTYPE}."
+        ),
+    )
+    parser.add_argument(
+        "--visual-cluster-seed",
+        type=int,
+        default=VISUAL_CLUSTER_SEED,
+        help=(
+            "Seed for optional per-prototype reference subsetting. "
+            f"Default: {VISUAL_CLUSTER_SEED}."
+        ),
+    )
     args = parser.parse_args()
     if args.phase in ("finetune", "resume") and not args.checkpoint:
         parser.error(
             f"{args.phase.capitalize()} (--phase {args.phase}) requires --checkpoint <path>."
         )
+    if args.visual_cluster_max_patches_per_prototype < 0:
+        parser.error("--visual-cluster-max-patches-per-prototype must be >= 0.")
+    if args.visual_cluster_seed < 0:
+        parser.error("--visual-cluster-seed must be >= 0.")
     return args
 
 
@@ -578,6 +740,21 @@ def _is_allowed_missing_fine_unary_key(key: str) -> bool:
     return False
 
 
+# Obsolete FIFO appearance buffers that may exist only in pre-fixed-cluster ckpts.
+# Ignored on load; never restored into the immutable bank.
+_OBSOLETE_FIFO_STATE_MARKERS = (
+    "_prototype_queue",
+    "_prototype_feature_queue",
+    "_prototype_feature_count",
+    "_prototype_feature_valid",
+    "_prototype_feature_pointer",
+)
+
+
+def _is_obsolete_fifo_state_key(key: str) -> bool:
+    return any(marker in key for marker in _OBSOLETE_FIFO_STATE_MARKERS)
+
+
 def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, checkpoint_path: str) -> None:
     state_dict = checkpoint["model_state_dict"]
     incompatible = model.load_state_dict(state_dict, strict=False)
@@ -585,15 +762,17 @@ def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, chec
     unexpected = list(incompatible.unexpected_keys)
     allowed_missing = [k for k in missing if _is_allowed_missing_fine_unary_key(k)]
     disallowed_missing = [k for k in missing if not _is_allowed_missing_fine_unary_key(k)]
-    if unexpected or disallowed_missing:
+    obsolete_fifo = [k for k in unexpected if _is_obsolete_fifo_state_key(k)]
+    disallowed_unexpected = [k for k in unexpected if not _is_obsolete_fifo_state_key(k)]
+    if disallowed_unexpected or disallowed_missing:
         details = []
         if disallowed_missing:
             details.append(
                 "unexpected missing keys:\n  " + "\n  ".join(disallowed_missing)
             )
-        if unexpected:
+        if disallowed_unexpected:
             details.append(
-                "unexpected keys:\n  " + "\n  ".join(unexpected)
+                "unexpected keys:\n  " + "\n  ".join(disallowed_unexpected)
             )
         raise RuntimeError(
             f"Failed to load checkpoint '{checkpoint_path}' with selective "
@@ -601,6 +780,11 @@ def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, chec
             + "\n".join(details)
         )
     print(f"Loaded model weights from checkpoint: {checkpoint_path}")
+    if obsolete_fifo:
+        print(
+            "Ignored obsolete FIFO appearance buffers in checkpoint "
+            f"({len(obsolete_fifo)} keys); fixed bank memberships are unchanged."
+        )
     if allowed_missing:
         print(
             "Initialized newly added stage1/stage2 unary-mask parameters "
@@ -608,6 +792,106 @@ def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, chec
         )
         for key in allowed_missing:
             print(f"  {key}")
+
+
+def _verify_patch_cluster_checkpoint_metadata(
+    model: ExplainableVidSalModel,
+    checkpoint: dict,
+    *,
+    is_resume: bool,
+    checkpoint_path: str,
+) -> None:
+    """Compare checkpoint patch_cluster_reference metadata to the loaded bank.
+
+    Large reference arrays are never restored from the checkpoint; they stay in
+    the external bank. Resume rejects fingerprint / subset / feature-space drift.
+    Older FIFO checkpoints without this metadata may start the fixed-cluster
+    pipeline as a migration (not an exact continuation).
+    """
+    recorded = checkpoint.get("patch_cluster_reference")
+    stage4 = _concept_stage(model, "stage4")
+    if stage4 is None:
+        return
+    if recorded is None:
+        if is_resume:
+            print(
+                "MIGRATION: checkpoint has no patch_cluster_reference metadata "
+                f"({checkpoint_path}). Treating this as a move from the old FIFO "
+                "appearance objective to fixed patch-cluster supervision — not an "
+                "exact continuation. Any historical queue contents are ignored; "
+                "immutable bank memberships come only from visual_cluster_dir.",
+                flush=True,
+            )
+        return
+    if not isinstance(recorded, dict) or recorded.get("format") != "patch_cluster_reference_v1":
+        raise ValueError(
+            f"Unrecognized patch_cluster_reference format in {checkpoint_path}: "
+            f"{recorded.get('format') if isinstance(recorded, dict) else type(recorded)!r}"
+        )
+    if not stage4._cluster_loaded or not _stage4_appearance_enabled(model):
+        return
+    live = build_patch_cluster_reference_checkpoint_metadata(model)
+    if live is None:
+        return
+    checks = (
+        ("bank_fingerprint", "Fixed cluster bank fingerprint"),
+        ("manifest_sha256", "Cluster manifest fingerprint"),
+        ("num_clusters", "Cluster count"),
+        ("rgb_descriptor_size", "RGB descriptor size"),
+        ("max_patches_per_prototype", "Reference member cap"),
+        ("reference_seed", "Reference subset seed"),
+    )
+    mismatches = []
+    for key, label in checks:
+        if key not in recorded:
+            continue
+        if recorded.get(key) != live.get(key):
+            mismatches.append(
+                f"{label}: checkpoint={recorded.get(key)!r} live={live.get(key)!r}"
+            )
+    for key, label in (
+        ("full_member_counts", "Full member counts"),
+        ("selected_member_counts", "Selected member counts"),
+    ):
+        if key not in recorded:
+            continue
+        if list(recorded.get(key) or []) != list(live.get(key) or []):
+            mismatches.append(f"{label} disagree between checkpoint and live bank")
+    rec_prov = recorded.get("reference_feature_provenance")
+    live_prov = live.get("reference_feature_provenance")
+    if isinstance(rec_prov, dict) and isinstance(live_prov, dict):
+        for key in ("backbone_fingerprint", "temporal_selection"):
+            if rec_prov.get(key) and live_prov.get(key) and rec_prov.get(key) != live_prov.get(key):
+                mismatches.append(
+                    f"Reference feature {key}: checkpoint={rec_prov.get(key)!r} "
+                    f"live={live_prov.get(key)!r}"
+                )
+        rec_pre = rec_prov.get("preprocess") or {}
+        live_pre = live_prov.get("preprocess") or {}
+        for key in ("resize_to", "normalize", "mean", "std", "input_format"):
+            if key in rec_pre and key in live_pre and rec_pre[key] != live_pre[key]:
+                mismatches.append(
+                    f"Reference preprocess[{key}]: checkpoint={rec_pre[key]!r} "
+                    f"live={live_pre[key]!r}"
+                )
+    if mismatches:
+        if is_resume:
+            raise RuntimeError(
+                f"Resume rejected: patch_cluster_reference in {checkpoint_path} does not "
+                "match the currently loaded stage4 bank.\n  " + "\n  ".join(mismatches)
+            )
+        print(
+            "WARNING: checkpoint patch_cluster_reference differs from the loaded "
+            f"stage4 bank ({checkpoint_path}); continuing because this is not "
+            "--phase resume.\n  " + "\n  ".join(mismatches),
+            flush=True,
+        )
+        return
+    print(
+        "Verified patch_cluster_reference against loaded stage4 bank | "
+        f"fingerprint={(live.get('bank_fingerprint') or '')[:16]}…",
+        flush=True,
+    )
 
 
 def _optimizer_hparams_from_checkpoint(checkpoint: dict, checkpoint_path: str) -> Tuple[float, float]:
@@ -1218,18 +1502,37 @@ def _iter_train_concept_stages(
 
 
 def _collect_main_forward_appearance_stats(model_out: dict) -> Dict[str, Any]:
-    """Detached appearance coverage + equal-stage mean loss from the main forward only.
+    """Detached stage4 appearance coverage + raw loss from the main forward only.
 
     Reads diagnostics/losses embedded in ``model_out`` immediately so flipped or
     diagnostic forwards cannot overwrite mutable module state after the fact.
-    Uses raw ``loss_visual_appearance`` (internal RGB/feature weights included;
-    before ``loss_weights['visual_appearance']`` and before grad-accum division).
+
+    ``app_loss`` is stage4 ``loss_visual_appearance`` only (internal RGB / feature
+    / structure weights included; **before** ``loss_weights['visual_appearance']``
+    and **before** gradient-accumulation scaling). Stage1/2/3 zeros are ignored.
+
+    ``App_loss_patch_count`` counts each evaluated stage4 query patch once
+    (not once per prototype, reference member, or metric).
+
+    Relationship to the optimized total (optimizer aggregation unchanged):
+
+        stage4 loss_total_concept += w_visual_appearance * loss_visual_appearance
+        loss_total_concept = mean_s(stage_s.loss_total_concept)   # N stages
+        loss_total += loss_total_concept   # appearance is NOT added again
+
+    So with four contributing stages, the raw logged value contributes
+
+        (w_visual_appearance * app_loss) / 4
+
+    to ``loss_total`` (before grad-accum division).
     """
     stage_rows: Dict[str, Dict[str, float]] = {}
-    appearance_losses: List[torch.Tensor] = []
-    patch_count_sum = 0.0
+    batch_app_loss: Optional[float] = None
+    patch_count = 0.0
 
-    for stage, stage_out in _iter_train_concept_stages(model_out.get("concept_out")):
+    stages = dict(_iter_train_concept_stages(model_out.get("concept_out")))
+    stage_out = stages.get("stage4")
+    if isinstance(stage_out, dict):
         diag = stage_out.get("visual_appearance_diagnostics")
         if not isinstance(diag, dict):
             diag = {}
@@ -1237,27 +1540,23 @@ def _collect_main_forward_appearance_stats(model_out: dict) -> Dict[str, Any]:
         total = _detached_diag_scalar(diag.get("app_loss_patch_count_total"))
         rgb = _detached_diag_scalar(diag.get("app_loss_rgb_patch_count"))
         feature = _detached_diag_scalar(diag.get("app_loss_feature_patch_count"))
-        stage_rows[stage] = {
+        structure = _detached_diag_scalar(diag.get("app_loss_structure_patch_count"))
+        stage_rows["stage4"] = {
             "evaluated": evaluated,
             "total": total,
             "rgb": rgb,
             "feature": feature,
+            "structure": structure,
         }
-        patch_count_sum += evaluated
-
+        patch_count = evaluated
         losses = stage_out.get("losses")
         if isinstance(losses, dict):
             loss_app = losses.get("loss_visual_appearance")
             if torch.is_tensor(loss_app):
-                appearance_losses.append(loss_app.detach().float().reshape(()))
-
-    if appearance_losses:
-        batch_app_loss = float(torch.stack(appearance_losses).mean().cpu())
-    else:
-        batch_app_loss = None
+                batch_app_loss = float(loss_app.detach().float().reshape(()).cpu())
 
     return {
-        "App_loss_patch_count": patch_count_sum,
+        "App_loss_patch_count": patch_count,
         "app_loss": batch_app_loss,
         "stages": stage_rows,
     }
@@ -1266,9 +1565,10 @@ def _collect_main_forward_appearance_stats(model_out: dict) -> Dict[str, Any]:
 def _new_appearance_epoch_accumulator() -> Dict[str, Any]:
     return {
         "patch_count_sum": 0.0,
-        "app_loss_sum": 0.0,
+        # sum(raw_stage4_app_loss * evaluated_count) for patch-weighted epoch mean
+        "weighted_app_loss_sum": 0.0,
         "num_batches": 0,
-        "stages": {},  # stage -> evaluated/total/rgb/feature sums
+        "stages": {},  # stage4 -> evaluated/total/rgb/feature/structure sums
     }
 
 
@@ -1276,31 +1576,41 @@ def _accumulate_appearance_epoch_stats(
     acc: Dict[str, Any],
     batch_stats: Dict[str, Any],
 ) -> None:
-    """Accumulate one microbatch of main-forward appearance stats (no graph)."""
+    """Accumulate one microbatch of main-forward stage4 appearance stats (no graph)."""
     acc["num_batches"] += 1
-    acc["patch_count_sum"] += float(batch_stats.get("App_loss_patch_count", 0.0))
+    evaluated = float(batch_stats.get("App_loss_patch_count", 0.0))
+    acc["patch_count_sum"] += evaluated
     batch_app = batch_stats.get("app_loss")
-    # Match train-loss averaging: one equal-stage mean per microbatch. Missing
-    # appearance tensors contribute 0.0 to the running sum (warmup-compatible).
-    acc["app_loss_sum"] += float(batch_app) if batch_app is not None else 0.0
+    # Zero-evaluated batches contribute nothing (do not dilute the weighted mean).
+    if evaluated > 0.0 and batch_app is not None:
+        acc["weighted_app_loss_sum"] += float(batch_app) * evaluated
     for stage, row in batch_stats.get("stages", {}).items():
         slot = acc["stages"].setdefault(
-            stage, {"evaluated": 0.0, "total": 0.0, "rgb": 0.0, "feature": 0.0}
+            stage,
+            {
+                "evaluated": 0.0,
+                "total": 0.0,
+                "rgb": 0.0,
+                "feature": 0.0,
+                "structure": 0.0,
+            },
         )
-        for key in ("evaluated", "total", "rgb", "feature"):
+        for key in ("evaluated", "total", "rgb", "feature", "structure"):
             slot[key] += float(row.get(key, 0.0))
 
 
 def _finalize_appearance_epoch_stats(acc: Dict[str, Any]) -> Dict[str, Any]:
-    """Epoch totals: sum patch counts; mean app_loss like train loss (over microbatches).
+    """Epoch stage4 patch sum and patch-weighted mean of raw appearance loss.
 
-    If no appearance queries were evaluated in the epoch, ``app_loss`` is NaN
-    (do not report a misleading measured zero from empty-history warmup).
+    app_loss = sum(batch_raw_stage4_app_loss * batch_evaluated_patch_count)
+               / sum(batch_evaluated_patch_count)
+
+    Batches with no evaluated queries are excluded from both sums. If the epoch
+    has no evaluated queries, ``app_loss`` is NaN (CSV writes an empty cell).
     """
     patch_count = float(acc["patch_count_sum"])
-    num_batches = max(int(acc["num_batches"]), 1)
     if patch_count > 0.0:
-        app_loss = float(acc["app_loss_sum"]) / float(num_batches)
+        app_loss = float(acc["weighted_app_loss_sum"]) / patch_count
     else:
         app_loss = float("nan")
     return {
@@ -1312,6 +1622,7 @@ def _finalize_appearance_epoch_stats(acc: Dict[str, Any]) -> Dict[str, Any]:
                 "total": float(row["total"]),
                 "rgb": float(row["rgb"]),
                 "feature": float(row["feature"]),
+                "structure": float(row.get("structure", 0.0)),
             }
             for stage, row in acc["stages"].items()
         },
@@ -1319,21 +1630,35 @@ def _finalize_appearance_epoch_stats(acc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _print_appearance_coverage_summary(epoch: int, appearance_stats: Dict[str, Any]) -> None:
-    """One concise per-stage coverage line for the training epoch."""
+    """Print stage4 evaluated/total coverage and RGB / feature / structure counts."""
     stages = appearance_stats.get("stages") or {}
-    if not stages:
-        print(f"Appearance coverage epoch {epoch}: (no stage diagnostics)")
-        return
-    parts: List[str] = []
-    for stage in sorted(stages.keys()):
-        row = stages[stage]
-        total = max(float(row.get("total", 0.0)), 0.0)
-        parts.append(
-            f"{stage}: combined {row.get('evaluated', 0.0):.0f}/{total:.0f} | "
-            f"rgb {row.get('rgb', 0.0):.0f}/{total:.0f} | "
-            f"feature {row.get('feature', 0.0):.0f}/{total:.0f}"
+    row = stages.get("stage4")
+    patch_count = appearance_stats.get("App_loss_patch_count", 0.0)
+    app_loss = appearance_stats.get("app_loss")
+    if app_loss is None or app_loss != app_loss:
+        app_loss_txt = "n/a"
+    else:
+        app_loss_txt = f"{float(app_loss):.6f}"
+    if not isinstance(row, dict):
+        print(
+            f"Appearance coverage epoch {epoch}: stage4 unavailable | "
+            f"App_loss_patch_count={patch_count} | app_loss={app_loss_txt}",
+            flush=True,
         )
-    print(f"Appearance coverage epoch {epoch}: " + " || ".join(parts), flush=True)
+        return
+    total = max(float(row.get("total", 0.0)), 0.0)
+    print(
+        f"Appearance coverage epoch {epoch}: stage4 "
+        f"evaluated {row.get('evaluated', 0.0):.0f}/{total:.0f} | "
+        f"rgb {row.get('rgb', 0.0):.0f}/{total:.0f} | "
+        f"feature {row.get('feature', 0.0):.0f}/{total:.0f} | "
+        f"structure {row.get('structure', 0.0):.0f}/{total:.0f} | "
+        f"App_loss_patch_count={float(patch_count):.0f} | "
+        f"app_loss={app_loss_txt} "
+        f"(raw loss_visual_appearance; contrib to loss_total ≈ "
+        f"w_visual_appearance*app_loss/N_stages)",
+        flush=True,
+    )
 
 
 def train_one_epoch(
@@ -1400,7 +1725,7 @@ def train_one_epoch(
                 rgb_batch,
                 saliency_maps=sal_batch,
                 return_details=True,
-                return_concept_losses=_return_concept_losses(),
+                return_concept_losses=_return_concept_losses(model),
                 return_decoder_diagnostics=(batch_idx == 0),
                 cached_backbone_features=cached_backbone_features,
             )
@@ -1420,7 +1745,7 @@ def train_one_epoch(
                     rgb_batch_flip,
                     saliency_maps=sal_batch,
                     return_details=True,
-                    return_concept_losses=_return_concept_losses(),
+                    return_concept_losses=_return_concept_losses(model),
                     return_decoder_diagnostics=False,
                     cached_backbone_features=cached_backbone_features_flip,
                 )
@@ -1517,7 +1842,6 @@ def train_one_epoch(
     mean_loss = running_loss / max(num_batches, 1)
     appearance_stats = _finalize_appearance_epoch_stats(appearance_acc)
     _print_appearance_coverage_summary(epoch, appearance_stats)
-    save_prototype_queues(model)
     if feature_cache is not None:
         delta = {k: int(v) - int(reference_stats_before.get(k, 0)) for k, v in feature_cache.stats.items()}
         print(f"Reference cache epoch {epoch}: hits={delta.get('hits', 0)} "
@@ -1619,7 +1943,7 @@ def validate_one_epoch(
                 rgb_batch,
                 saliency_maps=sal_batch,
                 return_details=True,
-                return_concept_losses=_return_concept_losses(),
+                return_concept_losses=_return_concept_losses(model),
                 return_decoder_diagnostics=(batch_idx == 0),
                 cached_backbone_features=cached_backbone_features,
             )
@@ -1726,6 +2050,26 @@ def main() -> None:
         "priority_map_loss_weight, and priority_loss_weight = 0; "
         f"from epoch {INTERPRETABILITY_LOSS_WARMUP_EPOCHS + 1}: restore LOSS_LAMBDA values"
     )
+    print(
+        "Stage4 fixed patch clusters | "
+        f"dir={args.visual_cluster_dir} | "
+        f"max_patches_per_prototype={args.visual_cluster_max_patches_per_prototype} | "
+        f"seed={args.visual_cluster_seed}"
+    )
+    print(
+        "Appearance CSV logging (train-epoch measurements in val_metrics_hw2.csv) | "
+        "App_loss_patch_count = sum of evaluated stage4 query patches from main "
+        "training forwards only (one count per query; exclude flips/validation); "
+        "app_loss = patch-weighted mean of raw stage4 loss_visual_appearance "
+        "(before visual_appearance weight and before grad-accum scaling). "
+        "Route into the optimizer: loss_visual_appearance -> "
+        "w_visual_appearance * loss inside stage4 loss_total_concept -> "
+        "mean over stages in _aggregate_concept_total_loss -> loss_total "
+        "(not added again). With four stages, stage4 appearance is divided by 4; "
+        "weights are not re-scaled to compensate. Prior CSV rows keep their old "
+        "definitions and are not rewritten.",
+        flush=True,
+    )
 
     train_dataset = DatasetLoader(
         TRAIN_DATASET_DIR,
@@ -1787,7 +2131,7 @@ def main() -> None:
         input_format="BTCHW",
         resize_to=(224, 384),
         concept_dim=128,
-        num_concepts=128,
+        num_concepts=256,
         concept_hidden_dim=256,
         saliency_hidden_dim=256,
         top_k=1,
@@ -1817,15 +2161,26 @@ def main() -> None:
         prototype_application_position=PROTOTYPE_APPLICATION_POSITION,
         fine_unary_mask_strength=FINE_UNARY_MASK_STRENGTH,
         stage2_backbone_fusion_enabled=STAGE2_BACKBONE_FUSION_ENABLED,
+        visual_cluster_dir=args.visual_cluster_dir,
+        visual_cluster_max_patches_per_prototype=(
+            args.visual_cluster_max_patches_per_prototype
+        ),
+        visual_cluster_seed=args.visual_cluster_seed,
     ).to_split_devices(backbone_device, head_device)
 
-
-
+    # Immutable stage4 appearance bank must be loaded/compatible before any batch.
+    _verify_stage4_patch_cluster_bank(model)
 
     checkpoint = None
     if loads_checkpoint:
         checkpoint = _read_checkpoint(args.checkpoint)
         _load_model_checkpoint(model, checkpoint, args.checkpoint)
+        _verify_patch_cluster_checkpoint_metadata(
+            model,
+            checkpoint,
+            is_resume=is_resume,
+            checkpoint_path=args.checkpoint,
+        )
         if is_resume:
             train_lr, train_weight_decay = _optimizer_hparams_from_checkpoint(
                 checkpoint, args.checkpoint
@@ -1834,6 +2189,8 @@ def main() -> None:
                 f"Resume optimizer hyperparameters from checkpoint | "
                 f"lr={train_lr:.1e} | weight_decay={train_weight_decay:.1e}"
             )
+            # Bank already loaded from disk; re-confirm after weight restore.
+            _verify_stage4_patch_cluster_bank(model)
     else:
         with torch.no_grad():
             _init_saliency_head_prior_bias(model)
@@ -1866,6 +2223,8 @@ def main() -> None:
     )
     scaler = GradScaler(device.type, enabled=_amp_enabled(device))
     feature_cache = _build_reference_cache(device, model=model)
+    # Fail before any batch when cluster descriptors and the query cache disagree.
+    _verify_reference_feature_provenance(model, feature_cache)
 
     if OVERFIT_ONE_BATCH:
         _run_overfit_one_batch(
@@ -1970,6 +2329,19 @@ def main() -> None:
                 f"(runs every {val_every_n_epochs} epochs)"
             )
         print(f"  Current LR:      {current_lr:.2e}")
+        app_loss = appearance_stats.get("app_loss") if appearance_stats else None
+        app_count = (
+            appearance_stats.get("App_loss_patch_count") if appearance_stats else None
+        )
+        if app_loss is None or app_loss != app_loss:
+            app_txt = "n/a"
+        else:
+            app_txt = f"{float(app_loss):.6f}"
+        print(
+            f"  Train appearance | App_loss_patch_count="
+            f"{0.0 if app_count is None else float(app_count):.0f} | "
+            f"app_loss={app_txt}"
+        )
         if train_metrics is not None:
             print(
                 f"Train metrics | CC: {train_metrics['CC']:.4f} | "
@@ -1996,6 +2368,10 @@ def main() -> None:
             "val_losses": val_losses,
             "train_metrics_history": train_metrics_history,
             "val_metrics_history": val_metrics_history,
+            # Identity only — large fixed reference arrays stay in visual_cluster_dir.
+            "patch_cluster_reference": build_patch_cluster_reference_checkpoint_metadata(
+                model
+            ),
         }
         epoch_ckpt_path = os.path.join(run_ckpt_dir, f"epoch_{epoch:03d}.pth")
         torch.save(checkpoint, epoch_ckpt_path)
@@ -2067,7 +2443,7 @@ def _run_overfit_one_batch(
             rgb_batch,
             saliency_maps=sal_batch,
             return_details=True,
-            return_concept_losses=_return_concept_losses(),
+            return_concept_losses=_return_concept_losses(model),
             return_decoder_diagnostics=True,
             cached_backbone_features=cached_backbone_features,
         )

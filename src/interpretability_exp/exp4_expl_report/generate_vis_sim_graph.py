@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exact visual patch similarity graph, aligned to the prototype graph's node IDs.
 
-Lives beside generate_prot_overlap_graph.py under exp4_expl_report/; finds
+Lives beside generate_prot_graph.py under exp4_expl_report/; finds
 src/evaluation.py via SRC_DIR. First finish the prototype graph extraction,
 then run this file:
 
@@ -91,7 +91,7 @@ from tqdm import tqdm
 ACTION = "extract"  # extract | view | serve | build_edges | export_edges | selftest
 SCRIPT_DIR = Path(__file__).resolve().parent
 SRC_DIR = SCRIPT_DIR.parents[1]  # .../src containing evaluation.py
-PROTOTYPE_SCRIPT = SCRIPT_DIR / "generate_prot_overlap_graph.py"
+PROTOTYPE_SCRIPT = SCRIPT_DIR / "generate_prot_graph.py"
 GRAPH_ROOT = Path("/data/quantization/zaima/videosal_datasets/dhf1k/explanation_graphs")
 PROTOTYPE_GRAPH_DIR = GRAPH_ROOT / "prototype_graph_outputs"
 OUTPUT_DIR = GRAPH_ROOT / "visual_graph_outputs"

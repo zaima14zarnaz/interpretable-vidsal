@@ -46,9 +46,11 @@ three components. Coverage and existing loss names remain available to train.py.
 
 Reference tensors remain rank-local, immutable, FP32 and outside state_dict;
 their device follows module.to()/cuda()/half(). Learned checkpoint keys/shapes
-are unchanged. Keep the bank fixed during a run and across resume. Legacy queue
-save/load APIs now save/check the reference fingerprint and counters; old FIFO
-snapshots are explicitly ignored rather than becoming training targets.
+are unchanged. Keep the bank fixed during a run and across resume. Training
+checkpoints store lightweight ``patch_cluster_reference`` identity metadata
+only (fingerprints/counts/seed/cap); they never serialize reference arrays or
+FIFO history. Deprecated queue-named aliases remain for external callers but
+never restore historical patches or alter fixed memberships.
 """
 
 from typing import Any, Dict, Optional, Tuple, Union
@@ -62,7 +64,9 @@ import torch.nn.functional as F
 from .diagnostic_trace import record as _diag_record
 
 DEFAULT_PATCH_CLUSTER_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster"
+PATCH_CLUSTER_REFERENCE_FORMAT = "patch_cluster_reference_v1"
 
+# Deprecated path for legacy external snapshot helpers (no longer used by train.py).
 DEFAULT_PROTOTYPE_QUEUE_DIR = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/prot_queue"
 
 
@@ -125,8 +129,8 @@ class VisualConceptCreation(nn.Module):
         visual_graph_weight: float = 1.0,
         visual_graph_feature_weight: float = 0.1,
         visual_graph_settings: Optional[Dict[str, Any]] = None,
-        visual_queue_size: int = 12,
-        visual_queue_min_confidence: float = 0.0,
+        visual_queue_size: int = 12,  # Deprecated unused FIFO capacity; kept for callers.
+        visual_queue_min_confidence: float = 0.0,  # Deprecated unused; kept for callers.
         visual_appearance_patch_size: int = 16,
         stage_name: Optional[str] = None,
         visual_appearance_query_chunk_size: int = 64,
@@ -182,6 +186,7 @@ class VisualConceptCreation(nn.Module):
         self.visual_saliency_align_weight = visual_saliency_align_weight
         self.use_target_centric = use_target_centric
         self.last_transition_only = last_transition_only
+        # Deprecated FIFO knobs: accepted for external constructors but unused.
         if isinstance(visual_queue_size, bool) or not isinstance(visual_queue_size, int) or visual_queue_size < 1:
             raise ValueError("visual_queue_size must be a positive integer.")
         if not math.isfinite(float(visual_queue_min_confidence)) or not 0 <= visual_queue_min_confidence <= 1:
@@ -198,8 +203,8 @@ class VisualConceptCreation(nn.Module):
             raise ValueError("visual_appearance_query_chunk_size must be a positive integer.")
         self.visual_appearance_query_chunk_size = visual_appearance_query_chunk_size
         self.visual_appearance_dim = 3 * visual_appearance_patch_size ** 2
-        self.visual_queue_size = visual_queue_size
-        self.visual_queue_min_confidence = float(visual_queue_min_confidence)
+        self.visual_queue_size = int(visual_queue_size)  # unused; fixed bank has no capacity
+        self.visual_queue_min_confidence = float(visual_queue_min_confidence)  # unused
         self.visual_graph_diagnostics = {"enabled": False, "reason": "replaced_by_fixed_patch_clusters"}
         weights = dict(self.DEFAULT_LOSS_WEIGHTS)
         if loss_weights is not None:
@@ -260,15 +265,13 @@ class VisualConceptCreation(nn.Module):
         self._cluster_counts = torch.empty(0, dtype=torch.long)
         self._cluster_rgb_sorted = ()
         self._cluster_rgb_prefix = ()
-        self.clear_prototype_queue()
+        self._appearance_forward_count = 0
+        self.reset_appearance_forward_counter()
         if (self.stage_name == "stage4" and self.loss_weights["visual_appearance"] > 0
                 and any(self.loss_weights[k] > 0 for k in ("visual_rgb", "visual_feature", "visual_structure"))
                 and (Path(self.visual_cluster_dir) / "manifest.json").is_file()):
             self.load_visual_patch_clusters()
 
-    _QUEUE_FLOAT_TENSORS = ()  # Legacy introspection: moving queues were removed.
-    _QUEUE_INT_TENSORS = ()
-    _QUEUE_BOOL_TENSORS = ()
     _CLUSTER_FLOAT_TENSORS = ("_cluster_feature_mean", "_cluster_structure_mean", "_cluster_flat_fraction")
     _CLUSTER_INT_TENSORS = ("_cluster_counts",)
 
@@ -329,7 +332,8 @@ class VisualConceptCreation(nn.Module):
             "reference_patch_counts": metadata.get("selected_counts", []),
             "full_cluster_patch_counts": metadata.get("full_counts", []),
             "reference_subset": self.visual_cluster_max_patches_per_prototype > 0,
-            "capacity": 0, "training_forwards": self._prototype_queue_step,
+            "capacity": 0,  # Fixed bank; no FIFO capacity.
+            "training_forwards": self._appearance_forward_count,
             "assignment": "soft_full_bank_to_fixed_reference_cluster_ids",
             "representation": "bilinear_rgb_crops_and_frozen_reference_backbone",
             "patch_size": self.visual_appearance_patch_size,
@@ -380,10 +384,15 @@ class VisualConceptCreation(nn.Module):
         return status
 
     @torch.no_grad()
-    def clear_prototype_queue(self) -> None:
-        """Legacy API: reset counters only; fixed reference clusters never clear."""
-        self._prototype_queue_step = 0
-        self.visual_appearance_diagnostics = self._appearance_status(False, "fixed_references_unchanged")
+    def reset_appearance_forward_counter(self) -> None:
+        """Reset the appearance-forward counter only; fixed memberships never clear."""
+        self._appearance_forward_count = 0
+        self.visual_appearance_diagnostics = self._appearance_status(
+            False, "fixed_references_unchanged"
+        )
+
+    # Deprecated alias: never clears or rewrites fixed reference memberships.
+    clear_prototype_queue = reset_appearance_forward_counter
 
     @torch.no_grad()
     def _rgb_appearance_descriptors(self, rgb: torch.Tensor, grid_h: int, grid_w: int) -> torch.Tensor:
@@ -441,13 +450,16 @@ class VisualConceptCreation(nn.Module):
             return normalized, valid
 
     @staticmethod
-    def _queue_assignment_weights(logits: torch.Tensor, populated: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Soft full-bank weights with a safe all-empty fallback; FP32 caller."""
-        has_history = populated.any()
-        fallback = (~has_history) & (torch.arange(logits.shape[1], device=logits.device) == 0)
+    def _reference_assignment_weights(logits: torch.Tensor, populated: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Soft full-bank weights over nonempty fixed clusters; FP32 caller."""
+        has_references = populated.any()
+        fallback = (~has_references) & (torch.arange(logits.shape[1], device=logits.device) == 0)
         safe_mask = populated | fallback
         weights = F.softmax(logits.float().masked_fill(~safe_mask[None, :], float("-inf")), dim=-1)
-        return weights, has_history.to(torch.float32)
+        return weights, has_references.to(torch.float32)
+
+    # Deprecated alias name from the FIFO objective.
+    _queue_assignment_weights = _reference_assignment_weights
 
     @torch.no_grad()
     def _rgb_structure_descriptors(self, descriptors: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -517,7 +529,14 @@ class VisualConceptCreation(nn.Module):
         elif rgb_last_frame is None:
             reason = "no_rgb"
         elif w_feature > 0 and cached_backbone_features is None:
-            reason = "no_cached_features"
+            # Enabled feature supervision must not silently become a zero loss.
+            raise RuntimeError(
+                "Stage4 appearance feature term is enabled but cached_backbone_features "
+                "is missing. Resolve frozen reference features for this exact RGB view "
+                "(including hflip as its own content identity) before the concept forward, "
+                "or set loss_weights['visual_feature']=0. Evaluation/no_grad paths skip "
+                "this requirement."
+            )
         if reason is not None:
             self.visual_appearance_diagnostics = self._appearance_inactive_diagnostics(reason, num_patches=num_patches, device=logits.device)
             return result
@@ -534,7 +553,7 @@ class VisualConceptCreation(nn.Module):
                 raise ValueError("Cached reference features and assignment logits have different patch counts.")
         with torch.autocast(device_type=logits.device.type, enabled=False):
             costs, populated = self._fixed_appearance_costs(descriptors, feature_descriptors)
-            weights, has_references = self._queue_assignment_weights(logits, populated)
+            weights, has_references = self._reference_assignment_weights(logits, populated)
             valid = feature_valid.float() if feature_valid is not None else torch.ones(num_patches, device=logits.device, dtype=torch.float32)
             query_count = valid.sum()
             for name, weight in (("rgb", w_rgb), ("feature", w_feature), ("structure", w_structure)):
@@ -544,7 +563,7 @@ class VisualConceptCreation(nn.Module):
             result["combined"] = w_rgb * result["rgb"] + w_feature * result["feature"] + w_structure * result["structure"]
         evaluated = query_count.detach() * has_references.detach()
         cov_zero = evaluated.new_zeros(())
-        self._prototype_queue_step += 1  # Compatibility counter; no queue exists.
+        self._appearance_forward_count += 1
         self.visual_appearance_diagnostics = self._appearance_status(True, "fixed_reference_cluster_comparison", device=logits.device)
         self.visual_appearance_diagnostics.update(
             feature_active_this_forward=feature_descriptors is not None,
@@ -569,22 +588,31 @@ class VisualConceptCreation(nn.Module):
     def _enqueue_rgb_descriptors(self, visual_out: Dict[str, Any], descriptors: torch.Tensor,
                                  feature_descriptors: Optional[torch.Tensor] = None,
                                  feature_valid: Optional[torch.Tensor] = None) -> None:
-        """Deprecated no-op: current predictions never modify fixed clusters."""
+        """Deprecated no-op: predictions never append, evict, or relabel fixed members."""
         return None
 
     @torch.no_grad()
-    def prototype_queue_state(self) -> Dict[str, Any]:
-        """Legacy save API now records immutable reference identity, not history."""
-        return {"format": "fixed_patch_cluster_reference_v1", "stage_name": self.stage_name,
-                "num_prototypes": self.num_visual_concepts, "in_channels": self.in_channels,
-                "stage_enabled": self.stage_name == "stage4", "loaded": self._cluster_loaded,
-                "reference_directory": self.visual_cluster_dir,
-                "reference_fingerprint": self._cluster_metadata.get("fingerprint"),
-                "max_patches_per_prototype": self.visual_cluster_max_patches_per_prototype,
-                "reference_seed": self.visual_cluster_seed, "step": self._prototype_queue_step}
+    def fixed_reference_identity_state(self) -> Dict[str, Any]:
+        """Lightweight identity snapshot for external callers (never reference arrays)."""
+        return {
+            "format": "fixed_patch_cluster_reference_v1",
+            "stage_name": self.stage_name,
+            "num_prototypes": self.num_visual_concepts,
+            "in_channels": self.in_channels,
+            "stage_enabled": self.stage_name == "stage4",
+            "loaded": self._cluster_loaded,
+            "reference_directory": self.visual_cluster_dir,
+            "reference_fingerprint": self._cluster_metadata.get("fingerprint"),
+            "max_patches_per_prototype": self.visual_cluster_max_patches_per_prototype,
+            "reference_seed": self.visual_cluster_seed,
+            "step": self._appearance_forward_count,
+        }
+
+    # Deprecated alias: never serializes FIFO patch history.
+    prototype_queue_state = fixed_reference_identity_state
 
     @torch.no_grad()
-    def _validated_queue_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _validated_reference_identity_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Validate reference identity; explicitly ignore obsolete FIFO history."""
         if not isinstance(state, dict):
             raise ValueError("Reference snapshot must be a dictionary.")
@@ -592,7 +620,11 @@ class VisualConceptCreation(nn.Module):
             if state.get("num_prototypes") != self.num_visual_concepts or state.get("in_channels") != self.in_channels:
                 raise ValueError("Legacy snapshot dimensions differ from the model.")
             import warnings
-            warnings.warn("Ignoring obsolete FIFO history; fixed patch clusters remain the appearance targets.", RuntimeWarning, stacklevel=2)
+            warnings.warn(
+                "Ignoring obsolete FIFO history; fixed patch clusters remain the appearance targets.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             return {"step": 0, "legacy_ignored": True}
         if (state.get("format") != "fixed_patch_cluster_reference_v1"
                 or state.get("stage_name") != self.stage_name
@@ -601,26 +633,49 @@ class VisualConceptCreation(nn.Module):
             raise ValueError("Reference snapshot stage/dimensions differ from the model.")
         if self.stage_name == "stage4" and state.get("loaded"):
             if not self._cluster_loaded or state.get("reference_fingerprint") != self._cluster_metadata.get("fingerprint"):
-                raise ValueError("Fixed cluster bank changed since the snapshot; restore the original bank/settings before resuming.")
+                raise ValueError(
+                    "Fixed cluster bank changed since the snapshot; restore the original "
+                    "bank/settings before resuming."
+                )
         step = state.get("step")
         if isinstance(step, bool) or not isinstance(step, int) or step < 0:
             raise ValueError("Invalid appearance-forward count in reference snapshot.")
         return {"step": step, "legacy_ignored": False}
 
-    @torch.no_grad()
-    def _restore_validated_queue_state(self, state: Dict[str, Any]) -> None:
-        self._prototype_queue_step = state["step"]
-        self.visual_appearance_diagnostics = self._appearance_status(False,
-            "legacy_fifo_ignored" if state["legacy_ignored"] else "fixed_reference_identity_restored")
+    # Deprecated alias.
+    _validated_queue_state = _validated_reference_identity_state
 
     @torch.no_grad()
-    def load_prototype_queue_state(self, state: Dict[str, Any]) -> None:
-        """Restore v3 paired queues or v2 RGB queues with empty feature history."""
-        self._restore_validated_queue_state(self._validated_queue_state(state))
+    def _restore_validated_reference_identity_state(self, state: Dict[str, Any]) -> None:
+        """Restore forward counters only; never rewrite fixed memberships."""
+        self._appearance_forward_count = state["step"]
+        self.visual_appearance_diagnostics = self._appearance_status(
+            False,
+            "legacy_fifo_ignored" if state["legacy_ignored"] else "fixed_reference_identity_restored",
+        )
 
-    def save_prototype_queue(self, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
-                             filename: str = "prototype_queue.pt") -> str:
-        return _atomic_queue_save(self.prototype_queue_state(), directory, filename)
+    # Deprecated alias.
+    _restore_validated_queue_state = _restore_validated_reference_identity_state
+
+    @torch.no_grad()
+    def load_fixed_reference_identity_state(self, state: Dict[str, Any]) -> None:
+        """Validate external identity snapshots; ignore obsolete FIFO contents."""
+        self._restore_validated_reference_identity_state(
+            self._validated_reference_identity_state(state)
+        )
+
+    # Deprecated alias: never restores historical patches into the bank.
+    load_prototype_queue_state = load_fixed_reference_identity_state
+
+    def save_fixed_reference_identity(self, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
+                                      filename: str = "prototype_queue.pt") -> str:
+        """Persist identity/counters only (no reference arrays, no FIFO history)."""
+        return _atomic_reference_snapshot_save(
+            self.fixed_reference_identity_state(), directory, filename
+        )
+
+    # Deprecated alias.
+    save_prototype_queue = save_fixed_reference_identity
 
     @staticmethod
     def _build_grid(
@@ -1365,10 +1420,24 @@ class VisualConceptCreation(nn.Module):
         resize = str((manifest.get("rgb_settings") or {}).get("rgb_resize", "")).lower()
         if "bilinear" not in resize:
             raise ValueError("Cluster bank must document bilinear RGB crop resizing to match the training descriptor.")
+        # Prefer backbone state_dict fingerprint provenance. Whole-model file
+        # hashes are informational and are not treated as feature identity.
+        feature_provenance = manifest.get("reference_feature_provenance")
+        if not isinstance(feature_provenance, dict):
+            feature_provenance = None
         checkpoint = (manifest.get("source_manifest") or {}).get("checkpoint_sha256")
         expected = self.visual_cluster_expected_checkpoint_sha256
-        if expected is not None and checkpoint != expected:
-            raise ValueError("Reference bank checkpoint SHA does not match visual_cluster_expected_checkpoint_sha256.")
+        if expected is not None:
+            expected_fp = feature_provenance.get("backbone_fingerprint") if feature_provenance else None
+            if expected_fp is not None and expected_fp == expected:
+                pass  # caller supplied a backbone fingerprint
+            elif checkpoint != expected:
+                raise ValueError(
+                    "Reference bank checkpoint SHA / backbone fingerprint does not match "
+                    "visual_cluster_expected_checkpoint_sha256. Prefer comparing "
+                    "reference_feature_provenance.backbone_fingerprint, not a whole-model "
+                    "checkpoint file hash."
+                )
         references_path = root / "cluster_references.npz"
         if not references_path.is_file():
             raise FileNotFoundError(f"Cluster references missing: {references_path}")
@@ -1482,6 +1551,11 @@ class VisualConceptCreation(nn.Module):
         metadata = {"fingerprint": fingerprint, "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
                     "source_checkpoint_sha256": checkpoint,
                     "source_feature_semantics": manifest.get("source_feature_semantics"),
+                    "reference_feature_provenance": feature_provenance,
+                    "reference_feature_provenance_status": manifest.get(
+                        "reference_feature_provenance_status",
+                        "verified" if feature_provenance else "unverified_legacy_source",
+                    ),
                     "selected_counts": selected_counts, "full_counts": full_counts.tolist(),
                     "num_reference_patches": int(sum(selected_counts)),
                     "rgb_resize": "bilinear_crop_antialias", "descriptor_order": "CHW (converted from bank HWC)",
@@ -1504,13 +1578,35 @@ class VisualConceptCreation(nn.Module):
 ConceptCreation = VisualConceptCreation
 
 
-def _atomic_queue_save(payload: Dict[str, Any], directory: str, filename: str) -> str:
+def _unwrap_model(model):
+    if isinstance(model, (nn.DataParallel, nn.parallel.DistributedDataParallel)):
+        return model.module
+    return model
+
+
+def _concept_modules(model):
+    """Named VisualConceptCreation modules with stable parallel-wrapper unwrap."""
+    model = _unwrap_model(model)
+    return {
+        name: module
+        for name, module in model.named_modules()
+        if isinstance(module, VisualConceptCreation)
+    }
+
+
+# Deprecated alias.
+_queue_modules = _concept_modules
+
+
+def _atomic_reference_snapshot_save(payload: Dict[str, Any], directory: str, filename: str) -> str:
     if Path(filename).name != filename or not filename.endswith(".pt"):
-        raise ValueError("Queue snapshot filename must be a simple .pt filename.")
+        raise ValueError("Reference snapshot filename must be a simple .pt filename.")
     directory = Path(directory).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / filename
-    with tempfile.NamedTemporaryFile(dir=directory, prefix=".queue-", suffix=".pt", delete=False) as temporary:
+    with tempfile.NamedTemporaryFile(
+        dir=directory, prefix=".ref-", suffix=".pt", delete=False
+    ) as temporary:
         temporary_path = Path(temporary.name)
     try:
         torch.save(payload, temporary_path)
@@ -1520,55 +1616,133 @@ def _atomic_queue_save(payload: Dict[str, Any], directory: str, filename: str) -
     return str(path)
 
 
-def _queue_modules(model):
-    # Unwrap standard parallel wrappers so save/resume names are stable.
-    if isinstance(model, (nn.DataParallel, nn.parallel.DistributedDataParallel)):
-        model = model.module
-    return {name: module for name, module in model.named_modules()
-            if isinstance(module, VisualConceptCreation)}
+# Deprecated alias.
+_atomic_queue_save = _atomic_reference_snapshot_save
 
 
-def save_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
-                          filename: str = "prototype_queues.pt") -> Optional[str]:
-    """Legacy API: save fixed-reference identities/counters for all stages.
+def build_patch_cluster_reference_checkpoint_metadata(model) -> Optional[Dict[str, Any]]:
+    """Lightweight identity for ordinary training checkpoints (no reference arrays).
 
-    Under DDP, rank 0 saves reference identity/counters; there is no inter-rank gather or
-    forward-time queue broadcast. Other ranks return None without writing.
+    Reuses the bank fingerprint already computed by ``load_visual_patch_clusters``;
+    does not rehash the bank.
     """
-    if torch.distributed.is_available() and torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
+    model = _unwrap_model(model)
+    concept_creations = getattr(model, "concept_creations", None)
+    # nn.ModuleDict is Mapping-like but not a dict subclass; support both.
+    if concept_creations is None or not hasattr(concept_creations, "__contains__"):
         return None
-    modules = _queue_modules(model)
+    if "stage4" not in concept_creations:
+        return None
+    stage4 = concept_creations["stage4"]
+    if stage4 is None or not getattr(stage4, "_cluster_loaded", False):
+        return None
+    meta = stage4._cluster_metadata
+    payload: Dict[str, Any] = {
+        "format": PATCH_CLUSTER_REFERENCE_FORMAT,
+        "metadata_format_version": 1,
+        "bank_fingerprint": meta.get("fingerprint"),
+        "manifest_sha256": meta.get("manifest_sha256"),
+        "num_clusters": int(stage4.num_visual_concepts),
+        "rgb_descriptor_size": int(stage4.visual_appearance_patch_size),
+        "rgb_descriptor_dim": int(stage4.visual_appearance_dim),
+        "max_patches_per_prototype": int(stage4.visual_cluster_max_patches_per_prototype),
+        "reference_seed": int(stage4.visual_cluster_seed),
+        "full_member_counts": list(meta.get("full_counts") or []),
+        "selected_member_counts": list(meta.get("selected_counts") or []),
+        "reference_directory": stage4.visual_cluster_dir,
+        "reference_feature_provenance_status": meta.get(
+            "reference_feature_provenance_status"
+        ),
+    }
+    provenance = meta.get("reference_feature_provenance")
+    if isinstance(provenance, dict):
+        # Only verified identity fields when the bank recorded them.
+        payload["reference_feature_provenance"] = {
+            "backbone_fingerprint": provenance.get("backbone_fingerprint"),
+            "temporal_selection": provenance.get("temporal_selection"),
+            "preprocess": provenance.get("preprocess"),
+            "feature_source": provenance.get("feature_source"),
+        }
+    return payload
+
+
+def save_fixed_reference_identities(
+    model,
+    directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
+    filename: str = "prototype_queues.pt",
+) -> Optional[str]:
+    """Save fixed-reference identities/counters for all stages (no arrays/FIFO).
+
+    Under DDP, rank 0 writes; other ranks return None. Never called from forward.
+    """
+    if (
+        torch.distributed.is_available()
+        and torch.distributed.is_initialized()
+        and torch.distributed.get_rank() != 0
+    ):
+        return None
+    modules = _concept_modules(model)
     if not modules:
         raise ValueError("No VisualConceptCreation modules found in model.")
-    states = {name: module.prototype_queue_state() for name, module in modules.items()}
-    return _atomic_queue_save({"format": "fixed_patch_cluster_model_v1", "stages": states}, directory, filename)
+    states = {
+        name: module.fixed_reference_identity_state() for name, module in modules.items()
+    }
+    return _atomic_reference_snapshot_save(
+        {"format": "fixed_patch_cluster_model_v1", "stages": states},
+        directory,
+        filename,
+    )
 
 
-def load_prototype_queues(model, directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
-                          filename: str = "prototype_queues.pt") -> None:
-    """Explicit resume after model weights load. Never called from forward.
+# Deprecated alias: train.py no longer calls this per epoch.
+save_prototype_queues = save_fixed_reference_identities
 
-    All DDP ranks validate the same immutable reference-bank identity.
-    Missing files fail explicitly; references themselves live in visual_cluster_dir.
+
+def load_fixed_reference_identities(
+    model,
+    directory: str = DEFAULT_PROTOTYPE_QUEUE_DIR,
+    filename: str = "prototype_queues.pt",
+) -> None:
+    """Validate external identity snapshots after weights load. Never from forward.
+
+    Does not restore historical FIFO patches or alter fixed memberships. Reference
+    arrays remain in visual_cluster_dir and must already be loaded.
     """
     if Path(filename).name != filename or not filename.endswith(".pt"):
-        raise ValueError("Queue snapshot filename must be a simple .pt filename.")
-    payload = torch.load(Path(directory).expanduser() / filename, map_location="cpu", weights_only=True)
-    modules = _queue_modules(model)
-    if (not isinstance(payload, dict) or payload.get("format") not in
-            ("prototype_rgb_fifo_model_v2", "prototype_rgb_feature_fifo_model_v3", "fixed_patch_cluster_model_v1")
-            or not isinstance(payload.get("stages"), dict) or set(payload["stages"]) != set(modules)):
+        raise ValueError("Reference snapshot filename must be a simple .pt filename.")
+    payload = torch.load(
+        Path(directory).expanduser() / filename, map_location="cpu", weights_only=True
+    )
+    modules = _concept_modules(model)
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format")
+        not in (
+            "prototype_rgb_fifo_model_v2",
+            "prototype_rgb_feature_fifo_model_v3",
+            "fixed_patch_cluster_model_v1",
+        )
+        or not isinstance(payload.get("stages"), dict)
+        or set(payload["stages"]) != set(modules)
+    ):
         raise ValueError("Reference snapshot format/stages do not match the model.")
-    # Validate every stage before restoring any counters/reference identities.
-    expected_format = {"prototype_rgb_fifo_model_v2": "prototype_rgb_fifo_v2",
-                       "prototype_rgb_feature_fifo_model_v3": "prototype_rgb_feature_fifo_v3",
-                       "fixed_patch_cluster_model_v1": "fixed_patch_cluster_reference_v1"}[payload["format"]]
+    expected_format = {
+        "prototype_rgb_fifo_model_v2": "prototype_rgb_fifo_v2",
+        "prototype_rgb_feature_fifo_model_v3": "prototype_rgb_feature_fifo_v3",
+        "fixed_patch_cluster_model_v1": "fixed_patch_cluster_reference_v1",
+    }[payload["format"]]
     validated = {}
     for name, module in modules.items():
         state = payload["stages"][name]
         if not isinstance(state, dict) or state.get("format") != expected_format:
-            raise ValueError(f"Reference stage {name!r} format disagrees with its model snapshot.")
-        validated[name] = module._validated_queue_state(state)
+            raise ValueError(
+                f"Reference stage {name!r} format disagrees with its model snapshot."
+            )
+        validated[name] = module._validated_reference_identity_state(state)
     for name, module in modules.items():
-        module._restore_validated_queue_state(validated[name])
+        module._restore_validated_reference_identity_state(validated[name])
+
+
+# Deprecated alias.
+load_prototype_queues = load_fixed_reference_identities
 

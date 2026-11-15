@@ -801,7 +801,26 @@ def _aggregate_concept_losses(
 def _aggregate_concept_total_loss(
     concept_out: Any, reference: torch.Tensor
 ) -> torch.Tensor:
-    """Average per-stage ConceptCreation loss_total_concept when present."""
+    """Average per-stage ``loss_total_concept`` into the optimizer concept term.
+
+    Appearance reaches ``loss_total`` only through this route:
+
+        stage4 ``loss_visual_appearance``
+          -> weighted by ``loss_weights['visual_appearance']`` inside stage4
+             ``loss_total_concept``
+          -> averaged here with the other stages' ``loss_total_concept``
+          -> added once as ``loss_total_concept`` in ``compute_total_loss``
+
+    Do **not** also add ``loss_visual_appearance`` into ``loss_total``.
+
+    Migration note (optimizer aggregation unchanged): this function uses an
+    equal mean over contributing stages. With four stages present, stage4's
+    appearance contribution to ``loss_total`` is therefore divided by four:
+
+        (w_visual_appearance * raw_loss_visual_appearance) / N_stages
+
+    Weights are not silently re-scaled to undo that dilution.
+    """
     zero = reference.sum() * 0.0
     if not isinstance(concept_out, dict) or not concept_out:
         return zero

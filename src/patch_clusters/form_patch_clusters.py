@@ -1,48 +1,36 @@
 #!/usr/bin/env python3
-"""Build fixed stage4 patch clusters, independently of model assignments.
+"""Build fixed stage4 patch clusters for appearance supervision.
 
-Dependencies: python -m pip install numpy scipy pillow
-No torch, checkpoint loading, model inference, activation filter or graph edges.
+Two input modes:
 
-Examples (defaults match this project's prototype graph):
-    python form_patch_clusters.py
-    python form_patch_clusters.py --num-prototypes 128 --fit-sample-size 4096
-    python form_patch_clusters.py --source-db /path/to/graph.sqlite --datasets train
+  cache (default; recommended for training)
+    Pair training RGB windows with FrozenBackboneFeatureCache stage4 last-slice
+    features. No prototype activations, assignments, graph edges, or graph.sqlite.
+    All eligible patches from the configured training-window sampling are used
+    (no saliency / activation filter). Records verified frozen-backbone
+    fingerprint + preprocessing provenance.
 
-Input: graph.sqlite from generate_prot_graph.py or generate_prot_overlap_graph.py.
-ALL stage4 nodes in the selected datasets are read, including inactive patches.
-Complete visual_descriptors are required; run the source generator's
-ACTION='cache_similarity' if the cache is incomplete. Zero/nonfinite descriptors
-fail explicitly instead of assigning patches using invented similarities.
+  graph (optional)
+    Read complete visual_descriptors from a prototype-graph graph.sqlite
+    (generate_prot_graph.py ACTION='cache_similarity'). Graph provenance is
+    promoted when present; otherwise marked unverified.
+
+Examples:
+    python form_patch_clusters.py --output-dir /data/.../patch_cluster_frozen_ref
+    python form_patch_clusters.py --source-mode cache --max-windows 64
+    python form_patch_clusters.py --source-mode graph --source-db /path/to/graph.sqlite
 
 Distance = wf*(1-feature_cosine) + wr*RGB_MAE + ws*(1-RGB_structure_cosine).
 Structure is per-channel spatially centered RGB; both flat=1, one flat=0.
-With unit weights, distance = 3 - the graph's visual similarity score.
-The source RGB descriptors/preprocessing are preserved, not regenerated from
-JPEG previews. Source features become a FIXED SNAPSHOT: this script does not
-claim they came from the original frozen teacher. Use a graph extracted with
-your chosen reference backbone/checkpoint, and record that provenance.
+RGB bank vectors are HWC (converted to CHW inside concept_creation.py).
 
-Fitting uses seeded approximate k-medoids on a video-capped sample. Medoid
-updates evaluate a bounded number of candidates per cluster. Every source
-patch is then assigned to the closest final medoid under the full distance.
-This is approximate fitting, not an exact global k-medoids optimum, and the
-reference is a real MEDOID patch, not an average RGB signature. No global NxN
-matrix is allocated. Fitting uses at most O(sample_size*K) distance memory;
-full assignment uses O(batch_size*K). Descriptor arrays are disk-backed.
+Fitting uses seeded approximate k-medoids on a video-capped sample, then
+assigns every patch to the closest final medoid. Write only to a new
+--output-dir; never overwrite the active bank or feature caches in place.
 
-Output, by default /data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster:
-    manifest.json              settings, provenance, hashes, coverage, status
-    patch_clusters.sqlite      fixed cluster/prototype IDs + every patch/frame
-    cluster_references.npz     ordered medoid descriptors and source identities
-    fit_sample_indices.npy     exact sample used for prototype discovery
-    descriptors/*.npy          aligned per-patch vectors, node IDs and labels
-
-Prototype IDs 0..K-1 are NEW reference-cluster IDs, not the old model's IDs.
-Do not rebuild/renumber this reference bank midway through a training run.
-The training loss must use matching RGB settings and reference-feature source.
-Patch identity is dataset/video/window/target/stage/grid cell; node IDs refer to
-this source DB only. Train.py/concept_creation.py are not changed by this tool.
+Output schema (concept_creation.py / view_patch_clusters.py):
+    manifest.json, patch_clusters.sqlite, cluster_references.npz,
+    fit_sample_indices.npy, descriptors/{feature,rgb,structure,flat,node_ids,prototype_ids}.npy
 """
 from __future__ import annotations
 
@@ -63,8 +51,17 @@ import numpy as np
 from scipy.spatial.distance import cdist
 
 DEFAULT_SOURCE_DB = Path('/data/quantization/zaima/videosal_datasets/dhf1k/explanation_graphs/prototype_graph_outputs/graph.sqlite')
+# Legacy graph-built bank. Cache mode defaults to a different path so the old bank is never overwritten.
 DEFAULT_OUTPUT_DIR = Path('/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster')
+DEFAULT_CACHE_OUTPUT_DIR = Path('/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster_frozen_ref')
+DEFAULT_DATASET_ROOT = Path('/data/quantization/zaima/videosal_datasets/dhf1k')
+DEFAULT_CACHE_ROOT = Path('/data/quantization/zaima/videosal_datasets/dhf1k/cached_feats')
+# Same Kinetics VideoSwin pack as train.py / FrozenBackboneFeatureCache.
+DEFAULT_REFERENCE_CHECKPOINT = Path(
+    '/data/quantization/zaima/videoswin/swin_small_patch244_window877_kinetics400_1k.pth'
+)
 FORMAT_VERSION = 'fixed_stage4_patch_clusters_v1'
+SRC_DIR = Path(__file__).resolve().parents[1]
 
 
 def now():
@@ -430,76 +427,433 @@ def save_assignments(con, data, directory, medoids, args, weights):
     return stats
 
 
-def build(args):
-    source_path = args.source_db.expanduser().resolve()
-    directory = args.output_dir.expanduser().resolve()
+def prepare_output_directory(directory: Path, overwrite: bool) -> Path:
+    directory = Path(directory).expanduser().resolve()
+    if directory.exists() and any(directory.iterdir()):
+        if not overwrite:
+            raise FileExistsError(
+                f'{directory} is not empty. Use a new --output-dir (recommended) '
+                'or --overwrite to rename the existing folder to a timestamped backup.'
+            )
+        suffix = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')
+        backup = directory.with_name(directory.name + '.backup-' + suffix)
+        directory.rename(backup)
+        print(f'Previous output preserved at {backup}', flush=True)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def base_manifest(args, weights, *, source_mode: str) -> dict:
+    return {
+        'format_version': FORMAT_VERSION,
+        'status': 'building',
+        'created_at': now(),
+        'source_mode': source_mode,
+        'stage': 'stage4',
+        'prototype_ids': 'new fixed reference IDs, zero-based; unrelated to old activation IDs',
+        'num_prototypes': args.num_prototypes,
+        'seed': args.seed,
+        'distance': 'wf*(1-feature_cosine) + wr*rgb_mae + ws*(1-centered_rgb_structure_cosine)',
+        'weights': {'feature': weights[0], 'rgb_mae': weights[1], 'structure': weights[2]},
+        'structure_flat_policy': 'both flat=1, one flat=0',
+        'rgb_order': 'HWC',
+        'reference_type': 'real medoid patches',
+        'reference_groups_fixed': True,
+        'algorithm': 'sampled_candidate_k_medoids_then_full_closest_medoid_assignment',
+        'fit_sample_size_requested': args.fit_sample_size,
+        'fit_max_per_video': args.fit_max_per_video,
+        'iterations': args.iterations,
+        'restarts': args.restarts,
+        'medoid_candidates': args.medoid_candidates,
+        'batch_size': args.batch_size,
+        'saliency_used_for_clustering': False,
+        'model_assignments_used_for_clustering': False,
+        'all_selected_stage4_patches_included': True,
+    }
+
+
+def finalize_fit(destination, directory, data, manifest, args, weights, started):
+    sample, videos = choose_fit_sample(
+        destination, args.fit_sample_size, args.fit_max_per_video, np.random.default_rng(args.seed)
+    )
+    if len(sample) < args.num_prototypes:
+        raise ValueError(
+            'Video-capped fitting sample is smaller than --num-prototypes; '
+            'increase --fit-max-per-video (0 disables cap).'
+        )
+    np.save(directory / 'fit_sample_indices.npy', sample, allow_pickle=False)
+    print(
+        f'{data.count:,} patches, {videos:,} videos; fitting on {len(sample):,} patches.',
+        flush=True,
+    )
+    medoids, fit_history, objective = fit_medoids(data, sample, args, weights)
+    stats = save_assignments(destination, data, directory, medoids, args, weights)
+    remaining = destination.execute('SELECT COUNT(*) FROM patches WHERE prototype_id IS NULL').fetchone()[0]
+    if remaining or destination.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+        raise RuntimeError('Final assignment/database integrity check failed.')
+    manifest.update(
+        status='complete',
+        completed_at=now(),
+        elapsed_seconds=round(time.monotonic() - started, 3),
+        fit_sample_size=len(sample),
+        num_videos=videos,
+        fit_mean_distance=objective,
+        fit_history=fit_history,
+        clusters=stats,
+        database='patch_clusters.sqlite',
+        references='cluster_references.npz',
+        descriptor_arrays='descriptors/*.npy, indexed by patches.descriptor_index',
+    )
+    manifest['references_sha256'] = sha256_file(directory / 'cluster_references.npz')
+    destination.execute(
+        'INSERT INTO metadata VALUES (?,?)',
+        ('manifest', json.dumps(manifest, allow_nan=False)),
+    )
+    destination.execute('ANALYZE')
+    destination.commit()
+    return manifest
+
+
+def rgb_patch_hwc(rgb_hwc: np.ndarray, row: int, col: int, grid_h: int, grid_w: int, side: int) -> np.ndarray:
+    """Uniform-grid crop + PIL bilinear resize → flat HWC float32 in [0,1]."""
+    from PIL import Image
+
+    a = np.asarray(rgb_hwc, dtype=np.float32)
+    if a.ndim != 3 or a.shape[-1] != 3 or not np.isfinite(a).all() or a.min() < -0.01 or a.max() > 1.01:
+        raise ValueError('Expected finite HWC RGB in [0,1].')
+    h, w = a.shape[:2]
+    crop = a[
+        round(row * h / grid_h): round((row + 1) * h / grid_h),
+        round(col * w / grid_w): round((col + 1) * w / grid_w),
+    ].clip(0, 1)
+    if not crop.size:
+        raise ValueError('Empty RGB patch under the reference grid mapping.')
+    size = (int(side), int(side))
+    return np.stack(
+        [
+            np.asarray(Image.fromarray(crop[..., c]).resize(size, Image.Resampling.BILINEAR))
+            for c in range(3)
+        ],
+        axis=-1,
+    ).clip(0, 1).astype(np.float32).reshape(-1)
+
+
+def resize_last_rgb_canvas(rgb_tchw, resize_to):
+    """Unnormalized last-frame RGB on the backbone spatial canvas (no ImageNet norm)."""
+    import torch
+    import torch.nn.functional as F
+
+    clip = rgb_tchw.detach().float()
+    if clip.dim() != 4 or clip.shape[1] != 3:
+        raise ValueError(f'Expected [T,3,H,W] RGB, got {tuple(clip.shape)}')
+    if clip.numel() > 0 and float(clip.max()) > 2.0:
+        clip = clip / 255.0
+    last = clip[-1:].clamp(0.0, 1.0)  # [1,3,H,W]
+    if isinstance(resize_to, int):
+        target = (int(resize_to), int(resize_to))
+    else:
+        target = (int(resize_to[0]), int(resize_to[1]))
+    if tuple(last.shape[-2:]) != target:
+        last = F.interpolate(last, size=target, mode='bilinear', align_corners=False)
+    return last[0].cpu()  # [3,H,W]
+
+
+def extract_from_training_cache(args, directory, destination):
+    """Enumerate training windows; pair cache stage4 features with RGB patches."""
+    if str(SRC_DIR) not in sys.path:
+        sys.path.insert(0, str(SRC_DIR))
+    import torch
+    from model.backbone_feature_cache import (
+        DEFAULT_RESIZE_TO,
+        FrozenBackboneFeatureCache,
+        compare_reference_feature_provenance,
+        make_identity_from_loader_sample,
+        provenance_from_cache,
+    )
+    from pre_process.dataloader import DatasetLoader
+
+    split = str(args.split)
+    if split != 'train':
+        raise ValueError('Cache mode uses training data only; set --split train.')
+    dataset_root = Path(args.dataset_root).expanduser().resolve()
+    split_dir = dataset_root / split
+    if not split_dir.is_dir():
+        raise FileNotFoundError(f'Training split not found: {split_dir}')
+
+    resize_to = tuple(int(x) for x in args.resize_to)
+    if len(resize_to) != 2 or min(resize_to) < 1:
+        raise ValueError('--resize-to must be two positive integers: HEIGHT WIDTH')
+    rgb_side = int(args.rgb_size)
+    if rgb_side < 1:
+        raise ValueError('--rgb-size must be positive.')
+
+    ref_ckpt = str(Path(args.reference_checkpoint).expanduser().resolve())
+    if not Path(ref_ckpt).is_file():
+        raise FileNotFoundError(f'Reference checkpoint not found: {ref_ckpt}')
+    allow_compute = bool(args.allow_compute) and not bool(getattr(args, 'cache_read_only', False))
+    cache_root = Path(args.cache_root).expanduser().resolve()
+    cache = FrozenBackboneFeatureCache(
+        root=cache_root,
+        checkpoint=ref_ckpt,
+        device=args.device,
+        storage_dtype=args.storage_dtype,
+        resize_to=resize_to,
+        normalize=True,
+    )
+    feature_provenance = provenance_from_cache(cache)
+    if not feature_provenance.get('backbone_fingerprint'):
+        raise RuntimeError('FrozenBackboneFeatureCache did not produce a backbone_fingerprint.')
+    # Self-check: helpers used by train.py accept this provenance object.
+    compare_reference_feature_provenance(feature_provenance, feature_provenance)
+
+    dataset = DatasetLoader(
+        str(split_dir),
+        window_len=int(args.window_len),
+        stride=int(args.stride),
+        random_train_sampling=False,
+    )
+    total_windows = len(dataset)
+    limit = total_windows if args.max_windows is None else min(total_windows, int(args.max_windows))
+    if limit < 1:
+        raise ValueError('No training windows available under the configured sampling.')
+
+    print(
+        f'Cache mode | split={split_dir} | windows={limit:,}/{total_windows:,} | '
+        f'window_len={args.window_len} | stride={args.stride} | '
+        f'num_prototypes={args.num_prototypes} | '
+        f'cache={cache.root} | fingerprint={cache.reference_fingerprint[:16]}… | '
+        f'allow_compute={allow_compute} (reuse compatible entries; never overwrite others)',
+        flush=True,
+    )
+
+    # Probe first window for stage4 grid / channel count, then allocate.
+    video0, start0 = dataset.windows[0]
+    frames0 = dataset.video_frame_names[video0][start0: start0 + args.window_len]
+    sample0 = dataset[0]
+    _, rgb_np0, _, _, n_frames0 = sample0[:5]
+    identity0, rgb0 = make_identity_from_loader_sample(
+        dataset_root=str(split_dir),
+        video_id=video0,
+        window_start=start0,
+        frame_names=frames0,
+        rgb_thwc_or_tchw=torch.as_tensor(rgb_np0),
+        split=split,
+        stride=int(args.stride),
+        view_id='identity',
+        preprocess=cache.preprocess,
+    )
+    feats0 = cache.get_or_compute(
+        rgb0, identity=identity0, force=False, allow_compute=allow_compute
+    )
+    stage4_0 = feats0['stage4']
+    if stage4_0.dim() != 4 or stage4_0.shape[1] != 1:
+        raise ValueError(f'Expected stage4 [C,1,H,W], got {tuple(stage4_0.shape)}')
+    feature_dim = int(stage4_0.shape[0])
+    grid_h, grid_w = int(stage4_0.shape[2]), int(stage4_0.shape[3])
+    patches_per_frame = grid_h * grid_w
+    count = limit * patches_per_frame
+    if count < args.num_prototypes:
+        raise ValueError(
+            f'{count} stage4 patches from {limit} windows cannot form {args.num_prototypes} clusters.'
+        )
+    rgb_dim = 3 * rgb_side * rgb_side
+    data = Descriptors(directory / 'descriptors', count, feature_dim, rgb_dim, mode='w+')
+    digest = hashlib.sha256()
+    digest.update(
+        json.dumps(
+            {
+                'resize_to': list(resize_to),
+                'rgb_size': rgb_side,
+                'fingerprint': cache.reference_fingerprint,
+                'window_len': int(args.window_len),
+                'stride': int(args.stride),
+            },
+            separators=(',', ':'),
+            sort_keys=True,
+        ).encode()
+    )
+
+    index = 0
+    frame_id = 0
+    started = time.monotonic()
+    for window_i in range(limit):
+        video_id, start = dataset.windows[window_i]
+        frame_names = dataset.video_frame_names[video_id][start: start + args.window_len]
+        sample = dataset[window_i]
+        sample_video, rgb_np, _, _, n_frames = sample[:5]
+        if sample_video != video_id or int(n_frames) != int(args.window_len):
+            raise RuntimeError(f'Loader identity mismatch at window {window_i}.')
+        identity, rgb = make_identity_from_loader_sample(
+            dataset_root=str(split_dir),
+            video_id=video_id,
+            window_start=start,
+            frame_names=frame_names,
+            rgb_thwc_or_tchw=torch.as_tensor(rgb_np),
+            split=split,
+            stride=int(args.stride),
+            view_id='identity',
+            preprocess=cache.preprocess,
+        )
+        features = cache.get_or_compute(
+            rgb, identity=identity, force=False, allow_compute=allow_compute
+        )
+        stage4 = features['stage4']
+        if tuple(stage4.shape) != (feature_dim, 1, grid_h, grid_w):
+            raise ValueError(
+                f'stage4 shape changed at {video_id}@{start}: '
+                f'{tuple(stage4.shape)} vs {(feature_dim, 1, grid_h, grid_w)}'
+            )
+        # [H,W,C] feature layout matching concept / graph row-major order.
+        feat_bhwc = stage4[:, 0].permute(1, 2, 0).contiguous().cpu().numpy().astype(np.float32)
+        last_rgb = resize_last_rgb_canvas(rgb, resize_to)  # [3,H,W] on backbone canvas
+        rgb_hwc = last_rgb.permute(1, 2, 0).contiguous().numpy().astype(np.float32)
+        input_h, input_w = int(rgb_hwc.shape[0]), int(rgb_hwc.shape[1])
+        target_index = int(start) + int(args.window_len) - 1
+        target_name = str(frame_names[-1])
+        source_path = str((split_dir / video_id / 'images' / target_name).resolve())
+        destination.execute(
+            'INSERT INTO frames VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (
+                frame_id, split, str(video_id), int(window_i), int(start),
+                target_index, target_name, source_path, None, input_h, input_w,
+            ),
+        )
+        for row in range(grid_h):
+            for col in range(grid_w):
+                node_id = index  # cache mode: stable sequential IDs
+                feature = feat_bhwc[row, col].reshape(-1)
+                rgb_vec = rgb_patch_hwc(rgb_hwc, row, col, grid_h, grid_w, rgb_side)
+                data.feature[index] = normalize_feature(feature, f'node {node_id}')
+                data.rgb[index] = rgb_vec
+                data.structure[index], data.flat[index] = structure_descriptor(rgb_vec)
+                data.node_ids[index] = node_id
+                destination.execute(
+                    '''INSERT INTO patches(descriptor_index,node_id,frame_id,stage,row,col,grid_h,grid_w,
+                       pred_score,pred_percentile,gt_score,gt_percentile)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    (index, node_id, frame_id, 'stage4', row, col, grid_h, grid_w,
+                     None, None, None, None),
+                )
+                identity_payload = [
+                    node_id, split, video_id, window_i, start, target_index,
+                    'stage4', row, col, grid_h, grid_w, identity.content_sha256,
+                ]
+                digest.update(json.dumps(identity_payload, separators=(',', ':')).encode())
+                digest.update(feature.astype('<f4').tobytes())
+                digest.update(rgb_vec.astype('<f4').tobytes())
+                index += 1
+        frame_id += 1
+        if (window_i + 1) % 50 == 0 or (window_i + 1) == limit:
+            destination.commit()
+            print(
+                f'Descriptors {index:,}/{count:,} from {window_i + 1:,}/{limit:,} windows '
+                f'({time.monotonic() - started:.1f}s)',
+                flush=True,
+            )
+
+    if index != count:
+        raise RuntimeError(f'Expected {count} patches, wrote {index}.')
+    destination.commit()
+    data.flush()
+    rgb_settings = {
+        'version': 'stage4_rgb_structure_v1',
+        'formula': 'stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine',
+        'rgb_size': rgb_side,
+        'rgb_range': [0, 1],
+        'rgb_resize': 'bilinear, per-channel float32, uniform input-grid crop',
+        'rgb_canvas': f'backbone_resize_to_{list(resize_to)}_unnormalized',
+        'structure': 'cosine of per-channel spatially centered RGB',
+        'feature_module': 'frozen_reference_backbone',
+        'feature_output_path': ['stage4'],
+        'feature_layout': 'BCTHW_last_slice_to_BHWC',
+        'descriptor_feature_source': 'frozen_reference',
+    }
+    meta = {
+        'data': data,
+        'fingerprint': digest.hexdigest(),
+        'frames': frame_id,
+        'count': count,
+        'feature_dim': feature_dim,
+        'rgb_descriptor_size': rgb_side,
+        'rgb_settings': rgb_settings,
+        'feature_provenance': feature_provenance,
+        'datasets': [split],
+        'grid_h': grid_h,
+        'grid_w': grid_w,
+        'cache_root': str(cache.root),
+        'reference_checkpoint': ref_ckpt,
+        'window_len': int(args.window_len),
+        'stride': int(args.stride),
+        'dataset_root': str(dataset_root),
+        'default_resize_to': list(DEFAULT_RESIZE_TO) if not isinstance(DEFAULT_RESIZE_TO, int) else DEFAULT_RESIZE_TO,
+    }
+    return meta
+
+
+def build_from_graph(args, directory, weights):
+    source_path = Path(args.source_db).expanduser().resolve()
     if not source_path.is_file():
-        raise FileNotFoundError(f'Source graph DB not found: {source_path}. Supply --source-db /path/to/graph.sqlite.')
+        raise FileNotFoundError(
+            f'Source graph DB not found: {source_path}. Supply --source-db /path/to/graph.sqlite '
+            'or use --source-mode cache.'
+        )
     if source_path.is_relative_to(directory):
         raise ValueError('Output directory must not contain the source database.')
     manifest_path = source_path.parent / 'manifest.json'
     source_manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
     if source_manifest.get('status', 'complete') != 'complete':
         raise ValueError('Source graph extraction is not complete; finish or repair it before defining fixed references.')
-    if directory.exists() and any(directory.iterdir()):
-        if not args.overwrite:
-            raise FileExistsError(f'{directory} is not empty. Use a new --output-dir or --overwrite to preserve the old folder as a backup.')
-        suffix = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')
-        backup = directory.with_name(directory.name + '.backup-' + suffix)
-        directory.rename(backup)
-        print(f'Previous output preserved at {backup}', flush=True)
-    directory.mkdir(parents=True, exist_ok=True)
+    feature_provenance = None
+    if isinstance(source_manifest, dict):
+        feature_provenance = source_manifest.get('reference_feature_provenance')
+        if not isinstance(feature_provenance, dict) or not feature_provenance.get('backbone_fingerprint'):
+            feature_provenance = None
+    provenance_status = 'verified' if feature_provenance else 'unverified_legacy_source'
     started = time.monotonic()
-    weights = (args.feature_weight, args.rgb_weight, args.structure_weight)
-    manifest = {'format_version': FORMAT_VERSION, 'status': 'building', 'created_at': now(),
-                'source_database': str(source_path), 'source_manifest': source_manifest,
-                'source_manifest_sha256': sha256_file(manifest_path) if manifest_path.is_file() else None,
-                'source_feature_semantics': 'fixed snapshot of stored raw stage4 vectors; source checkpoint recorded above',
-                'stage': 'stage4', 'prototype_ids': 'new fixed reference IDs, zero-based; unrelated to old activation IDs',
-                'num_prototypes': args.num_prototypes, 'seed': args.seed,
-                'distance': 'wf*(1-feature_cosine) + wr*rgb_mae + ws*(1-centered_rgb_structure_cosine)',
-                'weights': {'feature': weights[0], 'rgb_mae': weights[1], 'structure': weights[2]},
-                'structure_flat_policy': 'both flat=1, one flat=0', 'rgb_order': 'HWC',
-                'reference_type': 'real medoid patches', 'reference_groups_fixed': True,
-                'algorithm': 'sampled_candidate_k_medoids_then_full_closest_medoid_assignment',
-                'fit_sample_size_requested': args.fit_sample_size, 'fit_max_per_video': args.fit_max_per_video,
-                'iterations': args.iterations, 'restarts': args.restarts, 'medoid_candidates': args.medoid_candidates,
-                'batch_size': args.batch_size, 'saliency_used_for_clustering': False,
-                'model_assignments_used_for_clustering': False, 'all_selected_stage4_patches_included': True}
+    manifest = base_manifest(args, weights, source_mode='graph')
+    manifest.update(
+        source_database=str(source_path),
+        source_manifest=source_manifest,
+        source_manifest_sha256=sha256_file(manifest_path) if manifest_path.is_file() else None,
+        source_feature_semantics=(
+            'fixed snapshot of stored raw stage4 vectors; '
+            'backbone identity is reference_feature_provenance.backbone_fingerprint '
+            '(not source_checkpoint_sha256)'
+        ),
+        reference_feature_provenance=feature_provenance,
+        reference_feature_provenance_status=provenance_status,
+    )
+    if feature_provenance is None:
+        print(
+            'WARNING: source graph lacks reference_feature_provenance.backbone_fingerprint. '
+            'Prefer --source-mode cache for verified frozen-reference training banks.',
+            flush=True,
+        )
     write_json(directory / 'manifest.json', manifest)
     try:
-        with closing(connect_readonly(source_path)) as source, closing(sqlite3.connect(directory / 'patch_clusters.sqlite')) as destination:
+        with closing(connect_readonly(source_path)) as source, closing(
+            sqlite3.connect(directory / 'patch_clusters.sqlite')
+        ) as destination:
             destination.row_factory = sqlite3.Row
-            source.execute('BEGIN')  # One consistent source/WAL snapshot.
+            source.execute('BEGIN')
             count, query, datasets, settings = read_source_info(source, args)
             create_schema(destination)
             manifest.update(datasets=datasets, rgb_settings=settings)
-            data, fingerprint, frames = extract(source, destination, directory, count, query, datasets, source_path.parent)
+            data, fingerprint, frames = extract(
+                source, destination, directory, count, query, datasets, source_path.parent
+            )
             side = math.isqrt(data.rgb.shape[1] // 3)
             if settings.get('rgb_size', side) != side:
                 raise ValueError('Source similarity metadata disagrees with RGB descriptor dimensions.')
-            manifest.update(num_patches=count, num_frames=frames, feature_dim=data.feature.shape[1],
-                            rgb_descriptor_size=side, source_patch_descriptor_sha256=fingerprint)
+            manifest.update(
+                num_patches=count,
+                num_frames=frames,
+                feature_dim=data.feature.shape[1],
+                rgb_descriptor_size=side,
+                source_patch_descriptor_sha256=fingerprint,
+            )
             write_json(directory / 'manifest.json', manifest)
-            sample, videos = choose_fit_sample(destination, args.fit_sample_size, args.fit_max_per_video, np.random.default_rng(args.seed))
-            if len(sample) < args.num_prototypes:
-                raise ValueError('Video-capped fitting sample is smaller than --num-prototypes; increase --fit-max-per-video (0 disables cap).')
-            np.save(directory / 'fit_sample_indices.npy', sample, allow_pickle=False)
-            print(f'{count:,} patches, {videos:,} videos; fitting on {len(sample):,} patches.', flush=True)
-            medoids, fit_history, objective = fit_medoids(data, sample, args, weights)
-            stats = save_assignments(destination, data, directory, medoids, args, weights)
-            remaining = destination.execute('SELECT COUNT(*) FROM patches WHERE prototype_id IS NULL').fetchone()[0]
-            if remaining or destination.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
-                raise RuntimeError('Final assignment/database integrity check failed.')
-            manifest.update(status='complete', completed_at=now(), elapsed_seconds=round(time.monotonic() - started, 3),
-                            fit_sample_size=len(sample), num_videos=videos, fit_mean_distance=objective,
-                            fit_history=fit_history, clusters=stats,
-                            database='patch_clusters.sqlite', references='cluster_references.npz',
-                            descriptor_arrays='descriptors/*.npy, indexed by patches.descriptor_index')
-            manifest['references_sha256'] = sha256_file(directory / 'cluster_references.npz')
-            destination.execute('INSERT INTO metadata VALUES (?,?)', ('manifest', json.dumps(manifest, allow_nan=False)))
-            destination.execute('ANALYZE')
-            destination.commit()
+            finalize_fit(destination, directory, data, manifest, args, weights, started)
         write_json(directory / 'manifest.json', manifest)
     except BaseException as exc:
         manifest.update(status='failed', failed_at=now(), error=str(exc))
@@ -509,12 +863,130 @@ def build(args):
     return manifest
 
 
+def build_from_cache(args, directory, weights):
+    started = time.monotonic()
+    manifest = base_manifest(args, weights, source_mode='cache')
+    write_json(directory / 'manifest.json', manifest)
+    try:
+        with closing(sqlite3.connect(directory / 'patch_clusters.sqlite')) as destination:
+            destination.row_factory = sqlite3.Row
+            create_schema(destination)
+            meta = extract_from_training_cache(args, directory, destination)
+            feature_provenance = meta['feature_provenance']
+            if not feature_provenance.get('backbone_fingerprint'):
+                raise RuntimeError('Cache mode requires a verified backbone_fingerprint.')
+            # Cross-check preprocess resize_to against CLI.
+            preprocess = feature_provenance.get('preprocess') or {}
+            expected_resize = list(args.resize_to)
+            got_resize = preprocess.get('resize_to')
+            if got_resize is not None and list(got_resize) != expected_resize:
+                raise ValueError(
+                    f'Cache preprocess resize_to={got_resize} disagrees with --resize-to {expected_resize}.'
+                )
+            manifest.update(
+                datasets=meta['datasets'],
+                rgb_settings=meta['rgb_settings'],
+                num_patches=meta['count'],
+                num_frames=meta['frames'],
+                feature_dim=meta['feature_dim'],
+                rgb_descriptor_size=meta['rgb_descriptor_size'],
+                source_patch_descriptor_sha256=meta['fingerprint'],
+                reference_feature_provenance=feature_provenance,
+                reference_feature_provenance_status='verified',
+                source_feature_semantics=(
+                    'fixed snapshot of FrozenBackboneFeatureCache stage4 last-slice vectors; '
+                    'paired with training RGB last frames resized to the backbone canvas'
+                ),
+                source_cache_root=meta['cache_root'],
+                source_dataset_root=meta['dataset_root'],
+                source_reference_checkpoint=meta['reference_checkpoint'],
+                window_len=meta['window_len'],
+                window_stride=meta['stride'],
+                stage4_grid={'H': meta['grid_h'], 'W': meta['grid_w']},
+                prototype_activations_used=False,
+                graph_sqlite_used=False,
+            )
+            write_json(directory / 'manifest.json', manifest)
+            finalize_fit(destination, directory, meta['data'], manifest, args, weights, started)
+        write_json(directory / 'manifest.json', manifest)
+    except BaseException as exc:
+        manifest.update(status='failed', failed_at=now(), error=str(exc))
+        write_json(directory / 'manifest.json', manifest)
+        raise
+    print(f'Complete: {directory}/patch_clusters.sqlite', flush=True)
+    print(
+        f"Verified provenance fingerprint={manifest['reference_feature_provenance']['backbone_fingerprint'][:16]}…",
+        flush=True,
+    )
+    return manifest
+
+
+def build(args):
+    weights = (args.feature_weight, args.rgb_weight, args.structure_weight)
+    source_mode = str(args.source_mode).lower()
+    if source_mode not in ('cache', 'graph'):
+        raise ValueError("--source-mode must be 'cache' or 'graph'.")
+    directory = prepare_output_directory(args.output_dir, args.overwrite)
+    # Refuse silently clobbering the legacy graph bank when using cache defaults.
+    legacy = DEFAULT_OUTPUT_DIR.expanduser().resolve()
+    if source_mode == 'cache' and directory == legacy and not args.overwrite:
+        raise FileExistsError(
+            f'Cache mode refuses to write into the legacy bank path {legacy} without '
+            '--overwrite. Pass a new --output-dir (default cache path is '
+            f'{DEFAULT_CACHE_OUTPUT_DIR}).'
+        )
+    if source_mode == 'cache':
+        return build_from_cache(args, directory, weights)
+    return build_from_graph(args, directory, weights)
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--source-db', type=Path, default=DEFAULT_SOURCE_DB)
-    p.add_argument('--output-dir', type=Path, default=DEFAULT_OUTPUT_DIR)
-    p.add_argument('--datasets', nargs='+', default=['train'], help='Source dataset labels; ALL explicitly includes every label.')
-    p.add_argument('--num-prototypes', '--num-clusters', dest='num_prototypes', type=int, default=128)
+    p.add_argument(
+        '--source-mode',
+        choices=('cache', 'graph'),
+        default='cache',
+        help="cache: training RGB + FrozenBackboneFeatureCache (default). graph: optional graph.sqlite.",
+    )
+    p.add_argument('--source-db', type=Path, default=DEFAULT_SOURCE_DB, help='graph.sqlite for --source-mode graph')
+    p.add_argument(
+        '--output-dir',
+        type=Path,
+        default=None,
+        help=f'New bank directory (default: cache→{DEFAULT_CACHE_OUTPUT_DIR}, graph→{DEFAULT_OUTPUT_DIR})',
+    )
+    p.add_argument('--datasets', nargs='+', default=['train'], help='graph mode dataset labels; ALL includes every label.')
+    p.add_argument('--dataset-root', type=Path, default=DEFAULT_DATASET_ROOT, help='DHF1K root containing train/')
+    p.add_argument('--split', default='train', help='Cache mode split (training only).')
+    p.add_argument('--window-len', type=int, default=32)
+    p.add_argument('--stride', type=int, default=1, help='Training-window stride (1 matches training starts).')
+    p.add_argument('--cache-root', type=Path, default=DEFAULT_CACHE_ROOT,
+                   help='Existing FrozenBackboneFeatureCache root (compatible entries are reused).')
+    p.add_argument(
+        '--reference-checkpoint',
+        type=Path,
+        default=DEFAULT_REFERENCE_CHECKPOINT,
+        help='Frozen Kinetics VideoSwin weights (must match train.py).',
+    )
+    p.add_argument('--device', default='cuda:0' if _cuda_default() else 'cpu')
+    p.add_argument('--storage-dtype', choices=('float16', 'float32'), default='float16')
+    p.add_argument('--resize-to', nargs=2, type=int, default=[224, 384], metavar=('H', 'W'),
+                   help='Backbone spatial canvas; must match train.py (default 224 384).')
+    p.add_argument('--rgb-size', type=int, default=16, help='RGB descriptor side length (HWC bank vectors).')
+    p.add_argument('--max-windows', type=int, default=None, help='Optional cap for debugging.')
+    p.add_argument(
+        '--allow-compute',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='On cache miss, compute via frozen reference (default: true). Never deletes/overwrites incompatible entries.',
+    )
+    p.add_argument(
+        '--cache-read-only',
+        action='store_true',
+        help='Fail on missing cache entries (disables --allow-compute).',
+    )
+    p.add_argument('--num-prototypes', '--num-clusters', dest='num_prototypes', type=int, default=256,
+                   help='Number of fixed reference clusters (explicit cluster count).')
     p.add_argument('--fit-sample-size', type=int, default=4096)
     p.add_argument('--fit-max-per-video', type=int, default=128, help='Discovery-sample cap per video; 0 disables it. Every patch is still assigned.')
     p.add_argument('--iterations', type=int, default=10)
@@ -530,14 +1002,28 @@ def parser():
     return p
 
 
+def _cuda_default() -> bool:
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
-    for name in ('num_prototypes', 'fit_sample_size', 'iterations', 'restarts', 'medoid_candidates', 'batch_size', 'threads'):
+    if args.output_dir is None:
+        args.output_dir = DEFAULT_CACHE_OUTPUT_DIR if args.source_mode == 'cache' else DEFAULT_OUTPUT_DIR
+    if args.cache_read_only:
+        args.allow_compute = False
+    for name in ('num_prototypes', 'fit_sample_size', 'iterations', 'restarts', 'medoid_candidates', 'batch_size', 'threads', 'window_len', 'stride', 'rgb_size'):
         if getattr(args, name) < 1:
             p.error(f'--{name.replace("_", "-")} must be positive.')
     if args.fit_sample_size < args.num_prototypes or args.fit_max_per_video < 0:
         p.error('Fit sample must be >= num-prototypes; fit-max-per-video must be >= 0.')
+    if args.max_windows is not None and args.max_windows < 1:
+        p.error('--max-windows must be positive when set.')
     weights = (args.feature_weight, args.rgb_weight, args.structure_weight)
     if not all(math.isfinite(w) and w >= 0 for w in weights) or not any(weights):
         p.error('Metric weights must be finite, nonnegative, and at least one must be positive.')
@@ -549,7 +1035,7 @@ def main(argv=None):
     try:
         with context:
             build(args)
-    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, FileNotFoundError, FileExistsError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 1
     return 0

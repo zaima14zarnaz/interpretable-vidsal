@@ -129,6 +129,11 @@ def sha256_file(path: Union[str, Path]) -> str:
 
 
 def fingerprint_state_dict(state: Mapping[str, torch.Tensor]) -> str:
+    """Canonical SHA-256 of a backbone (or module) state_dict.
+
+    Hashes sorted keys with float32 CPU bytes. This is the identity used for
+    reference-feature provenance — not a whole-model checkpoint file hash.
+    """
     digest = hashlib.sha256()
     for key in sorted(state):
         tensor = state[key]
@@ -140,6 +145,240 @@ def fingerprint_state_dict(state: Mapping[str, torch.Tensor]) -> str:
         digest.update(str(array.shape).encode("utf-8"))
         digest.update(np.ascontiguousarray(array).tobytes())
     return digest.hexdigest()
+
+
+REFERENCE_FEATURE_PROVENANCE_SCHEMA = "reference_backbone_features_v1"
+
+
+def extract_backbone_state_dict_from_checkpoint(
+    checkpoint_path: Union[str, Path],
+) -> Dict[str, torch.Tensor]:
+    """Load backbone tensors from a Kinetics .pth or full model checkpoint.
+
+    Full ExplainableVidSalModel checkpoints store keys under ``backbone.``.
+    Native VideoSwin Kinetics packs store SwinTransformer3D keys (possibly under
+    ``state_dict`` / ``model``). Returns a VideoSwinTransformer.state_dict-shaped
+    mapping (keys prefixed with ``backbone.``) suitable for fingerprinting.
+    """
+    path = Path(checkpoint_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(payload, dict) and any(
+        torch.is_tensor(v) for v in payload.values()
+    ) and not any(k in payload for k in ("model_state_dict", "state_dict", "model")):
+        raw = payload
+        source = "raw_state_dict"
+    elif isinstance(payload, dict) and "model_state_dict" in payload:
+        raw = payload["model_state_dict"]
+        source = "model_state_dict"
+    elif isinstance(payload, dict) and "state_dict" in payload:
+        raw = payload["state_dict"]
+        source = "state_dict"
+    elif isinstance(payload, dict) and "model" in payload and isinstance(payload["model"], dict):
+        raw = payload["model"]
+        source = "model"
+    elif isinstance(payload, dict):
+        raw = payload
+        source = "dict"
+    else:
+        raise ValueError(f"Unrecognized checkpoint format at {path}")
+
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"Checkpoint {path} does not contain a state_dict mapping.")
+
+    # Prefer full-model backbone.* keys when present.
+    backbone_prefixed = {
+        k: v for k, v in raw.items()
+        if isinstance(k, str) and k.startswith("backbone.") and torch.is_tensor(v)
+    }
+    if backbone_prefixed:
+        return dict(backbone_prefixed)
+
+    # Kinetics / Swin3D packs: wrap as VideoSwinTransformer.state_dict keys.
+    inner = {
+        k: v for k, v in raw.items()
+        if torch.is_tensor(v) and isinstance(k, str)
+    }
+    if not inner:
+        raise ValueError(
+            f"No tensor weights found in {path} (parsed as {source})."
+        )
+    return {f"backbone.{k}": v for k, v in inner.items()}
+
+
+def backbone_fingerprint_from_checkpoint(checkpoint_path: Union[str, Path]) -> str:
+    """Fingerprint backbone weights as they appear after the same load path as the cache.
+
+    Native Kinetics packs remapping keys inside ``SwinTransformer3D.init_weights``.
+    Fingerprinting raw file tensors therefore disagrees with
+    ``FrozenBackboneFeatureCache.reference_fingerprint``. This helper loads
+    weights the same way the cache does (or injects ``backbone.*`` from a full
+    model checkpoint into that module) and hashes the resulting state_dict.
+    """
+    path = Path(checkpoint_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+    # Preferred path: identical to FrozenBackboneFeatureCache construction.
+    try:
+        reference = build_reference_backbone(checkpoint=str(path), device="cpu")
+        return fingerprint_state_dict(reference.state_dict())
+    except Exception:
+        pass
+    # Full ExplainableVidSalModel checkpoint: copy backbone.* into a scaffold.
+    backbone_state = extract_backbone_state_dict_from_checkpoint(path)
+    reference = build_reference_backbone(
+        checkpoint=DEFAULT_REFERENCE_CHECKPOINT, device="cpu"
+    )
+    incompatible = reference.load_state_dict(backbone_state, strict=False)
+    if incompatible.missing_keys:
+        raise ValueError(
+            f"Could not inject backbone weights from {path} into VideoSwinTransformer; "
+            f"missing={incompatible.missing_keys[:8]}"
+        )
+    return fingerprint_state_dict(reference.state_dict())
+
+
+def build_reference_feature_provenance(
+    *,
+    backbone_fingerprint: str,
+    checkpoint_path: Optional[str] = None,
+    checkpoint_sha256: Optional[str] = None,
+    weight_scope: str,
+    preprocess: Optional[Mapping[str, Any]] = None,
+    temporal_selection: str = "last_backbone_step",
+    feature_module: str = "backbone",
+    feature_output_path: Sequence[Any] = ("stage4",),
+    feature_layout: str = "BCTHW_last_slice",
+    spatial_grid: str = "native_stage4_HxW_matching_concept_grid",
+    verified: bool = True,
+    notes: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Structured provenance for fixed-cluster / cache feature agreement."""
+    payload: Dict[str, Any] = {
+        "schema": REFERENCE_FEATURE_PROVENANCE_SCHEMA,
+        "backbone_class": "model.backbones.video_swin_custom.VideoSwinTransformer",
+        "backbone_fingerprint": str(backbone_fingerprint),
+        "weight_scope": str(weight_scope),
+        "temporal_selection": str(temporal_selection),
+        "feature_module": str(feature_module),
+        "feature_output_path": list(feature_output_path),
+        "feature_layout": str(feature_layout),
+        "spatial_grid": str(spatial_grid),
+        "preprocess": dict(preprocess or preprocess_config()),
+        "verified": bool(verified),
+        # Whole-file hashes are informational only; never treat them as the
+        # backbone identity used for training/cache agreement.
+        "source_checkpoint_path": None if checkpoint_path is None else str(checkpoint_path),
+        "source_checkpoint_sha256": (
+            None if checkpoint_sha256 is None else str(checkpoint_sha256)
+        ),
+        "checkpoint_file_hash_is_not_backbone_identity": True,
+    }
+    if notes:
+        payload["notes"] = str(notes)
+    return payload
+
+
+def provenance_from_cache(cache: "FrozenBackboneFeatureCache") -> Dict[str, Any]:
+    """Build provenance describing the active FrozenBackboneFeatureCache reference."""
+    return build_reference_feature_provenance(
+        backbone_fingerprint=cache.reference_fingerprint,
+        checkpoint_path=cache.checkpoint_path,
+        checkpoint_sha256=cache.checkpoint_sha256,
+        weight_scope="FrozenBackboneFeatureCache.reference.state_dict",
+        preprocess=cache.preprocess,
+        temporal_selection="last_backbone_step",
+        feature_module="backbone",
+        feature_output_path=list(STAGES),
+        feature_layout="BCTHW_last_slice_per_stage",
+        spatial_grid="native_stage_resolutions_after_resize_to",
+        verified=True,
+        notes=(
+            "Training queries must use this fingerprint. Flipped/padded views are "
+            "content-addressed separately; never reuse identity-view features for hflip."
+        ),
+    )
+
+
+def compare_reference_feature_provenance(
+    cluster_provenance: Optional[Mapping[str, Any]],
+    cache_provenance: Mapping[str, Any],
+    *,
+    context: str = "stage4 fixed-cluster feature supervision",
+) -> None:
+    """Raise if cluster and cache reference features cannot be verified as identical.
+
+    Missing provenance ⇒ unverified (do not invent agreement from feature dim).
+    Present but disagreeing fingerprints/preprocess ⇒ hard mismatch.
+    """
+    if not cluster_provenance or not isinstance(cluster_provenance, Mapping):
+        raise RuntimeError(
+            f"{context}: reference-feature provenance is UNVERIFIED.\n"
+            "The fixed patch-cluster bank does not record a backbone_fingerprint "
+            "(state_dict hash). A whole-model checkpoint file SHA alone is not "
+            "enough — it may include non-backbone weights and cannot be compared "
+            "to FrozenBackboneFeatureCache.reference_fingerprint.\n"
+            "Feature dimension matching is not sufficient.\n\n"
+            "Regenerate the fixed cluster bank with recorded provenance, using the "
+            "SAME frozen reference backbone as training (Kinetics / "
+            f"{DEFAULT_REFERENCE_CHECKPOINT}):\n"
+            "  Recommended (no prototype graph):\n"
+            "    python patch_clusters/form_patch_clusters.py --source-mode cache "
+            "--output-dir /data/quantization/zaima/videosal_datasets/dhf1k/"
+            "patch_cluster_frozen_ref --stride 1 --num-prototypes 256\n"
+            "  Then train with:\n"
+            "    python train.py --phase initial --visual-cluster-dir "
+            "/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster_frozen_ref\n"
+            "  Optional legacy path: rebuild graph descriptors with "
+            "DESCRIPTOR_FEATURE_SOURCE='frozen_reference', then "
+            "form_patch_clusters.py --source-mode graph --source-db <graph.sqlite> "
+            "into a NEW output dir. Do not overwrite existing banks/caches."
+        )
+    cluster_fp = cluster_provenance.get("backbone_fingerprint")
+    cache_fp = cache_provenance.get("backbone_fingerprint")
+    if not cluster_fp or not cache_fp:
+        raise RuntimeError(
+            f"{context}: provenance present but backbone_fingerprint missing on "
+            f"cluster={bool(cluster_fp)} cache={bool(cache_fp)}. Regenerate the "
+            "cluster bank / rebuild the cache with reference_feature_provenance."
+        )
+    if str(cluster_fp) != str(cache_fp):
+        raise RuntimeError(
+            f"{context}: CONFIRMED MISMATCH between fixed-cluster features and "
+            "FrozenBackboneFeatureCache.\n"
+            f"  cluster backbone_fingerprint={cluster_fp}\n"
+            f"  cache   backbone_fingerprint={cache_fp}\n"
+            f"  cluster checkpoint={cluster_provenance.get('source_checkpoint_path')}\n"
+            f"  cache   checkpoint={cache_provenance.get('source_checkpoint_path')}\n"
+            "Do not compare whole-model checkpoint file hashes to these fingerprints.\n"
+            "Fix: rebuild EITHER the graph descriptors+clusters OR the feature cache "
+            "so both use one fixed reference backbone (recommended: Kinetics "
+            f"{DEFAULT_REFERENCE_CHECKPOINT}). Do not overwrite existing banks/"
+            "caches — write to a new directory / new fingerprint namespace.\n"
+            "Example:\n"
+            "  python cache_backbone_features.py --split train "
+            f"--reference-checkpoint {DEFAULT_REFERENCE_CHECKPOINT}\n"
+            "  # and regenerate clusters from a graph whose "
+            "reference_feature_provenance.backbone_fingerprint matches the cache."
+        )
+    # Preprocess must also agree when both sides declare it.
+    c_pre = cluster_provenance.get("preprocess") or {}
+    q_pre = cache_provenance.get("preprocess") or {}
+    for key in ("resize_to", "normalize", "input_format", "mean", "std"):
+        if key in c_pre and key in q_pre and c_pre[key] != q_pre[key]:
+            raise RuntimeError(
+                f"{context}: backbone fingerprints match but preprocess[{key!r}] "
+                f"differs (cluster={c_pre[key]!r}, cache={q_pre[key]!r}). "
+                "Align resize/normalize/mean/std before training."
+            )
+    c_temp = cluster_provenance.get("temporal_selection")
+    q_temp = cache_provenance.get("temporal_selection")
+    if c_temp and q_temp and c_temp != q_temp:
+        raise RuntimeError(
+            f"{context}: temporal_selection differs "
+            f"(cluster={c_temp!r}, cache={q_temp!r})."
+        )
 
 
 def fingerprint_rgb_clip(rgb_btchw: torch.Tensor) -> str:
