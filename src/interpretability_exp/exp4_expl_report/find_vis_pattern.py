@@ -19,27 +19,44 @@ larger cache capacity. Mean visual similarity is evaluated separately against
 every graph member using stage4 cosine + (1 - RGB MAE) + RGB structure cosine.
 Choose the prototype with the HIGHEST mean (ties: lowest prototype ID).
 
-The winning prototype's complete group becomes the report's retrieved matches;
-there is no cross-video deduplication, similarity threshold or --top-k cap.
+After choosing the winning prototype using its full graph group, rank that
+group's patches by anchor-to-patch visual similarity and retain up to
+--query-patch-count matches (default 8; 0 keeps all, still similarity-ranked).
+This count excludes the anchor. No patches outside the winning graph group
+are added. Before ranking/limiting, a match must pass ALL three appearance
+thresholds: stage4 cosine >= MIN_STAGE4_COSINE - STAGE4_COSINE_RELAXATION
+(clamped to -1, or the explicit --min-stage4-cosine), RGB MAE <= MAX_RGB_MAE,
+and RGB structure cosine >=
+MIN_RGB_STRUCTURE_COSINE. After thresholds, keep at most one match per
+(dataset, video), excluding the anchor's own video, then retain up to
+--query-patch-count survivors. Groups with too few passing patches stay
+smaller; no failing patches are added.
 The anchor participates in the group mean if it is already a graph member,
 but is removed from matches so it appears exactly once in the model's inputs.
-One Gemini request receives the anchor first plus all other winning-group
-patches, in their graph activation-rank order, using the unchanged prompt.
+One Gemini request receives the anchor first plus the selected matches in
+descending visual-similarity order (ties: node ID), using the unchanged prompt.
 Candidate IDs, activations, group scores and winner are saved in report.json;
 prototype overlap still uses the original stored top-k candidate IDs.
 
 The HTML template, visible wording, context-crop prompt, image preprocessing,
 rate limits, retry/resume behavior and saliency overlay remain unchanged.
---patch-grid-cols controls layout (default graph N + 1 on new retrieval runs).
---top-k and old visual-graph/threshold options are accepted for command-line
-compatibility but do not limit or filter the new prototype-group retrieval.
+--patch-grid-cols controls layout (default capped query count + 1 on new runs).
+--top-k and old visual-graph options are accepted for compatibility. Metric
+threshold CLI options actively filter matches within the winning prototype.
 --min-group-size still controls the minimum number of retrieved matches needed
 to query Gemini; the anchor is not counted toward that minimum.
 
-Graph files remain read-only. Only the selected frame's original full temporal
-window is replayed; raw stage4 features, loader-RGB descriptors, activations,
-assignments, patch saliency, checkpoint and evaluation provenance are checked
-against the prototype cache. Groups/descriptors are reused across anchors.
+Graph files remain read-only. The requested target need not be stored in the
+graph: an absent target is inferred using its exact full-history dataset window,
+independently of graph extraction stride. Its descriptors and native activations
+are kept in memory under negative report-local IDs. Stored targets retain all
+descriptor/assignment/saliency replay checks. Both modes require the graph's
+prediction checkpoint and recorded appearance-feature source. A full temporal
+history and an eligible DatasetLoader window (including its required files)
+are still required. Groups/descriptors are reused across anchors.
+--dataset-dir overrides the on-disk root from the graph manifest
+(generate_prot_graph DATASET_ROOTS) for both stored-frame replay and on-demand
+targets (e.g. a val path while the graph was built from train).
 
 Set GEMINI_API_KEY in the environment or privately below before requesting
 answers. --prepare-only sends no API requests. --describe-only --output RUN_DIR
@@ -94,24 +111,21 @@ GEMINI_MODEL = "gemini-3.5-flash-lite"
 MIN_REQUEST_INTERVAL_SECONDS = 65.0
 SALIENCY_PERCENTILE = 0.97
 TOP_K = 30  # Legacy CLI default; prototype groups are never truncated.
+QUERY_PATCH_COUNT = 8  # Retrieved LLM matches, excluding anchor; 0 keeps all.
 ANCHOR_PROTOTYPE_COUNT = 8
 PROTOTYPE_RETRIEVAL_MODE = "top8_activation_best_mean_visual_group_v1"
 PATCH_GRID_COLS = None  # None selects top_k + 1; CLI can override with an integer.
 MIN_GROUP_SIZE = 2
-STAGE4_COSINE_RELAXATION = 0.2
-MAX_RGB_MAE = 0.6
-MIN_RGB_STRUCTURE_COSINE = 0.2
+MIN_STAGE4_COSINE = 0.0  # Absolute minimum cosine; -1.0 disables the feature cutoff.
+STAGE4_COSINE_RELAXATION = 0.0  # Optional subtraction from MIN_STAGE4_COSINE; 0 leaves it unchanged.
+MAX_RGB_MAE = 1.0
+MIN_RGB_STRUCTURE_COSINE = 0.0
 API_IMAGE_MAX_SIDE = 256
 API_JPEG_QUALITY = 90
-API_CONTEXT_PADDING = 0.5  # Fraction of original patch width/height on EACH side.
+API_CONTEXT_PADDING = 2.0  # Fraction of original patch width/height on EACH side.
 API_CONTEXT_BOX_WIDTH = 2  # Drawn in transmitted-image pixels, after downscaling.
 API_CONTEXT_MODE = "padded_patch_red_box_v1"
-CONTEXT_INSTRUCTIONS = """Each image is a context crop. The RED RECTANGLE marks the original target patch.
-Compare only the visual content INSIDE the rectangles. Use the surroundings
-only to help identify what the boxed content depicts. Ignore the red outlines
-themselves. Distinguish visible appearance from uncertain semantic inferences.
-The first image is the ANCHOR PATCH; subsequent images are numbered matches.
-
+CONTEXT_INSTRUCTIONS = """
 """
 HEATMAP_ALPHA = 0.5  # Overlay opacity for predicted saliency on the RGB frame.
 HEATMAP_DISPLAY_FORMAT = "jet_overlay_v1"
@@ -227,7 +241,7 @@ def load_module(path, name):
     return module
 
 
-def select_frame(con, video, dataset=None, frame_name=None, frame_no=None):
+def select_frame(con, video, dataset=None, frame_name=None, frame_no=None, required=True):
     conditions, values = ["video=?"], [video]
     if dataset is not None:
         conditions.append("dataset=?"); values.append(dataset)
@@ -239,10 +253,111 @@ def select_frame(con, video, dataset=None, frame_name=None, frame_no=None):
         conditions.append("target_index=?"); values.append(frame_no - 1)
     rows = con.execute("SELECT * FROM frames WHERE " + " AND ".join(conditions), values).fetchall()
     if not rows:
+        if not required:
+            return None
         raise ValueError("Requested target frame is absent from the graph. It must be an extracted target frame with a full temporal history; check --frame-name, --frame-no, --dataset and graph extraction stride/coverage. No nearby frame will be substituted.")
     if len(rows) != 1:
         raise ValueError("Frame is ambiguous across graph datasets/windows. Specify --dataset or use a graph with unique target windows.")
     return dict(rows[0])
+
+
+def deterministic_dataset(ev, root, length, stride):
+    """Opt out of training's random sampling when supported by this loader."""
+    import inspect
+    kwargs = dict(window_len=length, stride=stride)
+    if "random_train_sampling" in inspect.signature(ev.DatasetLoader).parameters:
+        kwargs["random_train_sampling"] = False
+    return ev.DatasetLoader(str(root), **kwargs)
+
+
+def dataset_roots_for_args(args, manifest):
+    """Roots used to locate videos on disk.
+
+    --dataset-dir replaces manifest dataset_roots (from generate_prot_graph
+    DATASET_ROOTS). Optional --dataset names the override label.
+    """
+    override = getattr(args, "dataset_dir", None)
+    if override is not None:
+        root = Path(override).expanduser().resolve()
+        if not root.is_dir():
+            raise FileNotFoundError(f"--dataset-dir is not a directory: {root}")
+        label = args.dataset or root.name or "dataset"
+        return {str(label): str(root)}
+    roots = dict(manifest.get("dataset_roots") or {})
+    if not roots:
+        raise ValueError(
+            "Graph manifest has no dataset_roots. Pass --dataset-dir to locate video frames."
+        )
+    if args.dataset is not None:
+        if args.dataset not in roots:
+            raise ValueError(f"Unknown dataset {args.dataset!r}; choose from {list(roots)}.")
+        return {args.dataset: roots[args.dataset]}
+    return roots
+
+
+def resolve_load_root(args, frame, manifest):
+    """Filesystem root for replaying one selected/on-demand frame."""
+    override = getattr(args, "dataset_dir", None)
+    if override is not None:
+        root = Path(override).expanduser().resolve()
+        if not root.is_dir():
+            raise FileNotFoundError(f"--dataset-dir is not a directory: {root}")
+        return str(root)
+    if frame.get("dataset_root"):
+        return str(Path(frame["dataset_root"]).resolve())
+    roots = manifest.get("dataset_roots") or {}
+    if frame["dataset"] not in roots:
+        raise ValueError(
+            f"No filesystem root for dataset {frame['dataset']!r}. "
+            "Pass --dataset-dir or rebuild the graph with that root recorded."
+        )
+    return str(Path(roots[frame["dataset"]]).resolve())
+
+
+def resolve_query_window(args, helper, ev, manifest):
+    """Find the exact requested full-history window independently of graph stride."""
+    roots = dataset_roots_for_args(args, manifest)
+    length = int(manifest["window_len"])
+    found, failures = [], []
+    for label, root in roots.items():
+        dataset = deterministic_dataset(ev, root, length, stride=1)
+        mapping = getattr(dataset, "video_frame_names", None)
+        if isinstance(mapping, dict) and str(args.video_id) not in mapping:
+            continue
+        names = helper.frame_names_for_video(dataset, root, str(args.video_id))
+        if args.frame_name is not None:
+            positions = [i for i, name in enumerate(names) if name == args.frame_name]
+            if not positions:
+                continue
+            if len(positions) != 1:
+                raise ValueError("Requested frame filename is ambiguous within the video's loader frame list.")
+            target = positions[0]
+        else:
+            target = int(args.frame_no) - 1
+            if target < 0 or target >= len(names):
+                failures.append(f"{label}: requested frame position is outside 1..{len(names)}")
+                continue
+        start = target - length + 1
+        if start < 0:
+            failures.append(f"{label}/{args.video_id}/{names[target]} needs {length} history frames; only {target+1} available")
+            continue
+        index = next((i for i, (video, offset) in enumerate(dataset.windows)
+                      if str(video) == str(args.video_id) and int(offset) == start), None)
+        if index is None:
+            failures.append(f"{label}/{args.video_id}/{names[target]}: loader has no eligible full window ending at this target; check required maps/fixations")
+            continue
+        frame = dict(dataset=str(label), video=str(args.video_id), dataset_index=int(index),
+                     window_start=start, target_index=target, target_name=names[target],
+                     source_path=str((Path(root)/str(args.video_id)/'images'/names[target]).resolve()),
+                     thumb_path=None, window_names=json.dumps(names[start:target+1]),
+                     query_mode="on_demand", query_window_stride=1, dataset_root=str(Path(root).resolve()))
+        found.append((frame, dataset, index))
+    if len(found) > 1:
+        raise ValueError("Requested video/frame occurs in multiple dataset roots. Specify --dataset.")
+    if not found:
+        detail = "; ".join(failures) or "video/frame not found in the configured dataset roots"
+        raise ValueError(f"Cannot load the exact requested target: {detail}. No nearby frame is substituted.")
+    return found[0]
 
 
 def sort_key(hit):
@@ -301,6 +416,48 @@ def llm_selection(args):
     return "gemini", getattr(args, "gemini_model", GEMINI_MODEL)
 
 
+def resolve_match_thresholds(min_stage4_cosine=None,
+                             stage4_cosine_relaxation=STAGE4_COSINE_RELAXATION,
+                             max_rgb_mae=MAX_RGB_MAE,
+                             min_rgb_structure_cosine=MIN_RGB_STRUCTURE_COSINE):
+    """Use an explicit configured minimum; zero relaxation never implies 1.
+
+    An explicit absolute cosine cutoff overrides relaxation. The returned
+    effective thresholds are persisted so resumed reports use the same policy.
+    """
+    relaxation = float(stage4_cosine_relaxation)
+    if not math.isfinite(relaxation) or relaxation < 0:
+        raise ValueError("stage4_cosine_relaxation must be finite and nonnegative.")
+    baseline = float(MIN_STAGE4_COSINE)
+    if not math.isfinite(baseline) or not -1. <= baseline <= 1.:
+        raise ValueError("MIN_STAGE4_COSINE must be finite and in [-1, 1].")
+    minimum = max(-1., baseline - relaxation) if min_stage4_cosine is None else float(min_stage4_cosine)
+    limits = {"min_stage4_cosine": minimum, "max_rgb_mae": float(max_rgb_mae),
+              "min_rgb_structure_cosine": float(min_rgb_structure_cosine)}
+    for name, low, high in (("min_stage4_cosine", -1., 1.), ("max_rgb_mae", 0., 1.),
+                            ("min_rgb_structure_cosine", -1., 1.)):
+        if not math.isfinite(limits[name]) or not low <= limits[name] <= high:
+            raise ValueError(f"{name} must be finite and in [{low}, {high}].")
+    return {**limits, "policy": "all_three_metrics_v1", "operators": {
+                "stage4_cosine": ">=", "rgb_mae": "<=", "rgb_structure_cosine": ">="},
+            "cosine_source": "explicit_minimum" if min_stage4_cosine is not None else "settings_minimum_minus_relaxation",
+            "cosine_relaxation": relaxation, "cosine_baseline": baseline,
+            "scope": "non-anchor members of the chosen graph group; before ranking/count limit"}
+
+
+def failed_visual_thresholds(metrics, thresholds):
+    """Return every failed metric; missing/nonfinite values never pass."""
+    failed = []
+    for metric, cutoff, minimum in (
+            ("stage4_cosine", thresholds["min_stage4_cosine"], True),
+            ("rgb_mae", thresholds["max_rgb_mae"], False),
+            ("rgb_structure_cosine", thresholds["min_rgb_structure_cosine"], True)):
+        value = metrics.get(metric)
+        if value is None or not math.isfinite(value) or (value < cutoff if minimum else value > cutoff):
+            failed.append(metric)
+    return failed
+
+
 class PrototypeGroupRetriever:
     """Read-only access to the exact groups displayed by the prototype graph.
 
@@ -311,7 +468,8 @@ class PrototypeGroupRetriever:
         self.helper = helper
         self.directory = self.source_dir = Path(directory).resolve()
         required = ("connect_db", "get_node", "require_dense_cache", "load_descriptors",
-                    "visual_metrics", "Stage4Capture", "rgb_descriptor", "extract_stage")
+                    "visual_metrics", "Stage4Capture", "rgb_descriptor", "extract_stage",
+                    "restore_descriptor_settings", "build_descriptor_feature_provenance", "stage4_features_bhwc")
         missing = [name for name in required if not hasattr(helper, name)]
         if missing:
             raise ValueError(
@@ -332,13 +490,11 @@ class PrototypeGroupRetriever:
             if self.settings.get("version") != helper.SIMILARITY_VERSION:
                 raise ValueError("Prototype descriptor version differs from the loaded generator. Use the matching prototype script.")
             # Replay the descriptor source recorded at extraction time.
-            helper.STAGE4_FEATURE_MODULE = self.settings["feature_module"]
-            helper.STAGE4_FEATURE_OUTPUT_PATH = tuple(self.settings["feature_output_path"])
-            helper.STAGE4_FEATURE_LAYOUT = self.settings["feature_layout"]
-            helper.RGB_DESCRIPTOR_SIZE = int(self.settings["rgb_size"])
+            canonical = helper.restore_descriptor_settings(self.manifest, self.settings)
+            # Old schemas omit descriptor_feature_source, meaning model_backbone.
+            # Keep the disk manifest unchanged; canonical settings govern this replay.
+            self.manifest = dict(self.manifest, similarity_settings=canonical)
             helper.TOP_K = int(self.manifest["top_k"])
-            if helper.similarity_settings() != self.settings:
-                raise ValueError("Prototype descriptor semantics differ from the loaded generator.")
             snapshot_path = self.directory / "neighborhood.json"
             if snapshot_path.is_file():
                 snapshot = json.loads(snapshot_path.read_text())
@@ -415,6 +571,47 @@ class PrototypeGroupRetriever:
         except KeyError as error:
             raise ValueError(f"Patch {error.args[0]} is absent from its frame activation block.") from error
 
+    def register_query_frame(self, frame, info, features, rgb_descriptors, scores, percentiles):
+        """Register report-local anchors in memory only; SQLite remains read-only.
+
+        Negative IDs are allocated below both stored and prior in-memory IDs.
+        This preserves numeric IDs throughout the existing report/LLM pipeline.
+        """
+        h, w, m = int(info['h']), int(info['w']), int(info['m'])
+        count = h*w
+        features, rgb_descriptors = np.asarray(features), np.asarray(rgb_descriptors)
+        if (features.ndim != 2 or features.shape[0] != count or rgb_descriptors.ndim != 2
+                or rgb_descriptors.shape[0] != count or not np.isfinite(features).all()
+                or not np.isfinite(rgb_descriptors).all()):
+            raise ValueError("Invalid on-demand query descriptor dimensions/values.")
+        db_min = int(self.con.execute("SELECT COALESCE(MIN(id),0) FROM nodes").fetchone()[0])
+        first = min([0, db_min, *self._nodes.keys()]) - 1
+        frame_min = int(self.con.execute("SELECT COALESCE(MIN(id),0) FROM frames").fetchone()[0])
+        frame_id = min([0, frame_min, *self._activation_frames.keys()]) - 1
+        frame['id'] = frame_id
+        ids = [first-i for i in range(count)]
+        weights = np.asarray(info['weights'][0], dtype=np.float32).reshape(count, m)
+        if not np.isfinite(weights).all():
+            raise ValueError("Non-finite on-demand prototype activations.")
+        nodes = []
+        for i, nid in enumerate(ids):
+            row, col = divmod(i, w)
+            top = list(map(int, info['top'][0,row,col]))
+            active = sorted(set(map(int, info['active'][0,row,col][info['mask'][0,row,col]])))
+            node = {key:frame.get(key) for key in ('dataset','video','dataset_index','window_start',
+                    'target_index','target_name','source_path','input_h','input_w','thumb_path')}
+            node.update(id=nid, frame_id=frame_id, stage='stage4', row=row, col=col, grid_h=h, grid_w=w,
+                        pred_score=float(scores[row,col]), pred_percentile=float(percentiles[row,col]),
+                        gt_score=None, gt_percentile=None, topk_ids=top,
+                        topk_logits=list(map(float, info['logits'][0,row,col])), active_ids=active,
+                        active_weights=[float(weights[i,p]) for p in active],
+                        node_origin='on_demand_query', graph_node_id=None)
+            self._nodes[nid] = node
+            self._descriptors[nid] = (features[i].astype(np.float64), rgb_descriptors[i].astype(np.float64))
+            nodes.append(node)
+        self._activation_frames[frame_id] = ({nid:i for i,nid in enumerate(ids)}, weights)
+        return nodes
+
     def members(self, prototype_id):
         prototype_id = int(prototype_id)
         if not 0 <= prototype_id < self.prototype_count:
@@ -424,7 +621,12 @@ class PrototypeGroupRetriever:
                 JOIN nodes n ON n.id=p.node_id
                 WHERE p.stage='stage4' AND p.prototype_id=? AND p.rank<=? ORDER BY p.rank""",
                 (prototype_id, self.group_size)))
-            if (len(rows) != self.expected_group_size or
+            positive_counts = self.ranking_metadata.get("positive_patch_counts")
+            expected_count = self.expected_group_size
+            if (isinstance(positive_counts, list) and len(positive_counts) == self.prototype_count
+                    and all(type(count) is int and count >= 0 for count in positive_counts)):
+                expected_count = min(self.group_size, positive_counts[prototype_id])
+            if (len(rows) != expected_count or
                     [int(row["rank"]) for row in rows] != list(range(1, len(rows)+1)) or
                     any(row["stage"] != "stage4" for row in rows) or
                     len({int(row["node_id"]) for row in rows}) != len(rows)):
@@ -432,7 +634,9 @@ class PrototypeGroupRetriever:
             self._groups[prototype_id] = [dict(row) for row in rows]
         return self._groups[prototype_id]
 
-    def select(self, anchor):
+    def select(self, anchor, query_patch_count=QUERY_PATCH_COUNT, *,
+               min_stage4_cosine=None, stage4_cosine_relaxation=STAGE4_COSINE_RELAXATION,
+               max_rgb_mae=MAX_RGB_MAE, min_rgb_structure_cosine=MIN_RGB_STRUCTURE_COSINE):
         """Highest mean over all graph members among the anchor's top-8 activations.
 
         Self-membership contributes its actual similarity to that group's mean,
@@ -441,8 +645,13 @@ class PrototypeGroupRetriever:
         """
         if anchor.get("stage") != "stage4":
             raise ValueError("Prototype-group retrieval is defined for stage4 anchors.")
+        if isinstance(query_patch_count, bool) or not isinstance(query_patch_count, int) or query_patch_count < 0:
+            raise ValueError("query_patch_count must be an integer >= 0 (0 keeps all graph matches).")
+        thresholds = resolve_match_thresholds(min_stage4_cosine, stage4_cosine_relaxation,
+                                              max_rgb_mae, min_rgb_structure_cosine)
         weights = self.frame_activations(anchor["frame_id"], [anchor["id"]])[0]
-        candidates = np.lexsort((np.arange(self.prototype_count), -weights))[:min(ANCHOR_PROTOTYPE_COUNT, self.prototype_count)]
+        ordered = np.lexsort((np.arange(self.prototype_count), -weights))
+        candidates = ordered[weights[ordered] > 0][:min(ANCHOR_PROTOTYPE_COUNT, self.prototype_count)]
         groups = {int(pid): self.members(pid) for pid in candidates}
         needed = [anchor["id"], *[row["node_id"] for group in groups.values() for row in group]]
         descriptors = self.descriptors(needed)
@@ -473,6 +682,30 @@ class PrototypeGroupRetriever:
         winner = min(eligible, key=lambda score: (-score["mean_visual_similarity"], score["prototype_id"])) if eligible else None
         selected_id = winner["prototype_id"] if winner else None
         hits = [dict(hit) for hit in candidate_hits.get(selected_id, []) if hit["node_id"] != anchor["id"]]
+        available_before_thresholds = len(hits)
+        rejected = []
+        passed = []
+        for hit in hits:
+            failed = failed_visual_thresholds(hit, thresholds)
+            if failed:
+                rejected.append({"node_id": hit["node_id"], "failed_metrics": failed,
+                                 **{metric: hit.get(metric) for metric in METRICS}})
+            else:
+                passed.append(hit)
+        hits = passed
+        # Reuse pair metrics from group selection; the query count never changes
+        # which full graph group wins or that group's mean similarity.
+        hits.sort(key=lambda hit: (-hit["visual_score"], hit["node_id"]))
+        available_before_video_dedup = len(hits)
+        # At most one patch per (dataset, video), never from the anchor's video.
+        # Apply before query_patch_count so the LLM set is distinct-video first.
+        hits = unique_video_hits(
+            hits, anchor, query_patch_count,
+            lambda hit: video_key(self.node(hit["node_id"])),
+        )
+        available_query_patch_count = available_before_video_dedup
+        for rank, hit in enumerate(hits, 1):
+            hit["query_visual_similarity_rank"] = rank
         trace = {"mode": PROTOTYPE_RETRIEVAL_MODE,
                  "top_activated_prototype_ids": [int(p) for p in candidates],
                  "activation_source": "native cached visual_activations, full bank; ties by prototype ID",
@@ -483,6 +716,23 @@ class PrototypeGroupRetriever:
                  "candidate_scores": scores, "selected_prototype_id": selected_id,
                  "selected_mean_visual_similarity": winner["mean_visual_similarity"] if winner else None,
                  "selected_graph_patch_ids": winner["graph_patch_ids"] if winner else [],
+                 "query_patch_count": query_patch_count,
+                 "thresholds": thresholds,
+                 "available_before_thresholds": available_before_thresholds,
+                 "threshold_pass_count": len(passed),
+                 "threshold_rejected_count": len(rejected),
+                 "threshold_failure_counts": {metric: sum(metric in row["failed_metrics"] for row in rejected)
+                                              for metric in METRICS},
+                 "threshold_rejections": rejected,
+                 "available_before_video_dedup": available_before_video_dedup,
+                 "available_query_patch_count": available_query_patch_count,
+                 "returned_query_patch_count": len(hits),
+                 "query_patch_ranking": (
+                     "visual_score descending; node ID ascending for ties; "
+                     "one patch per (dataset, video), excluding anchor video; "
+                     "then query_patch_count (0 keeps all distinct-video survivors)"
+                 ),
+                 "video_deduplication": "one_match_per_dataset_video_excluding_anchor",
                  "returned_match_ids": [hit["node_id"] for hit in hits],
                  "anchor_removed_from_match_list": bool(winner and winner["anchor_is_graph_member"])}
         return hits, trace
@@ -498,8 +748,13 @@ def validate_retrieved_matches(anchor, matches, report):
     for node in matches:
         if node.get("stage") != "stage4":
             raise ValueError("Prototype-group matches must be stage4 patches.")
-        video_key(node)  # Metadata is still needed by the existing report.
-
+        thresholds = report.get("protocol", {}).get("thresholds")
+        if thresholds and thresholds.get("policy") == "all_three_metrics_v1":
+            failed = failed_visual_thresholds(node, thresholds)
+            if failed:
+                raise ValueError(f"Saved match {node['id']} fails required visual thresholds: {failed}. "
+                                 "Prepare a new report; failing patches cannot be sent to the LLM.")
+    validate_match_videos(anchor, matches)
 def video_key(node):
     """Video IDs are scoped by their graph dataset, as in cross-video retrieval."""
     if node.get("dataset") is None or node.get("video") is None:
@@ -508,6 +763,10 @@ def video_key(node):
 
 
 def unique_video_hits(hits, anchor, top_k, key_for_hit):
+    """Keep similarity-ordered hits with distinct (dataset, video), excluding the anchor video.
+
+    top_k=0 keeps every distinct-video survivor; top_k>0 stops after that many.
+    """
     seen = {video_key(anchor)}
     selected = []
     for hit in hits:
@@ -516,7 +775,7 @@ def unique_video_hits(hits, anchor, top_k, key_for_hit):
             continue
         seen.add(key)
         selected.append(hit)
-        if len(selected) >= top_k:
+        if top_k and len(selected) >= top_k:
             break
     return selected
 
@@ -526,8 +785,10 @@ def validate_match_videos(anchor, matches):
     for node in matches:
         key = video_key(node)
         if key in seen:
-            raise ValueError("Matches must come from distinct other videos (one patch per video per anchor). "
-                             "This saved report uses the old retrieval policy; prepare a new report with a new --output directory.")
+            raise ValueError(
+                "Matches must come from distinct other videos (one patch per video per anchor, "
+                "never the anchor's video). Prepare a new report with a new --output directory."
+            )
         seen.add(key)
 
 
@@ -619,7 +880,7 @@ def replay_frame(args, helper, graph, frame, manifest, outdir):
     evaluation = Path(args.evaluation or manifest["evaluation_file"]).resolve()
     checkpoint = Path(args.checkpoint or manifest["checkpoint"]).resolve()
     if helper.sha256_file(checkpoint) != manifest["checkpoint_sha256"]:
-        raise ValueError("Checkpoint differs from the graph's checkpoint. Regenerate the prototype graph for that checkpoint before comparing cached saliency labels.")
+        raise ValueError("Checkpoint differs from the graph's prototype bank. Use the graph's checkpoint or regenerate its prototype activations for this checkpoint; frozen appearance features alone do not establish prototype identity.")
     if helper.sha256_file(evaluation) != manifest["evaluation_sha256"]:
         raise ValueError("evaluation.py differs from the graph's extraction version. Restore it, or regenerate graphs with the current code.")
     helper.SRC_DIR, helper.EVALUATION_FILE = evaluation.parent, evaluation
@@ -628,15 +889,33 @@ def replay_frame(args, helper, graph, frame, manifest, outdir):
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable. Select an available GPU or pass --device cpu.")
-    root = manifest["dataset_roots"][frame["dataset"]]
     length = int(manifest["window_len"])
-    dataset = ev.DatasetLoader(root, window_len=length, stride=int(manifest["stride"]))
-    index = int(frame["dataset_index"])
+    on_demand = frame.get("query_mode") == "on_demand"
+    if on_demand:
+        query, dataset, index = resolve_query_window(args, helper, ev, manifest)
+        frame.update(query)
+        root = frame["dataset_root"]
+    else:
+        root = resolve_load_root(args, frame, manifest)
+        if getattr(args, "dataset_dir", None) is not None:
+            print(f"Using --dataset-dir {root} "
+                  f"(graph recorded {(manifest.get('dataset_roots') or {}).get(frame['dataset'])}).",
+                  flush=True)
+        dataset = deterministic_dataset(ev, root, length, stride=int(manifest["stride"]))
+        index = int(frame["dataset_index"])
+        if index < 0 or index >= len(dataset.windows):
+            raise ValueError(
+                f"dataset_index {index} is outside the loader built from {root} "
+                f"({len(dataset.windows)} windows). Check --dataset-dir coverage/stride."
+            )
     video, start = dataset.windows[index]
     names = helper.frame_names_for_video(dataset, root, str(video))
     expected = json.loads(frame["window_names"])
     if str(video) != frame["video"] or int(start) != frame["window_start"] or names[int(start):int(start)+length] != expected:
-        raise ValueError("Dataset window ordering differs from graph extraction; refusing a different temporal context.")
+        raise ValueError(
+            "Dataset window ordering differs from graph extraction; refusing a different temporal context. "
+            f"Loader root={root}; graph video/window={frame['video']}/{frame['window_start']}."
+        )
     batch = next(iter(DataLoader(Subset(dataset, [index]), batch_size=1, shuffle=False,
                                  num_workers=0, collate_fn=ev.video_saliency_collate_fn)))
     labels, rgb, sal, lengths, valid = helper.unpack_batch(batch)
@@ -644,6 +923,14 @@ def replay_frame(args, helper, graph, frame, manifest, outdir):
         raise ValueError("Replay did not return the exact full target window.")
     model = ev.build_model(device, device)
     ev.load_checkpoint(model, str(checkpoint)); model.eval()
+    # The prediction checkpoint supplies activations and saliency. Appearance
+    # features independently follow the source persisted in the graph manifest.
+    descriptor_provenance, reference_backbone = helper.build_descriptor_feature_provenance(
+        model, device, str(checkpoint), manifest=manifest,
+    )
+    descriptor_source = helper.DESCRIPTOR_FEATURE_SOURCE
+    print(f"Replay appearance descriptors: {descriptor_source}; "
+          f"backbone={descriptor_provenance.get('backbone_fingerprint', 'unverified')[:16]}…", flush=True)
     capture = helper.Stage4Capture(model)
     capture.reset()
     try:
@@ -662,32 +949,12 @@ def replay_frame(args, helper, graph, frame, manifest, outdir):
         h, w = info["h"], info["w"]
         if info["m"] != graph.prototype_count or info["weights"] is None:
             raise ValueError("Replay must expose native activations for the same full prototype bank.")
-        live_features = capture.last_frame(info, 1)[0].reshape(h*w, -1)
-        records = graph.con.execute("SELECT id,row,col,grid_h,grid_w,pred_score FROM nodes WHERE frame_id=? AND stage='stage4' ORDER BY row,col", (frame["id"],)).fetchall()
-        if len(records) != h*w or any((r["grid_h"], r["grid_w"], r["row"], r["col"]) != (h, w, i//w, i%w) for i, r in enumerate(records)):
-            raise ValueError("Replay stage4 grid differs from the graph.")
-        node_ids = [int(row["id"]) for row in records]
-        descriptors = graph.descriptors(node_ids)
-        cached = np.stack([descriptors[nid][0] for nid in node_ids])
-        cached_rgb = np.stack([descriptors[nid][1] for nid in node_ids])
+        live_features = helper.stage4_features_bhwc(
+            rgb, info, 1, capture=capture, reference_backbone=reference_backbone,
+        )[0].reshape(h*w, -1)
         live = live_features
-        if live.shape != cached.shape or not np.allclose(live, cached, atol=args.replay_atol, rtol=.005):
-            raise ValueError("Replay descriptors differ from cached graph descriptors. Check model source, checkpoint and preprocessing; do not mix graph versions.")
-        cached_activations = graph.frame_activations(frame["id"], node_ids)
         live_activations = info["weights"][0].reshape(h*w, info["m"])
-        if not np.allclose(live_activations, cached_activations, atol=args.replay_atol, rtol=.005):
-            raise ValueError("Replay prototype activations differ from the graph cache. Regenerate the prototype graph or restore the original model configuration.")
-        for i, nid in enumerate(node_ids):
-            row, col = divmod(i, w)
-            node = graph.node(nid)
-            top = list(map(int, info["top"][0, row, col]))
-            active = sorted(set(map(int, info["active"][0, row, col][info["mask"][0, row, col]])))
-            if top != node["topk_ids"] or active != node["active_ids"]:
-                raise ValueError(f"Replay assignments differ for patch {nid}; refusing mixed prototype-overlap metadata.")
         scores = F.adaptive_avg_pool2d(prediction, (h, w))[0, 0].numpy()
-        cached_scores = np.array([r["pred_score"] for r in records]).reshape(h, w)
-        if not np.allclose(scores, cached_scores, atol=args.replay_score_atol, rtol=.005):
-            raise ValueError("Replayed saliency differs from cached saliency. Check model source/configuration and graph provenance.")
         percentiles = helper.midrank_percentiles(scores).reshape(h, w)
         if rgb.shape[2] == 3:
             last_rgb = rgb[0, -1].detach().float().cpu()
@@ -699,13 +966,43 @@ def replay_frame(args, helper, graph, frame, manifest, outdir):
             last_rgb = last_rgb / 255
         if not bool(torch.isfinite(last_rgb).all()) or last_rgb.min() < -.01 or last_rgb.max() > 1.01:
             raise ValueError("Expected unnormalized RGB in [0,1] or [0,255].")
+        if on_demand:
+            frame['input_h'], frame['input_w'] = map(int, last_rgb.shape[-2:])
         if tuple(last_rgb.shape[-2:]) != (frame["input_h"], frame["input_w"]):
             raise ValueError("Replay RGB dimensions differ from the graph.")
         rgb_hwc = last_rgb.permute(1, 2, 0).numpy()
         live_rgb = np.stack([helper.rgb_descriptor(rgb_hwc, r, c, h, w)
                              for r in range(h) for c in range(w)])
-        if not np.allclose(live_rgb, cached_rgb, atol=1e-5, rtol=1e-5):
-            raise ValueError("Replay RGB descriptors differ from prototype graph extraction preprocessing.")
+        if on_demand:
+            records = graph.register_query_frame(frame, info, live_features, live_rgb, scores, percentiles)
+        else:
+            records = graph.con.execute("SELECT id,row,col,grid_h,grid_w,pred_score FROM nodes WHERE frame_id=? AND stage='stage4' ORDER BY row,col", (frame["id"],)).fetchall()
+            if len(records) != h*w or any((r["grid_h"], r["grid_w"], r["row"], r["col"]) != (h, w, i//w, i%w) for i, r in enumerate(records)):
+                raise ValueError("Replay stage4 grid differs from the graph.")
+            node_ids = [int(row["id"]) for row in records]
+            descriptors = graph.descriptors(node_ids)
+            cached = np.stack([descriptors[nid][0] for nid in node_ids])
+            cached_rgb = np.stack([descriptors[nid][1] for nid in node_ids])
+            if live.shape != cached.shape or not np.allclose(live, cached, atol=args.replay_atol, rtol=.005):
+                difference = (float(np.max(np.abs(live-cached))) if live.shape == cached.shape else None)
+                raise ValueError(f"Replay descriptors differ using recorded source {descriptor_source!r} "
+                                 f"(replay shape={live.shape}, cached shape={cached.shape}, max abs error={difference}). "
+                                 "Check recorded reference weights/preprocessing and graph provenance.")
+            cached_activations = graph.frame_activations(frame["id"], node_ids)
+            if not np.allclose(live_activations, cached_activations, atol=args.replay_atol, rtol=.005):
+                raise ValueError("Replay prototype activations differ from the graph cache. Regenerate the prototype graph or restore the original model configuration.")
+            for i, nid in enumerate(node_ids):
+                row, col = divmod(i, w)
+                node = graph.node(nid)
+                top = list(map(int, info["top"][0, row, col]))
+                active = sorted(set(map(int, info["active"][0, row, col][info["mask"][0, row, col]])))
+                if top != node["topk_ids"] or active != node["active_ids"]:
+                    raise ValueError(f"Replay assignments differ for patch {nid}; refusing mixed prototype-overlap metadata.")
+            cached_scores = np.array([r["pred_score"] for r in records]).reshape(h, w)
+            if not np.allclose(scores, cached_scores, atol=args.replay_score_atol, rtol=.005):
+                raise ValueError("Replayed saliency differs from cached saliency. Check model source/configuration and graph provenance.")
+            if not np.allclose(live_rgb, cached_rgb, atol=1e-5, rtol=1e-5):
+                raise ValueError("Replay RGB descriptors differ from prototype graph extraction preprocessing.")
         image = Image.fromarray((last_rgb.permute(1, 2, 0).numpy().clip(0, 1)*255).astype(np.uint8))
         image.save(outdir / "frame.png")
         np.save(outdir / "prediction.npy", prediction[0, 0].numpy(), allow_pickle=False)
@@ -730,16 +1027,23 @@ def replay_frame(args, helper, graph, frame, manifest, outdir):
             draw.text((box[0]+2, box[1]+2), str(node["id"]), fill="red", stroke_width=1, stroke_fill="white")
         overview.save(outdir / "salient_anchors.png")
         return anchors, {"checkpoint": str(checkpoint), "checkpoint_sha256": manifest["checkpoint_sha256"],
+            "anchor_source": "on_demand_dataset_window" if on_demand else "verified_graph_frame",
+            "anchor_frame_in_graph": not on_demand,
+            "query_window_stride": 1 if on_demand else int(manifest['stride']),
+            "anchor_id_scope": "negative report-local IDs; never written to graph" if on_demand else "graph node IDs",
+            "descriptor_feature_source": descriptor_source,
+            "reference_feature_provenance": descriptor_provenance,
             "evaluation_file": str(evaluation), "evaluation_sha256": manifest["evaluation_sha256"],
             "window_names": expected, "window_len": length, "grid": [h, w], "device": str(device),
-            "max_feature_difference": float(np.max(np.abs(live-cached))),
-            "max_score_difference": float(np.max(np.abs(scores-cached_scores))),
-            "max_rgb_descriptor_difference": float(np.max(np.abs(live_rgb-cached_rgb))),
-            "max_activation_difference": float(np.max(np.abs(live_activations-cached_activations)))}
+            "max_feature_difference": None if on_demand else float(np.max(np.abs(live-cached))),
+            "max_score_difference": None if on_demand else float(np.max(np.abs(scores-cached_scores))),
+            "max_rgb_descriptor_difference": None if on_demand else float(np.max(np.abs(live_rgb-cached_rgb))),
+            "max_activation_difference": None if on_demand else float(np.max(np.abs(live_activations-cached_activations)))}
     finally:
         capture.close()
         # No returned object retains GPU tensors. Release saliency before API requests.
         del model
+        del reference_backbone
         gc.collect()
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -748,43 +1052,41 @@ def replay_frame(args, helper, graph, frame, manifest, outdir):
 def prompt_for(count):
     schema = {
         "Description of each patch": [
-            {label: {"Low-level visual features": "...", "Semantic object or part": "..."}}
+            {label: {"Semantic object or part (inside patch)": "...", "Nearby objects (outside patch)": "...", "Color": "...", "Texture": "...", "Structural or geometric description": "..."}}
             for label in ["Anchor", *[f"Match {i}" for i in range(1, count + 1)]]],
+        # "Similarity in semantic objects or parts inside patches": "...",
+        # "Similarity in color": "...",
+        # "Similarity in texture": "...",
+        # "Similarity in geometry or structure": "...",
+        # "Similarity in semantic objects or parts in the nearby context outside patch": "...",
         "Description of the common visual pattern": "A concise 1–3 sentence description.",
         "Visual pattern title": "A short title, or None if there is no majority pattern.",
         "Supporting patches": [],
         "Non-supporting patches": [],
     }
-    return CONTEXT_INSTRUCTIONS + f"""Your task is to identify the visual pattern shared by most of the given patches. Observe each patch, and report the visual pattern present in STRICTLY MORE THAN HALF of the {count + 1} patches as the common visual pattern.
+    return CONTEXT_INSTRUCTIONS + f"""Your task is to identify the visual pattern shared by most of the given images. Observe each image, and report the visual pattern present in STRICTLY MORE THAN HALF of the {count + 1} images as the common visual pattern.
 
 Each image contains two regions:
 
-- **Target patch:** ONLY the content inside the red rectangle. This is the region you must describe and compare.
+- **Target patch:** ONLY the content inside the red rectangle.
 - **Surrounding context:** The content outside the rectangle. Use it only to help recognize what the patch depicts.
 
 The first image is the anchor. Subsequent images are labeled Match 1, Match 2, and so on. Use these labels in your answer.
 
-**Rules:**
+**Rules for describing the patches:**
+1. For color, textures, geometry or structure, describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.
+2. For identifying semantic objects or parts inside patches, use the surrouding context. 
 
-1. Describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.
-2. Context may help identify a boxed object part, but your description must remain specific to that part. For example, if the box contains dark hair and a small area of skin, describe those features—not the person's face, clothing, or surroundings outside the box.
-3. If an object extends outside the box, describe only its visible portion inside the box. Do not attribute its unseen features to the patch.
-4. Identify shared colors, textures, edge orientations, shapes, contrasts, or semantic objects or parts. 
-6. Ignore the red rectangles themselves. Do not count features outside the boxes as supporting evidence.
-7. If there is no clear pattern shared by most target patches, state this explicitly.
-
-Before answering, check that every described feature belongs inside a target box.
+**Rules for identifying the visual pattern:**
+4. From the image descriptions you just generated + the images, identify similarities in 1) color (single color or multiple colors), 2) texture (grainy, coarse, smooth, polished, single texture, multiple textures, etc.), 3) edge orientations, 4) shapes, 5) contrasts, or 6) semantic objects or parts inside patches, 7) nearby semantic objects or parts.. 
+5. For finding visual pattern, prioritize the content inside the red boxed regions first. If not pattern found, then look at the surrouding region. 
 
 Return ONLY one valid JSON object with the following schema (replace the placeholders):
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
 Use arrays of exact image labels for Supporting patches and Non-supporting patches,
 for example ["Anchor", "Match 2"]. Every label must appear in exactly one of these
-two arrays. Include one description for every image, in the given image order.
-If no majority pattern is found, set Visual pattern title to "None", explain why
-in the common-pattern description, use an empty supporting array, and put all
-labels in the non-supporting array. Never invent semantic identities; state
-uncertainty when a visible object or part cannot be confidently identified."""
+two arrays. Include one description for every image, in the given image order. """
 
 
 def new_anchor_query(anchor, matches, minimum):
@@ -901,7 +1203,7 @@ class GeminiDescriber:
         original_parts.append({"text": prompt})
         config = {"maxOutputTokens": self.args.max_new_tokens}
         if self.model.startswith("gemini-3"):
-            config["thinkingConfig"] = {"thinkingLevel": "medium"}
+            config["thinkingConfig"] = {"thinkingLevel": "low"}
         body = json.dumps({"contents": [{"role": "user", "parts": parts}], "generationConfig": config}).encode()
         original_body = json.dumps({"contents": [{"role": "user", "parts": original_parts}],
                                     "generationConfig": config}).encode()
@@ -939,7 +1241,7 @@ class GeminiDescriber:
         body, original_body, image_stats = self._build_request_body(paths, prompt)
         self._log_payload_stats(paths, image_stats, body, original_body)
         if len(body) > 18*1024*1024:
-            raise ValueError("Inline image request exceeds this script's 18 MiB safety margin. Lower --top-k; no patches were silently dropped.")
+            raise ValueError("Inline image request exceeds this script's 18 MiB safety margin. Prepare a new report with a smaller --query-patch-count; no patches were silently dropped.")
         for attempt in range(self.args.max_retries+1):
             self._pace()
             try:
@@ -1121,8 +1423,13 @@ def extract_pattern_analysis(text, match_count):
         support = ("supporting" if label in (supporting or []) else
                    "non-supporting" if label in (nonsupporting or []) else "unknown")
         patches.append({"index": index, "label": label, "support": support,
-            "low_level_visual_features": as_text(details.get("Low-level visual features")),
-            "semantic_object_or_part": as_text(details.get("Semantic object or part"))})
+            "semantic_object_or_part": as_text(
+                details.get("Semantic object or part (inside patch)",
+                            details.get("Semantic object or part"))),
+            "nearby_objects_outside_patch": as_text(details.get("Nearby objects (outside patch)")),
+            "color": as_text(details.get("Color")),
+            "texture": as_text(details.get("Texture")),
+            "structural_or_geometric_description": as_text(details.get("Structural or geometric description"))})
     unknown = [p["label"] for p in patches if p["support"] == "unknown"]
     if fields and unknown:
         warnings.append("Support status was not available for: " + ", ".join(unknown) + ".")
@@ -1139,7 +1446,7 @@ REPORT_HTML = r'''<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Visual pattern explorer</title>
+<title>Explanation Report</title>
 <style>
 :root{color-scheme:light;--ink:#172b3c;--muted:#657382;--line:#dce3e8;--paper:#fff;--bg:#f3f5f6;--accent:#146b67;--warm:#e3a144;--shadow:0 8px 28px #172b3c08}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,select{font:inherit;color:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.4}button:focus-visible,select:focus-visible{outline:3px solid #359eac;outline-offset:3px}[hidden]{display:none!important}.page{max-width:1440px;margin:0 auto;padding:30px 32px 48px}.eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:10px;font-weight:750;color:var(--accent)}header{display:flex;justify-content:space-between;gap:24px;align-items:center;margin-bottom:24px}h1{font-size:30px;letter-spacing:-.04em;line-height:1.2;margin:5px 0 8px;font-weight:650}h2{font-size:17px;letter-spacing:-.02em;margin:0}h3{font-size:14px;margin:0;font-weight:650}p{margin:0}.muted{color:var(--muted)}.subline{font-size:13px}.status-badge,.tag{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:20px;background:white;padding:6px 11px;font-size:11px;white-space:nowrap}.status-dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}.top-meta{display:flex;flex-direction:column;align-items:flex-end;gap:9px}.paired{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{background:var(--paper);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}.card-head{padding:15px 18px;display:flex;align-items:center;justify-content:space-between;gap:10px}.card-title{font-size:13px;font-weight:650}.card-note{font-size:11px;color:var(--muted)}.viewport{position:relative;aspect-ratio:var(--frame-ratio,16/9);background:#111820;overflow:hidden}.viewport>img{display:block;width:100%;height:100%;object-fit:fill}.card-foot{padding:11px 18px;min-height:45px;display:flex;align-items:center;justify-content:space-between;gap:14px;font-size:11px;color:var(--muted)}.legend-key{display:inline-block;width:10px;height:10px;border:1.5px solid var(--warm);vertical-align:-1px;margin-right:6px}.scale{display:flex;align-items:center;gap:8px;font-size:10px}.scale-ramp{height:7px;width:92px;background:linear-gradient(90deg,#00007f,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000,#7f0000);border:1px solid #c6cdd4;border-radius:2px}.patch-box{position:absolute;border:1.5px solid #ffbf58;background:#ffc5670b;padding:0;min-width:0;transition:background .15s,border .15s;z-index:1}.patch-box>span{position:absolute;top:0;left:0;background:#ffbf58;color:#202d35;font-size:9px;font-weight:800;line-height:1.4;padding:1px 4px;pointer-events:none}.patch-box:hover,.patch-box.is-hover{background:#ffd27335;border-color:white;z-index:3}.patch-box.is-active{border:2px solid #5bfff0;background:#5bfff027;z-index:2;box-shadow:0 0 0 1px #103e3b}.patch-box.is-active>span{background:#5bfff0}.map-empty{height:100%;display:grid;place-items:center;padding:30px;color:#b3bfcc;text-align:center}.anchors-section{margin-top:28px}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:13px}.section-heading p{font-size:12px;color:var(--muted);margin-top:3px}.count{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}.anchor-strip{display:flex;gap:12px;overflow-x:auto;padding:3px 3px 12px;scroll-snap-type:x proximity}.anchor-card{flex:0 0 139px;scroll-snap-align:start;background:white;border:1px solid var(--line);padding:9px;border-radius:10px;text-align:left;box-shadow:0 2px 6px #172b3c03;transition:background .15s,border .15s}.anchor-card:hover,.anchor-card.is-hover{border-color:#7da4a1;background:#f6fbfa}.anchor-card.is-active{border:2px solid var(--accent);padding:8px;background:#f0f8f6}.anchor-card img{display:block;width:100%;height:78px;object-fit:contain;background:#edf0f2;border-radius:5px;margin-bottom:8px}.anchor-title{display:flex;justify-content:space-between;gap:5px;align-items:center;font-size:12px;font-weight:700}.anchor-score{font-size:10px;color:var(--accent);font-weight:650}.anchor-card small{display:block;margin-top:3px;font-size:10px;color:var(--muted)}.selection-prompt{margin-top:12px;border:1px dashed #bdccd2;border-radius:10px;padding:24px;text-align:center;color:var(--muted);background:#ffffff66;font-size:13px}.detail-panel{scroll-margin-top:18px;margin-top:18px}.detail-header{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 20px;border-bottom:1px solid var(--line);background:white}.detail-ident{display:flex;align-items:center;gap:13px;min-width:0}.detail-ident img{width:50px;height:50px;object-fit:contain;background:#eef1f3;border-radius:6px}.detail-ident p{font-size:11px;color:var(--muted);margin-top:3px}.controls{display:flex;align-items:center;gap:7px}.btn{border:1px solid var(--line);background:white;border-radius:7px;min-height:32px;padding:5px 10px;font-size:12px}.btn:hover:not(:disabled){background:#f3f7f7;border-color:#a5bcbb}.panel-body{display:grid;grid-template-columns:minmax(0,1fr) 340px;align-items:start}.matches-pane{padding:18px 20px;min-width:0}.pane-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:15px}.pane-heading label{font-size:11px;color:var(--muted);display:flex;gap:7px;align-items:center}.pane-heading select{font-size:11px;padding:5px 8px;border:1px solid var(--line);background:white;border-radius:6px;max-width:140px}.match-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(156px,1fr));gap:13px}.match-card{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:white;min-width:0}.match-rank{display:flex;justify-content:space-between;gap:4px;padding:7px 8px;font-size:10px;font-weight:650}.match-label{font-size:8px;font-weight:600;color:#687583;background:#eef1f4;border-radius:4px;padding:1px 4px;align-self:center}.match-label.salient{color:#146b67;background:#e2f1ed}.match-crop{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:#edf0f2}.context-frame{position:relative;margin:6px 6px 0;background:#111820}.context-frame>img{display:block;width:100%;height:auto}.context-box{position:absolute;border:1.5px solid #ffc264;box-sizing:border-box}.match-caption{padding:7px 8px;font-size:10px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}.match-caption strong{font-weight:600;color:#344b5c}.analysis-pane{padding:20px 22px;border-left:1px solid var(--line);background:#fafcfb;align-self:stretch;min-width:0}.analysis-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}.analysis-badge{font-size:9px;border-radius:5px;padding:3px 6px;background:#e4f2ec;color:#246854}.analysis-summary{font-size:11px;color:var(--muted);padding-bottom:16px;border-bottom:1px solid #e1e9e5;margin-bottom:16px}.analysis-copy{font-size:13px;line-height:1.8;overflow-wrap:anywhere}.analysis-copy p{margin:0 0 14px;white-space:pre-wrap}.analysis-copy h3{margin:18px 0 8px;font-size:14px}.analysis-copy strong{color:#173f3c;font-weight:650}.analysis-footnote{font-size:10px;line-height:1.6;color:#7c8984;margin-top:22px}.error-banner{padding:12px 16px;border:1px solid #edcfb2;border-radius:8px;color:#8d5329;background:#fff7ef;margin-bottom:18px;font-size:12px;overflow-wrap:anywhere}.footer-note{font-size:10px;line-height:1.6;color:var(--muted);margin-top:25px}.empty-matches{color:var(--muted);font-size:12px;padding:24px 0}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}@media(min-width:1150px){.analysis-pane{position:sticky;top:0}}@media(max-width:1050px){.page{padding:22px}.panel-body{grid-template-columns:minmax(0,1fr) 300px}.match-grid{grid-template-columns:repeat(auto-fill,minmax(115px,1fr))}}@media(max-width:760px){.page{padding:18px 14px 30px}header{align-items:flex-start;gap:10px}h1{font-size:25px}.top-meta .card-note{display:none}.paired{grid-template-columns:1fr;gap:14px}.card-head{padding:12px 14px}.card-foot{padding:10px 14px}.section-heading{align-items:flex-start}.panel-body{grid-template-columns:1fr}.analysis-pane{border-left:0;border-top:1px solid var(--line)}.detail-header{padding:14px;flex-wrap:wrap}.detail-ident{flex:1}.controls{margin-left:auto}.matches-pane{padding:16px 14px}.anchor-card{flex-basis:126px}.anchor-card img{height:68px}.match-grid{grid-template-columns:repeat(auto-fill,minmax(112px,1fr))}.pane-heading{flex-wrap:wrap}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 .prototype-summary{padding:15px 20px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr;gap:10px 25px;background:#fcfdfd}.prototype-summary h3{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px}.prototype-pills{display:flex;flex-wrap:wrap;gap:4px}.proto-pill{display:inline-flex;padding:2px 6px;border:1px solid #c5dcd7;background:#edf7f3;color:#255e52;border-radius:4px;font-size:10px;font-weight:650;line-height:1.5}.proto-pill.recurring{border-color:#e4d9bf;background:#faf6ec;color:#79613d}.prototype-coverage{grid-column:1/-1;font-size:10px;color:var(--muted)}.prototype-empty{font-size:10px;color:var(--muted)}.match-prototypes{padding:0 8px 10px}.prototype-row{margin-top:7px}.prototype-row>small{display:block;font-size:9px;color:var(--muted);margin-bottom:4px}.match-prototypes .proto-pill{font-size:10px;padding:1px 5px}@media(max-width:760px){.prototype-summary{padding:14px;grid-template-columns:1fr}.detail-ident{flex:1 1 100%;width:100%}.controls{width:100%;justify-content:flex-end}.analysis-pane{grid-row:1;border-top:0;border-bottom:1px solid var(--line)}}
@@ -1242,7 +1549,7 @@ function patchAnalysis(card,description){
  const text=({supporting:'Supporting','non-supporting':'Non-supporting',unknown:'Support not reported'})[status];
  area.append(make('span',`support-badge ${status}`,text));
  const list=make('dl');
- for(const [title,value] of [['Low-level visual features',description.low_level_visual_features],['Semantic object or part',description.semantic_object_or_part]]){
+ for(const [title,value] of [['Semantic object or part (inside patch)',description.semantic_object_or_part],['Nearby objects (outside patch)',description.nearby_objects_outside_patch],['Color',description.color],['Texture',description.texture],['Structural or geometric description',description.structural_or_geometric_description]]){
   list.append(make('dt','',title),make('dd','',value||'Not provided in the saved response.'));
  }
  area.append(list);card.append(area);
@@ -1450,18 +1757,32 @@ def prepare(args):
         raise FileExistsError(f"Output already exists: {outdir}. Use --describe-only to finish an existing report, or choose a new --output.")
     with PrototypeGroupRetriever(helper, source_dir) as graph:
         manifest = graph.manifest
-        frame = select_frame(graph.con, args.video_id, args.dataset, args.frame_name, args.frame_no)
+        frame = select_frame(graph.con, args.video_id, args.dataset, args.frame_name, args.frame_no,
+                             required=False) or {"query_mode": "on_demand"}
         provider, llm_model = llm_selection(args)
         minimum = getattr(args, "min_group_size", MIN_GROUP_SIZE)
+        query_patch_count = getattr(args, "query_patch_count", QUERY_PATCH_COUNT)
+        query_limit = min(query_patch_count or graph.group_size, graph.group_size)
+        threshold_args = {name: getattr(args, name) for name in (
+            "min_stage4_cosine", "stage4_cosine_relaxation", "max_rgb_mae", "min_rgb_structure_cosine")}
+        thresholds = resolve_match_thresholds(**threshold_args)
         print(f"Prototype graph: {source_dir}; N={graph.group_size} connected patches per prototype. "
               f"Each anchor compares its top-{min(ANCHOR_PROTOTYPE_COUNT, graph.prototype_count)} activated prototype groups.", flush=True)
-        if any(getattr(args, name, None) is not None for name in ("visual_graph_dir", "min_stage4_cosine")):
-            print("Prototype-group retrieval does not use visual-graph files or patch-edge thresholds.", flush=True)
+        if getattr(args, "visual_graph_dir", None) is not None:
+            print("Prototype-group retrieval does not use a separate visual graph.", flush=True)
+        print(f"All match thresholds required: stage4 cosine >= {thresholds['min_stage4_cosine']:.4f}; "
+              f"RGB MAE <= {thresholds['max_rgb_mae']:.4f}; "
+              f"RGB structure cosine >= {thresholds['min_rgb_structure_cosine']:.4f}.", flush=True)
         if args.top_k != TOP_K:
-            print("--top-k does not truncate prototype groups; all winning-group patches are retained. Use --patch-grid-cols for row size.", flush=True)
+            print("--top-k is a legacy option. Use --query-patch-count for matches and --patch-grid-cols for row size.", flush=True)
+        print(f"Within the winning graph group: retain up to {query_limit} non-anchor patches "
+              "by visual similarity; fewer available matches are not padded.", flush=True)
         outdir.mkdir(parents=True)
         (outdir / "crops").mkdir(); (outdir / "frames").mkdir()
-        print(f'Replaying {frame["video"]}/{frame["target_name"]} with the original temporal context…', flush=True)
+        if frame.get('query_mode') == 'on_demand':
+            print(f'Inferring {args.video_id}/{frame_label} from its exact full-history dataset window (not stored in graph)…', flush=True)
+        else:
+            print(f'Replaying {frame["video"]}/{frame["target_name"]} with the original temporal context…', flush=True)
         anchors, replay = replay_frame(args, helper, graph, frame, manifest, outdir)
         # GPU references from replay_frame have now left scope.
         gc.collect()
@@ -1479,16 +1800,18 @@ def prepare(args):
             "prototype_selection": "highest mean anchor-to-member visual similarity among top-8 activated prototype groups",
             "visual_similarity_formula": helper.SIMILARITY_FORMULA,
             "graph_group_size": graph.group_size, "graph_group_size_source": graph.group_size_source,
-            "top_k": graph.group_size, "legacy_requested_top_k": args.top_k,
-            "top_k_before_saliency_split": True, "thresholds": None,
+            "top_k": query_limit, "legacy_requested_top_k": args.top_k,
+            "query_patch_count": query_patch_count,
+            "query_patch_count_excludes_anchor": True,
+            "top_k_before_saliency_split": True, "thresholds": thresholds,
             "cached_graph_thresholds": None, "min_group_size": minimum,
             "heatmap_alpha": float(getattr(args, "heatmap_alpha", HEATMAP_ALPHA)),
-            "patch_grid_cols": int(getattr(args, "patch_grid_cols", PATCH_GRID_COLS) or (graph.group_size + 1)),
+            "patch_grid_cols": int(getattr(args, "patch_grid_cols", PATCH_GRID_COLS) or (query_limit + 1)),
             "heatmap_display": HEATMAP_DISPLAY_FORMAT,
             "llm_provider": provider, "llm_model": llm_model,
-            "other_videos_only": False, "max_matches_per_video": None,
-            "video_identity": "(dataset, video)", "top_k_after_video_deduplication": False,
-            "ranking": "select prototype by maximum mean visual similarity; return its complete connected group in graph activation-rank order",
+            "other_videos_only": True, "max_matches_per_video": 1,
+            "video_identity": "(dataset, video)", "top_k_after_video_deduplication": True,
+            "ranking": "select prototype by full-group mean visual similarity; filter its non-anchor patches by ALL metric thresholds; rank survivors by visual_score descending, node ID ascending; keep one patch per (dataset, video) excluding the anchor video; retain query_patch_count (0 means all distinct-video survivors)",
             "source_graph": str(source_dir), "prototype_graph": str(source_dir),
             "source_manifest_sha256": graph.manifest_sha256, "edge_source": graph.source,
             "anchor_in_llm_inputs": True, "queries_per_anchor": 1, "query_scope": "anchor_plus_all_matches",
@@ -1496,12 +1819,13 @@ def prepare(args):
             "empty_group_policy": "skip without refilling", "small_group_policy": "skip anchors below minimum retrieved matches"}, "anchors": []}
         for anchor in anchors:
             print(f'Selecting the best prototype group for salient node {anchor["id"]}…', flush=True)
-            hits, selection = graph.select(anchor)
+            hits, selection = graph.select(anchor, query_patch_count=query_patch_count, **threshold_args)
             matches = []
             for hit in hits:
                 node = graph.node(hit["node_id"])
                 node.update({key: float(hit[key]) for key in (*METRICS, "visual_score")})
                 node.update(selected_prototype_id=selection["selected_prototype_id"],
+                            query_visual_similarity_rank=hit["query_visual_similarity_rank"],
                             prototype_graph_rank=hit["prototype_graph_rank"],
                             prototype_activation=hit["prototype_activation"])
                 matches.append(save_match_assets(node, source_dir, outdir))
@@ -1513,7 +1837,10 @@ def prepare(args):
                 "query": new_anchor_query(anchor, matches, minimum)}
             report["anchors"].append(entry)
             print(f'Anchor {anchor["id"]}: prototype {selection["selected_prototype_id"]}, '
-                  f'mean similarity {selection["selected_mean_visual_similarity"]}, {len(matches)} matches.', flush=True)
+                  f'mean similarity {selection["selected_mean_visual_similarity"]}, '
+                  f'{selection["threshold_pass_count"]}/{selection["available_before_thresholds"]} pass all thresholds, '
+                  f'{selection["available_before_video_dedup"]} before video dedup → {len(matches)} distinct-video matches; '
+                  f'per-metric failures: {selection["threshold_failure_counts"]}.', flush=True)
             write_reports(report, outdir)
         write_reports(report, outdir)
     return report, outdir
@@ -1651,7 +1978,14 @@ def arguments():
     frame = parser.add_mutually_exclusive_group()
     frame.add_argument('--frame-no', type=int, help='One-based position in ordered loader frames, not a parsed filename number')
     frame.add_argument('--frame-name', help='Exact frame filename including extension')
-    parser.add_argument('--dataset')
+    parser.add_argument('--dataset', help='Dataset label when ambiguous, or the label for --dataset-dir')
+    parser.add_argument(
+        '--dataset-dir',
+        type=Path,
+        help='Override the on-disk video root from the prototype-graph manifest '
+             '(generate_prot_graph DATASET_ROOTS). Used for stored-frame replay and '
+             'on-demand targets not present in the graph.',
+    )
     parser.add_argument('--checkpoint', help='Defaults to graph checkpoint; must have the same SHA256')
     parser.add_argument('--evaluation', help='Defaults to evaluation.py path in graph manifest')
     parser.add_argument('--visual-script', type=Path, default=SCRIPT_DIR/'generate_vis_sim_graph.py', help=argparse.SUPPRESS)
@@ -1663,11 +1997,14 @@ def arguments():
     )
     parser.add_argument('--visual-graph-dir', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--prototype-graph-dir', type=Path, help='Prototype graph output directory (defaults to the prototype generator OUTPUT_DIR)')
-    parser.add_argument('--top-k', type=int, default=TOP_K, help='Legacy compatibility option; new retrieval uses every patch connected to the chosen prototype. Use --patch-grid-cols for layout.')
+    parser.add_argument('--top-k', type=int, default=TOP_K, help='Legacy compatibility option; use --query-patch-count for match count or --patch-grid-cols for layout.')
+    parser.add_argument('--query-patch-count', type=int, default=QUERY_PATCH_COUNT,
+                        help='Maximum most-similar matches from the winning prototype graph group, excluding anchor (default 8; 0 keeps all). Applied only to new retrieval runs; saved view/describe-only reports retain their matches.')
     parser.add_argument('--min-group-size', type=int, default=MIN_GROUP_SIZE, help=f'Minimum RETRIEVED matches per anchor (at least {MIN_GROUP_SIZE}); anchor not counted')
     parser.add_argument('--stage4-cosine-relaxation', type=float, default=STAGE4_COSINE_RELAXATION,
-                        help='Subtract from the cached stage4 cosine cutoff (default STAGE4_COSINE_RELAXATION)')
-    parser.add_argument('--min-stage4-cosine', type=float, help='Absolute cosine cutoff; overrides default relaxation')
+                        help='Optional subtraction from SETTINGS MIN_STAGE4_COSINE; zero leaves that minimum unchanged. Overridden by --min-stage4-cosine.')
+    parser.add_argument('--min-stage4-cosine', type=float,
+                        help=f'Absolute cosine cutoff overriding SETTINGS and relaxation; otherwise SETTINGS minimum={MIN_STAGE4_COSINE:g} minus relaxation. Use -1 to disable the feature cutoff.')
     parser.add_argument('--max-rgb-mae', type=float, default=MAX_RGB_MAE,
                         help='Absolute RGB MAE cutoff (default MAX_RGB_MAE)')
     parser.add_argument('--min-rgb-structure-cosine', type=float, default=MIN_RGB_STRUCTURE_COSINE,
@@ -1702,6 +2039,8 @@ def arguments():
     parser.add_argument('--port', type=int, default=8765, help='Local report HTTP port for --view-only (default 8765; 0 selects a free port)')
     parser.add_argument('--reset-descriptions', action='store_true', help='Archive prior answers before intentionally regenerating them; requires --describe-only')
     args = parser.parse_args()
+    if args.query_patch_count < 0:
+        parser.error('--query-patch-count must be >= 0 (0 keeps all).')
     if args.patch_grid_cols is not None and args.patch_grid_cols < 1:
         parser.error('--patch-grid-cols must be a positive integer.')
     if not 0 <= args.port <= 65535:
@@ -1818,3 +2157,4 @@ if __name__ == '__main__':
         main()
     except Exception as error:
         sys.exit(f'{type(error).__name__}: {error}')
+

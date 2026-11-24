@@ -8,13 +8,14 @@ python generate_vis_sim_graph.py
 # and other patches activating the same prototypes in other samples.
 # Use an existing checkpoint path (20261113_143711 was removed on this machine).
 python find_vis_pattern.py \
-  --video-id 001 \
+  --dataset-dir /data/quantization/zaima/videosal_datasets/dhf1k/train \
+  --video-id 090 \
   --frame-name 0032.png \
-  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261114_210151/last_checkpoint.pth \
-  --top-k 5 \
+  --checkpoint /home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261115_030905/epoch_119.pth \
+  --query-patch-count 5 \
   --device cuda:0 \
   --api-image-max-side 256 \
   --api-jpeg-quality 90
 
 # View report
-python find_vis_pattern.py --view-only --output /home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/001_0032.png
+python find_vis_pattern.py --view-only --output /home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/090_0032.png

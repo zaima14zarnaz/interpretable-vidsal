@@ -1,0 +1,4102 @@
+{
+  "schema_version": 2,
+  "status": "complete",
+  "created_at": "2026-11-15T18:22:01.782605+00:00",
+  "frame": {
+    "id": 1185,
+    "dataset": "train",
+    "video": "123",
+    "dataset_index": 1185,
+    "window_start": 64,
+    "target_index": 95,
+    "target_name": "0096.png",
+    "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/123/images/0096.png",
+    "thumb_path": "frames/frame_000001185.jpg",
+    "window_names": "[\"0065.png\", \"0066.png\", \"0067.png\", \"0068.png\", \"0069.png\", \"0070.png\", \"0071.png\", \"0072.png\", \"0073.png\", \"0074.png\", \"0075.png\", \"0076.png\", \"0077.png\", \"0078.png\", \"0079.png\", \"0080.png\", \"0081.png\", \"0082.png\", \"0083.png\", \"0084.png\", \"0085.png\", \"0086.png\", \"0087.png\", \"0088.png\", \"0089.png\", \"0090.png\", \"0091.png\", \"0092.png\", \"0093.png\", \"0094.png\", \"0095.png\", \"0096.png\"]",
+    "input_h": 360,
+    "input_w": 640
+  },
+  "replay": {
+    "checkpoint": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261115_030905/epoch_101.pth",
+    "checkpoint_sha256": "06ede0dc8b7de054efd3f5adb4453a01e7f877c7bcb9d061f7f686e33cb8eb79",
+    "descriptor_feature_source": "frozen_reference",
+    "reference_feature_provenance": {
+      "schema": "reference_backbone_features_v1",
+      "backbone_class": "model.backbones.video_swin_custom.VideoSwinTransformer",
+      "backbone_fingerprint": "b781948937ccb5ec1d4e425c4804479fc68106f5adff6949fb4b846c19c3f3dd",
+      "weight_scope": "FrozenBackboneFeatureCache / build_reference_backbone state_dict",
+      "temporal_selection": "last_backbone_step",
+      "feature_module": "frozen_reference_backbone",
+      "feature_output_path": [
+        "stage4"
+      ],
+      "feature_layout": "BCTHW_last_slice_to_BHWC",
+      "spatial_grid": "native_stage4_HxW; must match concept grid",
+      "preprocess": {
+        "input_format": "BTCHW",
+        "output_format": "BCTHW",
+        "resize_to": [
+          224,
+          384
+        ],
+        "normalize": true,
+        "mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "std": [
+          0.229,
+          0.224,
+          0.225
+        ],
+        "gradient_checkpointing": false,
+        "freeze_backbone": true,
+        "return_stages": [
+          "stage1",
+          "stage2",
+          "stage3",
+          "stage4"
+        ]
+      },
+      "verified": true,
+      "source_checkpoint_path": "/data/quantization/zaima/videoswin/swin_small_patch244_window877_kinetics400_1k.pth",
+      "source_checkpoint_sha256": "7e05aa13cfa1aa99fe78c1ccac96c263344b315fe5d98a165b77b1f7532ce500",
+      "checkpoint_file_hash_is_not_backbone_identity": true,
+      "notes": "Descriptors use the fixed Kinetics VideoSwin reference, independent of the eval checkpoint used for prototype assignments. Training must use the same FrozenBackboneFeatureCache fingerprint."
+    },
+    "evaluation_file": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/evaluation.py",
+    "evaluation_sha256": "facf896a387d1e02efc0417ef13452a8d16da127409f320265f9dd43a5e7c173",
+    "window_names": [
+      "0065.png",
+      "0066.png",
+      "0067.png",
+      "0068.png",
+      "0069.png",
+      "0070.png",
+      "0071.png",
+      "0072.png",
+      "0073.png",
+      "0074.png",
+      "0075.png",
+      "0076.png",
+      "0077.png",
+      "0078.png",
+      "0079.png",
+      "0080.png",
+      "0081.png",
+      "0082.png",
+      "0083.png",
+      "0084.png",
+      "0085.png",
+      "0086.png",
+      "0087.png",
+      "0088.png",
+      "0089.png",
+      "0090.png",
+      "0091.png",
+      "0092.png",
+      "0093.png",
+      "0094.png",
+      "0095.png",
+      "0096.png"
+    ],
+    "window_len": 32,
+    "grid": [
+      7,
+      12
+    ],
+    "device": "cuda:0",
+    "max_feature_difference": 0.0,
+    "max_score_difference": 1.9073486328125e-06,
+    "max_rgb_descriptor_difference": 0.0,
+    "max_activation_difference": 0.0
+  },
+  "protocol": {
+    "stage": "stage4",
+    "saliency_percentile": 0.97,
+    "percentile_definition": "ascending midrank of mean raw predicted saliency_map per stage4 grid cell within its own frame; ties preserved",
+    "retrieval_mode": "top8_activation_best_mean_visual_group_v1",
+    "anchor_prototype_count": 8,
+    "prototype_selection": "highest mean anchor-to-member visual similarity among top-8 activated prototype groups",
+    "visual_similarity_formula": "stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine",
+    "graph_group_size": 10,
+    "graph_group_size_source": "neighborhood.json:patches_per_prototype",
+    "top_k": 5,
+    "legacy_requested_top_k": 30,
+    "query_patch_count": 5,
+    "query_patch_count_excludes_anchor": true,
+    "top_k_before_saliency_split": true,
+    "thresholds": {
+      "min_stage4_cosine": 0.0,
+      "max_rgb_mae": 1.0,
+      "min_rgb_structure_cosine": 0.0,
+      "policy": "all_three_metrics_v1",
+      "operators": {
+        "stage4_cosine": ">=",
+        "rgb_mae": "<=",
+        "rgb_structure_cosine": ">="
+      },
+      "cosine_source": "settings_minimum_minus_relaxation",
+      "cosine_relaxation": 0.0,
+      "cosine_baseline": 0.0,
+      "scope": "non-anchor members of the chosen graph group; before ranking/count limit"
+    },
+    "cached_graph_thresholds": null,
+    "min_group_size": 2,
+    "heatmap_alpha": 0.5,
+    "patch_grid_cols": 6,
+    "heatmap_display": "jet_overlay_v1",
+    "llm_provider": "gemini",
+    "llm_model": "gemini-3.5-flash-lite",
+    "other_videos_only": false,
+    "max_matches_per_video": null,
+    "video_identity": "(dataset, video)",
+    "top_k_after_video_deduplication": false,
+    "ranking": "select prototype by full-group mean visual similarity; filter its non-anchor patches by ALL metric thresholds; rank survivors by visual_score descending, node ID ascending; retain query_patch_count (0 means all passing matches)",
+    "source_graph": "/data/quantization/zaima/videosal_datasets/dhf1k/explanation_graphs/prototype_graph_outputs",
+    "prototype_graph": "/data/quantization/zaima/videosal_datasets/dhf1k/explanation_graphs/prototype_graph_outputs",
+    "source_manifest_sha256": "fa916d68600065ed7dceed38297b923067509c1df12a2f5a9046689160a5dd85",
+    "edge_source": "prototype_patches_sqlite",
+    "anchor_in_llm_inputs": true,
+    "queries_per_anchor": 1,
+    "query_scope": "anchor_plus_all_matches",
+    "anchor_self_membership": "included in group mean; omitted from matches to avoid duplicate input",
+    "empty_group_policy": "skip without refilling",
+    "small_group_policy": "skip anchors below minimum retrieved matches",
+    "image_context_mode": "padded_patch_red_box_v1",
+    "context_padding_fraction_per_side": 1.0,
+    "context_target": "original patch inside red box; surrounding pixels provide context only"
+  },
+  "anchors": [
+    {
+      "anchor": {
+        "id": 99580,
+        "frame_id": 1185,
+        "stage": "stage4",
+        "row": 3,
+        "col": 4,
+        "grid_h": 7,
+        "grid_w": 12,
+        "pred_score": 84.45012664794922,
+        "pred_percentile": 1.0,
+        "gt_score": 0.4393758773803711,
+        "gt_percentile": 1.0,
+        "topk_ids": [
+          178,
+          247,
+          248
+        ],
+        "topk_logits": [
+          6.947544574737549,
+          6.556919574737549,
+          6.4453125
+        ],
+        "active_ids": [
+          2,
+          5,
+          110,
+          178,
+          187,
+          216,
+          247,
+          248
+        ],
+        "active_weights": [
+          0.08010724186897278,
+          0.08470460772514343,
+          0.0871012881398201,
+          0.251473993062973,
+          0.08470460772514343,
+          0.08956578373908997,
+          0.1701558232307434,
+          0.15218661725521088
+        ],
+        "dataset": "train",
+        "video": "123",
+        "target_name": "0096.png",
+        "target_index": 95,
+        "window_start": 64,
+        "dataset_index": 1185,
+        "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/123/images/0096.png",
+        "thumb_path": "frames/frame_000001185.jpg",
+        "input_h": 360,
+        "input_w": 640,
+        "replayed_pred_score": 84.45012664794922,
+        "replayed_pred_percentile": 1.0,
+        "crop_file": "crops/anchor_99580.png",
+        "frame_file": "frame.png",
+        "crop_source": "replayed model-input RGB",
+        "api_context": {
+          "mode": "padded_patch_red_box_v1",
+          "file": "api_crops/anchor_99580.png",
+          "padding_fraction_per_side": 1.0,
+          "frame_size": [
+            640,
+            360
+          ],
+          "original_patch_box": [
+            213,
+            154,
+            267,
+            206
+          ],
+          "context_crop_box": [
+            159,
+            102,
+            321,
+            258
+          ],
+          "context_size": [
+            162,
+            156
+          ],
+          "transmitted_size": [
+            162,
+            156
+          ],
+          "red_box_inclusive": [
+            54,
+            52,
+            107,
+            103
+          ],
+          "box_width": 2
+        }
+      },
+      "matches": [
+        {
+          "id": 350400,
+          "frame_id": 4171,
+          "stage": "stage4",
+          "row": 3,
+          "col": 0,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.7562456130981445,
+          "pred_percentile": 0.6024096385542169,
+          "gt_score": 0.0,
+          "gt_percentile": 0.3795180722891566,
+          "topk_ids": [
+            247,
+            144,
+            110
+          ],
+          "topk_logits": [
+            8.761160850524902,
+            8.258928298950195,
+            7.8125
+          ],
+          "active_ids": [
+            96,
+            110,
+            144,
+            162,
+            172,
+            214,
+            229,
+            247
+          ],
+          "active_weights": [
+            0.0708039328455925,
+            0.12371128052473068,
+            0.19332614541053772,
+            0.08370722830295563,
+            0.06332672387361526,
+            0.074867382645607,
+            0.0708039328455925,
+            0.3194533586502075
+          ],
+          "dataset": "train",
+          "video": "460",
+          "target_name": "0352.png",
+          "target_index": 351,
+          "window_start": 320,
+          "dataset_index": 4171,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/460/images/0352.png",
+          "thumb_path": "frames/frame_000004171.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.1644445909468374,
+          "rgb_mae": 0.17139225651044399,
+          "rgb_structure_cosine": 0.3367773756169583,
+          "visual_score": 1.3298297100533518,
+          "selected_prototype_id": 247,
+          "query_visual_similarity_rank": 1,
+          "prototype_graph_rank": 8,
+          "prototype_activation": 0.3194533586502075,
+          "crop_file": "crops/node_350400.png",
+          "frame_file": "frames/frame_000004171.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_350400.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              0,
+              93,
+              32,
+              123
+            ],
+            "context_crop_box": [
+              0,
+              63,
+              64,
+              153
+            ],
+            "context_size": [
+              64,
+              90
+            ],
+            "transmitted_size": [
+              64,
+              90
+            ],
+            "red_box_inclusive": [
+              0,
+              30,
+              31,
+              59
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 211338,
+          "frame_id": 2515,
+          "stage": "stage4",
+          "row": 6,
+          "col": 6,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.8755829334259033,
+          "pred_percentile": 0.39759036144578314,
+          "gt_score": 0.0,
+          "gt_percentile": 0.37349397590361444,
+          "topk_ids": [
+            247,
+            144,
+            172
+          ],
+          "topk_logits": [
+            9.09598159790039,
+            8.258928298950195,
+            8.147321701049805
+          ],
+          "active_ids": [
+            96,
+            110,
+            144,
+            172,
+            182,
+            200,
+            229,
+            247
+          ],
+          "active_weights": [
+            0.07029581815004349,
+            0.10389047861099243,
+            0.1452067345380783,
+            0.12987233698368073,
+            0.07859589159488678,
+            0.07029581815004349,
+            0.06648048758506775,
+            0.33536240458488464
+          ],
+          "dataset": "train",
+          "video": "275",
+          "target_name": "0544.png",
+          "target_index": 543,
+          "window_start": 512,
+          "dataset_index": 2515,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/275/images/0544.png",
+          "thumb_path": "frames/frame_000002515.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.060604514613930065,
+          "rgb_mae": 0.18439882198193422,
+          "rgb_structure_cosine": 0.42659670131453226,
+          "visual_score": 1.302802393946528,
+          "selected_prototype_id": 247,
+          "query_visual_similarity_rank": 2,
+          "prototype_graph_rank": 5,
+          "prototype_activation": 0.33536240458488464,
+          "crop_file": "crops/node_211338.png",
+          "frame_file": "frames/frame_000002515.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_211338.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              192,
+              185,
+              224,
+              216
+            ],
+            "context_crop_box": [
+              160,
+              154,
+              256,
+              216
+            ],
+            "context_size": [
+              96,
+              62
+            ],
+            "transmitted_size": [
+              96,
+              62
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 210918,
+          "frame_id": 2510,
+          "stage": "stage4",
+          "row": 6,
+          "col": 6,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.91205096244812,
+          "pred_percentile": 0.42168674698795183,
+          "gt_score": 0.0,
+          "gt_percentile": 0.41566265060240964,
+          "topk_ids": [
+            247,
+            144,
+            110
+          ],
+          "topk_logits": [
+            9.09598159790039,
+            8.426339149475098,
+            8.035714149475098
+          ],
+          "active_ids": [
+            48,
+            96,
+            110,
+            144,
+            172,
+            200,
+            229,
+            247
+          ],
+          "active_weights": [
+            0.06781721115112305,
+            0.0801762193441391,
+            0.11849275976419449,
+            0.17512096464633942,
+            0.09478751569986343,
+            0.0573633536696434,
+            0.06413643807172775,
+            0.34210553765296936
+          ],
+          "dataset": "train",
+          "video": "275",
+          "target_name": "0224.png",
+          "target_index": 223,
+          "window_start": 192,
+          "dataset_index": 2510,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/275/images/0224.png",
+          "thumb_path": "frames/frame_000002510.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.061012614231817815,
+          "rgb_mae": 0.17943828168790787,
+          "rgb_structure_cosine": 0.4087181621979381,
+          "visual_score": 1.290292494741848,
+          "selected_prototype_id": 247,
+          "query_visual_similarity_rank": 3,
+          "prototype_graph_rank": 2,
+          "prototype_activation": 0.34210553765296936,
+          "crop_file": "crops/node_210918.png",
+          "frame_file": "frames/frame_000002510.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_210918.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              192,
+              185,
+              224,
+              216
+            ],
+            "context_crop_box": [
+              160,
+              154,
+              256,
+              216
+            ],
+            "context_size": [
+              96,
+              62
+            ],
+            "transmitted_size": [
+              96,
+              62
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 211255,
+          "frame_id": 2514,
+          "stage": "stage4",
+          "row": 6,
+          "col": 7,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.927253246307373,
+          "pred_percentile": 0.2289156626506024,
+          "gt_score": 0.002143732039257884,
+          "gt_percentile": 0.8072289156626506,
+          "topk_ids": [
+            247,
+            144,
+            110
+          ],
+          "topk_logits": [
+            9.151785850524902,
+            8.59375,
+            8.035714149475098
+          ],
+          "active_ids": [
+            96,
+            110,
+            144,
+            172,
+            182,
+            200,
+            229,
+            247
+          ],
+          "active_weights": [
+            0.07451119273900986,
+            0.10414358228445053,
+            0.18196354806423187,
+            0.09314556419849396,
+            0.05636967718601227,
+            0.09314556419849396,
+            0.07878736406564713,
+            0.31793349981307983
+          ],
+          "dataset": "train",
+          "video": "275",
+          "target_name": "0480.png",
+          "target_index": 479,
+          "window_start": 448,
+          "dataset_index": 2514,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/275/images/0480.png",
+          "thumb_path": "frames/frame_000002514.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.035608870550037586,
+          "rgb_mae": 0.20241924340371042,
+          "rgb_structure_cosine": 0.39248695585419924,
+          "visual_score": 1.2256765830005265,
+          "selected_prototype_id": 247,
+          "query_visual_similarity_rank": 4,
+          "prototype_graph_rank": 10,
+          "prototype_activation": 0.31793349981307983,
+          "crop_file": "crops/node_211255.png",
+          "frame_file": "frames/frame_000002514.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_211255.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              224,
+              185,
+              256,
+              216
+            ],
+            "context_crop_box": [
+              192,
+              154,
+              288,
+              216
+            ],
+            "context_size": [
+              96,
+              62
+            ],
+            "transmitted_size": [
+              96,
+              62
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 218807,
+          "frame_id": 2604,
+          "stage": "stage4",
+          "row": 5,
+          "col": 11,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.916839599609375,
+          "pred_percentile": 0.3132530120481928,
+          "gt_score": 0.0,
+          "gt_percentile": 0.3674698795180723,
+          "topk_ids": [
+            247,
+            144,
+            110
+          ],
+          "topk_logits": [
+            9.207589149475098,
+            8.816964149475098,
+            8.203125
+          ],
+          "active_ids": [
+            110,
+            144,
+            172,
+            187,
+            200,
+            219,
+            229,
+            247
+          ],
+          "active_weights": [
+            0.12419048696756363,
+            0.2294432371854782,
+            0.09395337104797363,
+            0.06012163683772087,
+            0.05085403099656105,
+            0.05685853958129883,
+            0.04548361897468567,
+            0.3390951156616211
+          ],
+          "dataset": "train",
+          "video": "285",
+          "target_name": "0608.png",
+          "target_index": 607,
+          "window_start": 576,
+          "dataset_index": 2604,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/285/images/0608.png",
+          "thumb_path": "frames/frame_000002604.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.01891469091592438,
+          "rgb_mae": 0.19061742447471866,
+          "rgb_structure_cosine": 0.3559368408791168,
+          "visual_score": 1.1842341073203224,
+          "selected_prototype_id": 247,
+          "query_visual_similarity_rank": 5,
+          "prototype_graph_rank": 3,
+          "prototype_activation": 0.3390951156616211,
+          "crop_file": "crops/node_218807.png",
+          "frame_file": "frames/frame_000002604.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_218807.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              352,
+              154,
+              384,
+              185
+            ],
+            "context_crop_box": [
+              320,
+              123,
+              384,
+              216
+            ],
+            "context_size": [
+              64,
+              93
+            ],
+            "transmitted_size": [
+              64,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        }
+      ],
+      "prototype_selection": {
+        "mode": "top8_activation_best_mean_visual_group_v1",
+        "top_activated_prototype_ids": [
+          178,
+          247,
+          248,
+          216,
+          110,
+          5,
+          187,
+          2
+        ],
+        "activation_source": "native cached visual_activations, full bank; ties by prototype ID",
+        "visual_similarity_formula": "stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine",
+        "selection": "maximum mean anchor-to-group visual similarity; lowest prototype ID breaks ties",
+        "group_mean_scope": "every generated graph member, including anchor self-membership when present",
+        "graph_group_size": 10,
+        "group_size_source": "neighborhood.json:patches_per_prototype",
+        "candidate_scores": [
+          {
+            "prototype_id": 178,
+            "anchor_activation_rank": 1,
+            "anchor_activation": 0.251473993062973,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              226422,
+              437594,
+              216546,
+              226423,
+              331352,
+              228047,
+              303821,
+              421466,
+              328937,
+              355292
+            ],
+            "mean_visual_similarity": 1.0854238743987807,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 247,
+            "anchor_activation_rank": 2,
+            "anchor_activation": 0.1701558232307434,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              70252,
+              210918,
+              218807,
+              16378,
+              211338,
+              439445,
+              78342,
+              350400,
+              387864,
+              211255
+            ],
+            "mean_visual_similarity": 1.1642820149588666,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 248,
+            "anchor_activation_rank": 3,
+            "anchor_activation": 0.15218661725521088,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              272311,
+              272731,
+              185262,
+              238002,
+              272227,
+              132582,
+              451518,
+              104789,
+              84967,
+              104957
+            ],
+            "mean_visual_similarity": 0.8134341340307654,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 216,
+            "anchor_activation_rank": 4,
+            "anchor_activation": 0.08956578373908997,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              1451,
+              366978,
+              55305,
+              328853,
+              328686,
+              368593,
+              239308,
+              97207,
+              70733,
+              328685
+            ],
+            "mean_visual_similarity": 1.0878295913356695,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 110,
+            "anchor_activation_rank": 5,
+            "anchor_activation": 0.0871012881398201,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              441113,
+              57534,
+              440946,
+              300416,
+              279280,
+              203476,
+              441030,
+              104325,
+              386671,
+              163833
+            ],
+            "mean_visual_similarity": 0.9595913506768868,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 5,
+            "anchor_activation_rank": 6,
+            "anchor_activation": 0.08470460772514343,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              7442,
+              183411,
+              7274,
+              7526,
+              183242,
+              183494,
+              35236,
+              183495,
+              7862,
+              183579
+            ],
+            "mean_visual_similarity": 0.6678946324934693,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 187,
+            "anchor_activation_rank": 7,
+            "anchor_activation": 0.08470460772514343,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              395946,
+              299069,
+              299669,
+              326732,
+              396450,
+              299083,
+              396198,
+              286868,
+              232394,
+              140212
+            ],
+            "mean_visual_similarity": 0.7404434753654471,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 2,
+            "anchor_activation_rank": 8,
+            "anchor_activation": 0.08010724186897278,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              176932,
+              405918,
+              345906,
+              180389,
+              99209,
+              211986,
+              66892,
+              209504,
+              254923,
+              82839
+            ],
+            "mean_visual_similarity": 0.745992233794346,
+            "anchor_is_graph_member": false
+          }
+        ],
+        "selected_prototype_id": 247,
+        "selected_mean_visual_similarity": 1.1642820149588666,
+        "selected_graph_patch_ids": [
+          70252,
+          210918,
+          218807,
+          16378,
+          211338,
+          439445,
+          78342,
+          350400,
+          387864,
+          211255
+        ],
+        "query_patch_count": 5,
+        "thresholds": {
+          "min_stage4_cosine": 0.0,
+          "max_rgb_mae": 1.0,
+          "min_rgb_structure_cosine": 0.0,
+          "policy": "all_three_metrics_v1",
+          "operators": {
+            "stage4_cosine": ">=",
+            "rgb_mae": "<=",
+            "rgb_structure_cosine": ">="
+          },
+          "cosine_source": "settings_minimum_minus_relaxation",
+          "cosine_relaxation": 0.0,
+          "cosine_baseline": 0.0,
+          "scope": "non-anchor members of the chosen graph group; before ranking/count limit"
+        },
+        "available_before_thresholds": 10,
+        "threshold_pass_count": 7,
+        "threshold_rejected_count": 3,
+        "threshold_failure_counts": {
+          "stage4_cosine": 3,
+          "rgb_mae": 0,
+          "rgb_structure_cosine": 0
+        },
+        "threshold_rejections": [
+          {
+            "node_id": 70252,
+            "failed_metrics": [
+              "stage4_cosine"
+            ],
+            "stage4_cosine": -0.010431490908785115,
+            "rgb_mae": 0.1936339980456978,
+            "rgb_structure_cosine": 0.3687510212737015
+          },
+          {
+            "node_id": 78342,
+            "failed_metrics": [
+              "stage4_cosine"
+            ],
+            "stage4_cosine": -0.015049553532148369,
+            "rgb_mae": 0.18136429177441946,
+            "rgb_structure_cosine": 0.12486471224151971
+          },
+          {
+            "node_id": 387864,
+            "failed_metrics": [
+              "stage4_cosine"
+            ],
+            "stage4_cosine": -0.02473338477462669,
+            "rgb_mae": 0.1822713641061758,
+            "rgb_structure_cosine": 0.35277285636111366
+          }
+        ],
+        "available_query_patch_count": 7,
+        "returned_query_patch_count": 5,
+        "query_patch_ranking": "visual_score descending; node ID ascending for ties; anchor excluded before limiting",
+        "returned_match_ids": [
+          350400,
+          211338,
+          210918,
+          211255,
+          218807
+        ],
+        "anchor_removed_from_match_list": false
+      },
+      "matched_video_count": 3,
+      "groups": {
+        "all": [
+          350400,
+          211338,
+          210918,
+          211255,
+          218807
+        ],
+        "salient": [],
+        "non_salient": [
+          350400,
+          211338,
+          210918,
+          211255,
+          218807
+        ]
+      },
+      "query": {
+        "status": "complete",
+        "anchor_id": 99580,
+        "node_ids": [
+          350400,
+          211338,
+          210918,
+          211255,
+          218807
+        ],
+        "includes_anchor": true,
+        "matched_patch_count": 5,
+        "image_context_mode": "padded_patch_red_box_v1",
+        "image_order": [
+          {
+            "role": "anchor",
+            "node_id": 99580
+          },
+          {
+            "role": "match",
+            "node_id": 350400
+          },
+          {
+            "role": "match",
+            "node_id": 211338
+          },
+          {
+            "role": "match",
+            "node_id": 210918
+          },
+          {
+            "role": "match",
+            "node_id": 211255
+          },
+          {
+            "role": "match",
+            "node_id": 218807
+          }
+        ],
+        "prompt": "Each image is a context crop. The RED RECTANGLE marks the original target patch.\nCompare only the visual content INSIDE the rectangles. Use the surroundings\nonly to help identify what the boxed content depicts. Ignore the red outlines\nthemselves. Distinguish visible appearance from uncertain semantic inferences.\nThe first image is the ANCHOR PATCH; subsequent images are numbered matches.\n\nYour task is to identify the visual pattern shared by most of the given patches. Observe each patch, and report the visual pattern present in STRICTLY MORE THAN HALF of the 6 patches as the common visual pattern.\n\nEach image contains two regions:\n\n- **Target patch:** ONLY the content inside the red rectangle. This is the region you must describe and compare.\n- **Surrounding context:** The content outside the rectangle. Use it only to help recognize what the patch depicts.\n\nThe first image is the anchor. Subsequent images are labeled Match 1, Match 2, and so on. Use these labels in your answer.\n\n**Rules for describing the patches:**\n1. Describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.\n2. Context may help identify a boxed object part, but your description must remain specific to that part. For example, if the box contains dark hair and a small area of skin, describe those features\u2014not the person's face, clothing, or surroundings outside the box.\n3. If an object extends outside the box, describe only its visible portion inside the box. Do not attribute its unseen features to the patch.\n\n**Rules for identifying the visual pattern:**\n4. From the image descriptions you just generated, identify similarities in 1) color (single color or multiple colors), 2) textures, 3) edge orientations, 4) shapes, 5) contrasts, or 6) semantic objects or parts. \n6. Ignore the red rectangles themselves. Do not count features outside the boxes as supporting evidence.\n7. If there is no clear pattern shared by most target patches, state this explicitly.\n\nBefore answering, check that every described feature belongs inside a target box.\n\nReturn ONLY one valid JSON object with the following schema (replace the placeholders):\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"A concise 1\u20133 sentence description.\",\n  \"Visual pattern title\": \"A short title, or None if there is no majority pattern.\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": []\n}\n\nUse arrays of exact image labels for Supporting patches and Non-supporting patches,\nfor example [\"Anchor\", \"Match 2\"]. Every label must appear in exactly one of these\ntwo arrays. Include one description for every image, in the given image order.\nIf no majority pattern is found, set Visual pattern title to \"None\", explain why\nin the common-pattern description, use an empty supporting array, and put all\nlabels in the non-supporting array. Never invent semantic identities; state\nuncertainty when a visible object or part cannot be confidently identified.",
+        "anchor_index": 1,
+        "submitted_image_count": 6,
+        "submitted_match_count": 5,
+        "submitted_image_files": [
+          "api_crops/anchor_99580.png",
+          "api_crops/node_350400.png",
+          "api_crops/node_211338.png",
+          "api_crops/node_210918.png",
+          "api_crops/node_211255.png",
+          "api_crops/node_218807.png"
+        ],
+        "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"Airplane nose section with cockpit windows\",\n        \"Color\": \"White and dark grey\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"Horizontal window slits and curved fuselage contour\",\n        \"Low-level visual features\": \"High contrast between bright white fuselage and dark cockpit windows\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"Subtle curved edge at the bottom\",\n        \"Low-level visual features\": \"Uniform white gradient with low contrast\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"None prominent\",\n        \"Low-level visual features\": \"Bright white surface with minimal variation\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"None prominent\",\n        \"Low-level visual features\": \"Bright white surface with slight shading\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"None prominent\",\n        \"Low-level visual features\": \"Bright white surface\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White with small dark marks\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"Horizontal faint lines on the left\",\n        \"Low-level visual features\": \"Bright white surface with minor artifacts\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"The patches consistently depict a smooth, bright white aircraft fuselage surface, characteristic of the body of the airplane shown in the anchor frame.\",\n  \"Visual pattern title\": \"White Aircraft Fuselage\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 4\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": []\n}\n```",
+        "raw_response": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"Airplane nose section with cockpit windows\",\n        \"Color\": \"White and dark grey\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"Horizontal window slits and curved fuselage contour\",\n        \"Low-level visual features\": \"High contrast between bright white fuselage and dark cockpit windows\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"Subtle curved edge at the bottom\",\n        \"Low-level visual features\": \"Uniform white gradient with low contrast\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"None prominent\",\n        \"Low-level visual features\": \"Bright white surface with minimal variation\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"None prominent\",\n        \"Low-level visual features\": \"Bright white surface with slight shading\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"None prominent\",\n        \"Low-level visual features\": \"Bright white surface\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"Smooth white aircraft fuselage\",\n        \"Color\": \"White with small dark marks\",\n        \"Texture\": \"Smooth\",\n        \"Edge Description\": \"Horizontal faint lines on the left\",\n        \"Low-level visual features\": \"Bright white surface with minor artifacts\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"The patches consistently depict a smooth, bright white aircraft fuselage surface, characteristic of the body of the airplane shown in the anchor frame.\",\n  \"Visual pattern title\": \"White Aircraft Fuselage\",\n  \"Supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 4\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": []\n}\n```",
+                    "thoughtSignature": "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"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7489,
+            "candidatesTokenCount": 595,
+            "totalTokenCount": 8583,
+            "promptTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 6458
+              },
+              {
+                "modality": "TEXT",
+                "tokenCount": 1031
+              }
+            ],
+            "thoughtsTokenCount": 499,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-3.5-flash-lite",
+          "responseId": "Svj5avmmD9Who_UPzOveIA"
+        },
+        "prompt_mode": "gemini_single_anchor_all_matches",
+        "response_model": "gemini-3.5-flash-lite",
+        "input_tokens": 7489,
+        "generated_tokens": 595,
+        "thinking_tokens": 499,
+        "finish_reason": "STOP",
+        "api_attempts": 1,
+        "possibly_truncated": false,
+        "api_image_payload": {
+          "image_count": 6,
+          "images": [
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/anchor_99580.png",
+              "original_size": [
+                162,
+                156
+              ],
+              "transmitted_size": [
+                162,
+                156
+              ],
+              "original_bytes": 30141,
+              "transmitted_bytes": 6882,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_350400.png",
+              "original_size": [
+                64,
+                90
+              ],
+              "transmitted_size": [
+                64,
+                90
+              ],
+              "original_bytes": 7057,
+              "transmitted_bytes": 1939,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_211338.png",
+              "original_size": [
+                96,
+                62
+              ],
+              "transmitted_size": [
+                96,
+                62
+              ],
+              "original_bytes": 7803,
+              "transmitted_bytes": 2169,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_210918.png",
+              "original_size": [
+                96,
+                62
+              ],
+              "transmitted_size": [
+                96,
+                62
+              ],
+              "original_bytes": 7861,
+              "transmitted_bytes": 2187,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_211255.png",
+              "original_size": [
+                96,
+                62
+              ],
+              "transmitted_size": [
+                96,
+                62
+              ],
+              "original_bytes": 8999,
+              "transmitted_bytes": 2416,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_218807.png",
+              "original_size": [
+                64,
+                93
+              ],
+              "transmitted_size": [
+                64,
+                93
+              ],
+              "original_bytes": 4364,
+              "transmitted_bytes": 1557,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            }
+          ],
+          "original_request_bytes": 93427,
+          "transmitted_request_bytes": 27997,
+          "reduction_percent": 70.03328802166398
+        }
+      },
+      "prototype_overlap": {
+        "definition": "stage4 top-k prototype candidate IDs; not forward-valid participation",
+        "anchor_ids": [
+          178,
+          247,
+          248
+        ],
+        "match_count": 5,
+        "matches_with_metadata": 5,
+        "common_to_all": [
+          144,
+          247
+        ],
+        "recurring": [
+          {
+            "id": 110,
+            "count": 4
+          },
+          {
+            "id": 144,
+            "count": 5
+          },
+          {
+            "id": 247,
+            "count": 5
+          }
+        ],
+        "per_match": [
+          {
+            "node_id": 350400,
+            "topk_ids": [
+              110,
+              144,
+              247
+            ],
+            "with_anchor": [
+              247
+            ],
+            "across_matches": [
+              {
+                "id": 110,
+                "count": 4
+              },
+              {
+                "id": 144,
+                "count": 5
+              },
+              {
+                "id": 247,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 211338,
+            "topk_ids": [
+              144,
+              172,
+              247
+            ],
+            "with_anchor": [
+              247
+            ],
+            "across_matches": [
+              {
+                "id": 144,
+                "count": 5
+              },
+              {
+                "id": 247,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 210918,
+            "topk_ids": [
+              110,
+              144,
+              247
+            ],
+            "with_anchor": [
+              247
+            ],
+            "across_matches": [
+              {
+                "id": 110,
+                "count": 4
+              },
+              {
+                "id": 144,
+                "count": 5
+              },
+              {
+                "id": 247,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 211255,
+            "topk_ids": [
+              110,
+              144,
+              247
+            ],
+            "with_anchor": [
+              247
+            ],
+            "across_matches": [
+              {
+                "id": 110,
+                "count": 4
+              },
+              {
+                "id": 144,
+                "count": 5
+              },
+              {
+                "id": 247,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 218807,
+            "topk_ids": [
+              110,
+              144,
+              247
+            ],
+            "with_anchor": [
+              247
+            ],
+            "across_matches": [
+              {
+                "id": 110,
+                "count": 4
+              },
+              {
+                "id": 144,
+                "count": 5
+              },
+              {
+                "id": 247,
+                "count": 5
+              }
+            ]
+          }
+        ]
+      },
+      "pattern_analysis": {
+        "schema_version": 1,
+        "available": true,
+        "title": "White Aircraft Fuselage",
+        "description": "The patches consistently depict a smooth, bright white aircraft fuselage surface, characteristic of the body of the airplane shown in the anchor frame.",
+        "supporting_patches": [
+          "Anchor",
+          "Match 1",
+          "Match 2",
+          "Match 3",
+          "Match 4",
+          "Match 5"
+        ],
+        "supporting_count": 6,
+        "nonsupporting_patches": [],
+        "nonsupporting_count": 0,
+        "unknown_patches": [],
+        "patches": [
+          {
+            "index": 0,
+            "label": "Anchor",
+            "support": "supporting",
+            "semantic_object_or_part": "Airplane nose section with cockpit windows",
+            "color": "White and dark grey",
+            "texture": "Smooth",
+            "edge_description": "Horizontal window slits and curved fuselage contour",
+            "low_level_visual_features": "High contrast between bright white fuselage and dark cockpit windows"
+          },
+          {
+            "index": 1,
+            "label": "Match 1",
+            "support": "supporting",
+            "semantic_object_or_part": "Smooth white aircraft fuselage",
+            "color": "White",
+            "texture": "Smooth",
+            "edge_description": "Subtle curved edge at the bottom",
+            "low_level_visual_features": "Uniform white gradient with low contrast"
+          },
+          {
+            "index": 2,
+            "label": "Match 2",
+            "support": "supporting",
+            "semantic_object_or_part": "Smooth white aircraft fuselage",
+            "color": "White",
+            "texture": "Smooth",
+            "edge_description": "None prominent",
+            "low_level_visual_features": "Bright white surface with minimal variation"
+          },
+          {
+            "index": 3,
+            "label": "Match 3",
+            "support": "supporting",
+            "semantic_object_or_part": "Smooth white aircraft fuselage",
+            "color": "White",
+            "texture": "Smooth",
+            "edge_description": "None prominent",
+            "low_level_visual_features": "Bright white surface with slight shading"
+          },
+          {
+            "index": 4,
+            "label": "Match 4",
+            "support": "supporting",
+            "semantic_object_or_part": "Smooth white aircraft fuselage",
+            "color": "White",
+            "texture": "Smooth",
+            "edge_description": "None prominent",
+            "low_level_visual_features": "Bright white surface"
+          },
+          {
+            "index": 5,
+            "label": "Match 5",
+            "support": "supporting",
+            "semantic_object_or_part": "Smooth white aircraft fuselage",
+            "color": "White with small dark marks",
+            "texture": "Smooth",
+            "edge_description": "Horizontal faint lines on the left",
+            "low_level_visual_features": "Bright white surface with minor artifacts"
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "anchor": {
+        "id": 99592,
+        "frame_id": 1185,
+        "stage": "stage4",
+        "row": 4,
+        "col": 4,
+        "grid_h": 7,
+        "grid_w": 12,
+        "pred_score": 19.265165328979492,
+        "pred_percentile": 0.9879518072289156,
+        "gt_score": 0.12410658597946167,
+        "gt_percentile": 0.9759036144578314,
+        "topk_ids": [
+          122,
+          27,
+          158
+        ],
+        "topk_logits": [
+          7.003348350524902,
+          6.166294574737549,
+          6.110490798950195
+        ],
+        "active_ids": [
+          3,
+          27,
+          95,
+          100,
+          102,
+          122,
+          158,
+          205
+        ],
+        "active_weights": [
+          0.07557214796543121,
+          0.12487583607435226,
+          0.10861518234014511,
+          0.11484856903553009,
+          0.09187237173318863,
+          0.2884072959423065,
+          0.11809815466403961,
+          0.07771043479442596
+        ],
+        "dataset": "train",
+        "video": "123",
+        "target_name": "0096.png",
+        "target_index": 95,
+        "window_start": 64,
+        "dataset_index": 1185,
+        "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/123/images/0096.png",
+        "thumb_path": "frames/frame_000001185.jpg",
+        "input_h": 360,
+        "input_w": 640,
+        "replayed_pred_score": 19.26516342163086,
+        "replayed_pred_percentile": 0.9879518072289156,
+        "crop_file": "crops/anchor_99592.png",
+        "frame_file": "frame.png",
+        "crop_source": "replayed model-input RGB",
+        "api_context": {
+          "mode": "padded_patch_red_box_v1",
+          "file": "api_crops/anchor_99592.png",
+          "padding_fraction_per_side": 1.0,
+          "frame_size": [
+            640,
+            360
+          ],
+          "original_patch_box": [
+            213,
+            206,
+            267,
+            257
+          ],
+          "context_crop_box": [
+            159,
+            155,
+            321,
+            308
+          ],
+          "context_size": [
+            162,
+            153
+          ],
+          "transmitted_size": [
+            162,
+            153
+          ],
+          "red_box_inclusive": [
+            54,
+            51,
+            107,
+            101
+          ],
+          "box_width": 2
+        }
+      },
+      "matches": [
+        {
+          "id": 152768,
+          "frame_id": 1818,
+          "stage": "stage4",
+          "row": 4,
+          "col": 8,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.7878856658935547,
+          "pred_percentile": 0.6385542168674698,
+          "gt_score": 0.0,
+          "gt_percentile": 0.3855421686746988,
+          "topk_ids": [
+            27,
+            102,
+            106
+          ],
+          "topk_logits": [
+            8.147321701049805,
+            7.142857074737549,
+            6.724330425262451
+          ],
+          "active_ids": [
+            3,
+            27,
+            95,
+            102,
+            106,
+            158,
+            181,
+            205
+          ],
+          "active_weights": [
+            0.07662691175937653,
+            0.3655667304992676,
+            0.08567451685667038,
+            0.13388541340827942,
+            0.0880986824631691,
+            0.08102454990148544,
+            0.0880986824631691,
+            0.08102454990148544
+          ],
+          "dataset": "train",
+          "video": "194",
+          "target_name": "0032.png",
+          "target_index": 31,
+          "window_start": 0,
+          "dataset_index": 1818,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/194/images/0032.png",
+          "thumb_path": "frames/frame_000001818.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.3277950575411532,
+          "rgb_mae": 0.15508812751310566,
+          "rgb_structure_cosine": 0.45351944431811303,
+          "visual_score": 1.6262263743461605,
+          "selected_prototype_id": 27,
+          "query_visual_similarity_rank": 1,
+          "prototype_graph_rank": 6,
+          "prototype_activation": 0.3655667304992676,
+          "crop_file": "crops/node_152768.png",
+          "frame_file": "frames/frame_000001818.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_152768.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              256,
+              123,
+              288,
+              154
+            ],
+            "context_crop_box": [
+              224,
+              92,
+              320,
+              185
+            ],
+            "context_size": [
+              96,
+              93
+            ],
+            "transmitted_size": [
+              96,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 22216,
+          "frame_id": 264,
+          "stage": "stage4",
+          "row": 3,
+          "col": 4,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.298677444458008,
+          "pred_percentile": 0.8192771084337349,
+          "gt_score": 0.01756327971816063,
+          "gt_percentile": 0.9397590361445783,
+          "topk_ids": [
+            27,
+            181,
+            158
+          ],
+          "topk_logits": [
+            8.426339149475098,
+            7.421875,
+            7.142857074737549
+          ],
+          "active_ids": [
+            3,
+            27,
+            39,
+            102,
+            114,
+            158,
+            181,
+            210
+          ],
+          "active_weights": [
+            0.07812301814556122,
+            0.3624487519264221,
+            0.07597338408231735,
+            0.08734731376171112,
+            0.08260651677846909,
+            0.10042398422956467,
+            0.13274353742599487,
+            0.08033350855112076
+          ],
+          "dataset": "train",
+          "video": "029",
+          "target_name": "0096.png",
+          "target_index": 95,
+          "window_start": 64,
+          "dataset_index": 264,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/029/images/0096.png",
+          "thumb_path": "frames/frame_000000264.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.060681994029185345,
+          "rgb_mae": 0.10318476802300817,
+          "rgb_structure_cosine": 0.6619971063059762,
+          "visual_score": 1.6194943323121533,
+          "selected_prototype_id": 27,
+          "query_visual_similarity_rank": 2,
+          "prototype_graph_rank": 7,
+          "prototype_activation": 0.3624487519264221,
+          "crop_file": "crops/node_22216.png",
+          "frame_file": "frames/frame_000000264.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_22216.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              128,
+              93,
+              160,
+              123
+            ],
+            "context_crop_box": [
+              96,
+              63,
+              192,
+              153
+            ],
+            "context_size": [
+              96,
+              90
+            ],
+            "transmitted_size": [
+              96,
+              90
+            ],
+            "red_box_inclusive": [
+              32,
+              30,
+              63,
+              59
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 52373,
+          "frame_id": 623,
+          "stage": "stage4",
+          "row": 3,
+          "col": 5,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -0.6173451542854309,
+          "pred_percentile": 0.8192771084337349,
+          "gt_score": 0.005971740465611219,
+          "gt_percentile": 0.7831325301204819,
+          "topk_ids": [
+            27,
+            181,
+            114
+          ],
+          "topk_logits": [
+            7.868303298950195,
+            7.114955425262451,
+            6.668526649475098
+          ],
+          "active_ids": [
+            3,
+            16,
+            27,
+            95,
+            114,
+            158,
+            181,
+            205
+          ],
+          "active_weights": [
+            0.07297511398792267,
+            0.06711536645889282,
+            0.3579953908920288,
+            0.07934646308422089,
+            0.10785022377967834,
+            0.07716316729784012,
+            0.1685398519039154,
+            0.06901440024375916
+          ],
+          "dataset": "train",
+          "video": "063",
+          "target_name": "0416.png",
+          "target_index": 415,
+          "window_start": 384,
+          "dataset_index": 623,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/063/images/0416.png",
+          "thumb_path": "frames/frame_000000623.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.07206401679705074,
+          "rgb_mae": 0.12177885181154124,
+          "rgb_structure_cosine": 0.605135264197347,
+          "visual_score": 1.5554204291828566,
+          "selected_prototype_id": 27,
+          "query_visual_similarity_rank": 3,
+          "prototype_graph_rank": 9,
+          "prototype_activation": 0.3579953908920288,
+          "crop_file": "crops/node_52373.png",
+          "frame_file": "frames/frame_000000623.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_52373.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              160,
+              93,
+              192,
+              123
+            ],
+            "context_crop_box": [
+              128,
+              63,
+              224,
+              153
+            ],
+            "context_size": [
+              96,
+              90
+            ],
+            "transmitted_size": [
+              96,
+              90
+            ],
+            "red_box_inclusive": [
+              32,
+              30,
+              63,
+              59
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 191236,
+          "frame_id": 2276,
+          "stage": "stage4",
+          "row": 4,
+          "col": 4,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 1.4667317867279053,
+          "pred_percentile": 0.8554216867469879,
+          "gt_score": 0.009359932504594326,
+          "gt_percentile": 0.8674698795180723,
+          "topk_ids": [
+            27,
+            181,
+            102
+          ],
+          "topk_logits": [
+            8.370535850524902,
+            7.3660712242126465,
+            7.254464149475098
+          ],
+          "active_ids": [
+            3,
+            27,
+            39,
+            102,
+            114,
+            158,
+            181,
+            210
+          ],
+          "active_weights": [
+            0.0552547387778759,
+            0.368439257144928,
+            0.06907330453395844,
+            0.12068744748830795,
+            0.07722906023263931,
+            0.0751039907336235,
+            0.13493745028972626,
+            0.09927479177713394
+          ],
+          "dataset": "train",
+          "video": "247",
+          "target_name": "0224.png",
+          "target_index": 223,
+          "window_start": 192,
+          "dataset_index": 2276,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/247/images/0224.png",
+          "thumb_path": "frames/frame_000002276.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.13020752745893055,
+          "rgb_mae": 0.16283873735918064,
+          "rgb_structure_cosine": 0.5587581969253238,
+          "visual_score": 1.5261269870250738,
+          "selected_prototype_id": 27,
+          "query_visual_similarity_rank": 4,
+          "prototype_graph_rank": 4,
+          "prototype_activation": 0.368439257144928,
+          "crop_file": "crops/node_191236.png",
+          "frame_file": "frames/frame_000002276.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_191236.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              128,
+              123,
+              160,
+              154
+            ],
+            "context_crop_box": [
+              96,
+              92,
+              192,
+              185
+            ],
+            "context_size": [
+              96,
+              93
+            ],
+            "transmitted_size": [
+              96,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 44992,
+          "frame_id": 535,
+          "stage": "stage4",
+          "row": 4,
+          "col": 4,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -3.4755067825317383,
+          "pred_percentile": 0.7710843373493976,
+          "gt_score": 0.0,
+          "gt_percentile": 0.45180722891566266,
+          "topk_ids": [
+            27,
+            114,
+            181
+          ],
+          "topk_logits": [
+            8.426339149475098,
+            7.533482074737549,
+            7.198660850524902
+          ],
+          "active_ids": [
+            3,
+            27,
+            95,
+            102,
+            114,
+            158,
+            181,
+            205
+          ],
+          "active_weights": [
+            0.06854403764009476,
+            0.3555556833744049,
+            0.08332835882902145,
+            0.0724777951836586,
+            0.14559441804885864,
+            0.0958033874630928,
+            0.10416784882545471,
+            0.0745285153388977
+          ],
+          "dataset": "train",
+          "video": "056",
+          "target_name": "0160.png",
+          "target_index": 159,
+          "window_start": 128,
+          "dataset_index": 535,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/056/images/0160.png",
+          "thumb_path": "frames/frame_000000535.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.15794891399135463,
+          "rgb_mae": 0.20579009867727413,
+          "rgb_structure_cosine": 0.5130839090447982,
+          "visual_score": 1.4652427243588786,
+          "selected_prototype_id": 27,
+          "query_visual_similarity_rank": 5,
+          "prototype_graph_rank": 10,
+          "prototype_activation": 0.3555556833744049,
+          "crop_file": "crops/node_44992.png",
+          "frame_file": "frames/frame_000000535.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_44992.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              128,
+              123,
+              160,
+              154
+            ],
+            "context_crop_box": [
+              96,
+              92,
+              192,
+              185
+            ],
+            "context_size": [
+              96,
+              93
+            ],
+            "transmitted_size": [
+              96,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        }
+      ],
+      "prototype_selection": {
+        "mode": "top8_activation_best_mean_visual_group_v1",
+        "top_activated_prototype_ids": [
+          122,
+          27,
+          158,
+          100,
+          95,
+          102,
+          205,
+          3
+        ],
+        "activation_source": "native cached visual_activations, full bank; ties by prototype ID",
+        "visual_similarity_formula": "stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine",
+        "selection": "maximum mean anchor-to-group visual similarity; lowest prototype ID breaks ties",
+        "group_mean_scope": "every generated graph member, including anchor self-membership when present",
+        "graph_group_size": 10,
+        "group_size_source": "neighborhood.json:patches_per_prototype",
+        "candidate_scores": [
+          {
+            "prototype_id": 122,
+            "anchor_activation_rank": 1,
+            "anchor_activation": 0.2884072959423065,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              329908,
+              110262,
+              248178,
+              53308,
+              419428,
+              314635,
+              70926,
+              329907,
+              367291,
+              419092
+            ],
+            "mean_visual_similarity": 1.2335335326488648,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 27,
+            "anchor_activation_rank": 2,
+            "anchor_activation": 0.12487583607435226,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              158049,
+              114440,
+              184411,
+              191236,
+              255315,
+              152768,
+              22216,
+              9016,
+              52373,
+              44992
+            ],
+            "mean_visual_similarity": 1.4460797246187567,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 158,
+            "anchor_activation_rank": 3,
+            "anchor_activation": 0.11809815466403961,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              403665,
+              243890,
+              155624,
+              117376,
+              342763,
+              334121,
+              34841,
+              321964,
+              117388,
+              271304
+            ],
+            "mean_visual_similarity": 1.1530236180436433,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 100,
+            "anchor_activation_rank": 4,
+            "anchor_activation": 0.11484856903553009,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              302089,
+              86331,
+              414593,
+              431636,
+              431705,
+              365176,
+              209309,
+              250263,
+              249126,
+              99329
+            ],
+            "mean_visual_similarity": 1.01467933170989,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 95,
+            "anchor_activation_rank": 5,
+            "anchor_activation": 0.10861518234014511,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              151866,
+              287355,
+              320574,
+              439729,
+              439393,
+              439813,
+              161094,
+              155707,
+              269521,
+              266536
+            ],
+            "mean_visual_similarity": 0.840524634037296,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 102,
+            "anchor_activation_rank": 6,
+            "anchor_activation": 0.09187237173318863,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              99330,
+              406528,
+              362008,
+              294540,
+              400612,
+              440811,
+              91652,
+              11677,
+              400696,
+              339581
+            ],
+            "mean_visual_similarity": 1.2322661065893876,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 205,
+            "anchor_activation_rank": 7,
+            "anchor_activation": 0.07771043479442596,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              137143,
+              308068,
+              407862,
+              308236,
+              181571,
+              345952,
+              313372,
+              187349,
+              354032,
+              444472
+            ],
+            "mean_visual_similarity": 0.9301347998034342,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 3,
+            "anchor_activation_rank": 8,
+            "anchor_activation": 0.07557214796543121,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              445502,
+              9523,
+              445513,
+              445838,
+              445417,
+              136623,
+              272876,
+              445754,
+              75908,
+              445503
+            ],
+            "mean_visual_similarity": 1.1316186383450968,
+            "anchor_is_graph_member": false
+          }
+        ],
+        "selected_prototype_id": 27,
+        "selected_mean_visual_similarity": 1.4460797246187567,
+        "selected_graph_patch_ids": [
+          158049,
+          114440,
+          184411,
+          191236,
+          255315,
+          152768,
+          22216,
+          9016,
+          52373,
+          44992
+        ],
+        "query_patch_count": 5,
+        "thresholds": {
+          "min_stage4_cosine": 0.0,
+          "max_rgb_mae": 1.0,
+          "min_rgb_structure_cosine": 0.0,
+          "policy": "all_three_metrics_v1",
+          "operators": {
+            "stage4_cosine": ">=",
+            "rgb_mae": "<=",
+            "rgb_structure_cosine": ">="
+          },
+          "cosine_source": "settings_minimum_minus_relaxation",
+          "cosine_relaxation": 0.0,
+          "cosine_baseline": 0.0,
+          "scope": "non-anchor members of the chosen graph group; before ranking/count limit"
+        },
+        "available_before_thresholds": 10,
+        "threshold_pass_count": 9,
+        "threshold_rejected_count": 1,
+        "threshold_failure_counts": {
+          "stage4_cosine": 1,
+          "rgb_mae": 0,
+          "rgb_structure_cosine": 0
+        },
+        "threshold_rejections": [
+          {
+            "node_id": 158049,
+            "failed_metrics": [
+              "stage4_cosine"
+            ],
+            "stage4_cosine": -0.034433842931752126,
+            "rgb_mae": 0.11880335541112193,
+            "rgb_structure_cosine": 0.47871457144636764
+          }
+        ],
+        "available_query_patch_count": 9,
+        "returned_query_patch_count": 5,
+        "query_patch_ranking": "visual_score descending; node ID ascending for ties; anchor excluded before limiting",
+        "returned_match_ids": [
+          152768,
+          22216,
+          52373,
+          191236,
+          44992
+        ],
+        "anchor_removed_from_match_list": false
+      },
+      "matched_video_count": 5,
+      "groups": {
+        "all": [
+          152768,
+          22216,
+          52373,
+          191236,
+          44992
+        ],
+        "salient": [],
+        "non_salient": [
+          152768,
+          22216,
+          52373,
+          191236,
+          44992
+        ]
+      },
+      "query": {
+        "status": "complete",
+        "anchor_id": 99592,
+        "node_ids": [
+          152768,
+          22216,
+          52373,
+          191236,
+          44992
+        ],
+        "includes_anchor": true,
+        "matched_patch_count": 5,
+        "image_context_mode": "padded_patch_red_box_v1",
+        "image_order": [
+          {
+            "role": "anchor",
+            "node_id": 99592
+          },
+          {
+            "role": "match",
+            "node_id": 152768
+          },
+          {
+            "role": "match",
+            "node_id": 22216
+          },
+          {
+            "role": "match",
+            "node_id": 52373
+          },
+          {
+            "role": "match",
+            "node_id": 191236
+          },
+          {
+            "role": "match",
+            "node_id": 44992
+          }
+        ],
+        "prompt": "Each image is a context crop. The RED RECTANGLE marks the original target patch.\nCompare only the visual content INSIDE the rectangles. Use the surroundings\nonly to help identify what the boxed content depicts. Ignore the red outlines\nthemselves. Distinguish visible appearance from uncertain semantic inferences.\nThe first image is the ANCHOR PATCH; subsequent images are numbered matches.\n\nYour task is to identify the visual pattern shared by most of the given patches. Observe each patch, and report the visual pattern present in STRICTLY MORE THAN HALF of the 6 patches as the common visual pattern.\n\nEach image contains two regions:\n\n- **Target patch:** ONLY the content inside the red rectangle. This is the region you must describe and compare.\n- **Surrounding context:** The content outside the rectangle. Use it only to help recognize what the patch depicts.\n\nThe first image is the anchor. Subsequent images are labeled Match 1, Match 2, and so on. Use these labels in your answer.\n\n**Rules for describing the patches:**\n1. Describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.\n2. Context may help identify a boxed object part, but your description must remain specific to that part. For example, if the box contains dark hair and a small area of skin, describe those features\u2014not the person's face, clothing, or surroundings outside the box.\n3. If an object extends outside the box, describe only its visible portion inside the box. Do not attribute its unseen features to the patch.\n\n**Rules for identifying the visual pattern:**\n4. From the image descriptions you just generated, identify similarities in 1) color (single color or multiple colors), 2) textures, 3) edge orientations, 4) shapes, 5) contrasts, or 6) semantic objects or parts. \n6. Ignore the red rectangles themselves. Do not count features outside the boxes as supporting evidence.\n7. If there is no clear pattern shared by most target patches, state this explicitly.\n\nBefore answering, check that every described feature belongs inside a target box.\n\nReturn ONLY one valid JSON object with the following schema (replace the placeholders):\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"A concise 1\u20133 sentence description.\",\n  \"Visual pattern title\": \"A short title, or None if there is no majority pattern.\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": []\n}\n\nUse arrays of exact image labels for Supporting patches and Non-supporting patches,\nfor example [\"Anchor\", \"Match 2\"]. Every label must appear in exactly one of these\ntwo arrays. Include one description for every image, in the given image order.\nIf no majority pattern is found, set Visual pattern title to \"None\", explain why\nin the common-pattern description, use an empty supporting array, and put all\nlabels in the non-supporting array. Never invent semantic identities; state\nuncertainty when a visible object or part cannot be confidently identified.",
+        "anchor_index": 2,
+        "submitted_image_count": 6,
+        "submitted_match_count": 5,
+        "submitted_image_files": [
+          "api_crops/anchor_99592.png",
+          "api_crops/node_152768.png",
+          "api_crops/node_22216.png",
+          "api_crops/node_52373.png",
+          "api_crops/node_191236.png",
+          "api_crops/node_44992.png"
+        ],
+        "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"Runway surface and landing gear components in shadow\",\n        \"Color\": \"Dark gray, black\",\n        \"Texture\": \"Granular asphalt and metallic mechanical parts\",\n        \"Edge Description\": \"Horizontal and vertical straight/angular edges of the landing gear\",\n        \"Low-level visual features\": \"Dark low-contrast tones with mechanical highlights\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"Dense foliage and a vertical light-colored post\",\n        \"Color\": \"Dark green, brown, and white\",\n        \"Texture\": \"Leafy, fibrous natural texture\",\n        \"Edge Description\": \"Irregular organic outlines with one vertical straight edge on the right\",\n        \"Low-level visual features\": \"Mixed dark organic patterns with a bright vertical stripe\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"Dense shrubbery or foliage\",\n        \"Color\": \"Dark brown and muted green\",\n        \"Texture\": \"Rough, dense, leafy texture\",\n        \"Edge Description\": \"Irregular organic edges\",\n        \"Low-level visual features\": \"Low-contrast dark natural tones\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"Vegetation and bushes on a slope\",\n        \"Color\": \"Dark green and earthy brown\",\n        \"Texture\": \"Leafy, organic texture\",\n        \"Edge Description\": \"Irregular organic boundaries\",\n        \"Low-level visual features\": \"Natural green and earthy color gradients\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"Asphalt road surface and lower car body edge\",\n        \"Color\": \"Dark gray, black, and white\",\n        \"Texture\": \"Smooth paved asphalt with a painted line\",\n        \"Edge Description\": \"Horizontal straight line and curved car body edge\",\n        \"Low-level visual features\": \"Uniform dark gray background with a high-contrast white stripe\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"Tree foliage and canopy above a roof\",\n        \"Color\": \"Dark green and brown\",\n        \"Texture\": \"Dense leafy canopy texture\",\n        \"Edge Description\": \"Irregular, rounded organic edges\",\n        \"Low-level visual features\": \"Clustered natural green and dark vegetative tones\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"Dense natural foliage or vegetation consisting of dark green and brown organic textures with irregular edges.\",\n  \"Visual pattern title\": \"Dense Foliage\",\n  \"Supporting patches\": [\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": [\n    \"Anchor\",\n    \"Match 4\"\n  ]\n}\n```",
+        "raw_response": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"Runway surface and landing gear components in shadow\",\n        \"Color\": \"Dark gray, black\",\n        \"Texture\": \"Granular asphalt and metallic mechanical parts\",\n        \"Edge Description\": \"Horizontal and vertical straight/angular edges of the landing gear\",\n        \"Low-level visual features\": \"Dark low-contrast tones with mechanical highlights\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"Dense foliage and a vertical light-colored post\",\n        \"Color\": \"Dark green, brown, and white\",\n        \"Texture\": \"Leafy, fibrous natural texture\",\n        \"Edge Description\": \"Irregular organic outlines with one vertical straight edge on the right\",\n        \"Low-level visual features\": \"Mixed dark organic patterns with a bright vertical stripe\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"Dense shrubbery or foliage\",\n        \"Color\": \"Dark brown and muted green\",\n        \"Texture\": \"Rough, dense, leafy texture\",\n        \"Edge Description\": \"Irregular organic edges\",\n        \"Low-level visual features\": \"Low-contrast dark natural tones\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"Vegetation and bushes on a slope\",\n        \"Color\": \"Dark green and earthy brown\",\n        \"Texture\": \"Leafy, organic texture\",\n        \"Edge Description\": \"Irregular organic boundaries\",\n        \"Low-level visual features\": \"Natural green and earthy color gradients\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"Asphalt road surface and lower car body edge\",\n        \"Color\": \"Dark gray, black, and white\",\n        \"Texture\": \"Smooth paved asphalt with a painted line\",\n        \"Edge Description\": \"Horizontal straight line and curved car body edge\",\n        \"Low-level visual features\": \"Uniform dark gray background with a high-contrast white stripe\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"Tree foliage and canopy above a roof\",\n        \"Color\": \"Dark green and brown\",\n        \"Texture\": \"Dense leafy canopy texture\",\n        \"Edge Description\": \"Irregular, rounded organic edges\",\n        \"Low-level visual features\": \"Clustered natural green and dark vegetative tones\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"Dense natural foliage or vegetation consisting of dark green and brown organic textures with irregular edges.\",\n  \"Visual pattern title\": \"Dense Foliage\",\n  \"Supporting patches\": [\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 5\"\n  ],\n  \"Non-supporting patches\": [\n    \"Anchor\",\n    \"Match 4\"\n  ]\n}\n```",
+                    "thoughtSignature": "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"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7559,
+            "candidatesTokenCount": 687,
+            "totalTokenCount": 9471,
+            "promptTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 6528
+              },
+              {
+                "modality": "TEXT",
+                "tokenCount": 1031
+              }
+            ],
+            "thoughtsTokenCount": 1225,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-3.5-flash-lite",
+          "responseId": "i_j5aoy1Ee6EuMYPm_iAqQI"
+        },
+        "prompt_mode": "gemini_single_anchor_all_matches",
+        "response_model": "gemini-3.5-flash-lite",
+        "input_tokens": 7559,
+        "generated_tokens": 687,
+        "thinking_tokens": 1225,
+        "finish_reason": "STOP",
+        "api_attempts": 1,
+        "possibly_truncated": false,
+        "api_image_payload": {
+          "image_count": 6,
+          "images": [
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/anchor_99592.png",
+              "original_size": [
+                162,
+                153
+              ],
+              "transmitted_size": [
+                162,
+                153
+              ],
+              "original_bytes": 27811,
+              "transmitted_bytes": 6307,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_152768.png",
+              "original_size": [
+                96,
+                93
+              ],
+              "transmitted_size": [
+                96,
+                93
+              ],
+              "original_bytes": 11451,
+              "transmitted_bytes": 2660,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_22216.png",
+              "original_size": [
+                96,
+                90
+              ],
+              "transmitted_size": [
+                96,
+                90
+              ],
+              "original_bytes": 14898,
+              "transmitted_bytes": 3625,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_52373.png",
+              "original_size": [
+                96,
+                90
+              ],
+              "transmitted_size": [
+                96,
+                90
+              ],
+              "original_bytes": 14231,
+              "transmitted_bytes": 3181,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_191236.png",
+              "original_size": [
+                96,
+                93
+              ],
+              "transmitted_size": [
+                96,
+                93
+              ],
+              "original_bytes": 13674,
+              "transmitted_bytes": 3358,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_44992.png",
+              "original_size": [
+                96,
+                93
+              ],
+              "transmitted_size": [
+                96,
+                93
+              ],
+              "original_bytes": 17051,
+              "transmitted_bytes": 3799,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            }
+          ],
+          "original_request_bytes": 137279,
+          "transmitted_request_bytes": 35713,
+          "reduction_percent": 73.98509604528005
+        }
+      },
+      "prototype_overlap": {
+        "definition": "stage4 top-k prototype candidate IDs; not forward-valid participation",
+        "anchor_ids": [
+          27,
+          122,
+          158
+        ],
+        "match_count": 5,
+        "matches_with_metadata": 5,
+        "common_to_all": [
+          27
+        ],
+        "recurring": [
+          {
+            "id": 27,
+            "count": 5
+          },
+          {
+            "id": 102,
+            "count": 2
+          },
+          {
+            "id": 114,
+            "count": 2
+          },
+          {
+            "id": 181,
+            "count": 4
+          }
+        ],
+        "per_match": [
+          {
+            "node_id": 152768,
+            "topk_ids": [
+              27,
+              102,
+              106
+            ],
+            "with_anchor": [
+              27
+            ],
+            "across_matches": [
+              {
+                "id": 27,
+                "count": 5
+              },
+              {
+                "id": 102,
+                "count": 2
+              }
+            ]
+          },
+          {
+            "node_id": 22216,
+            "topk_ids": [
+              27,
+              158,
+              181
+            ],
+            "with_anchor": [
+              27,
+              158
+            ],
+            "across_matches": [
+              {
+                "id": 27,
+                "count": 5
+              },
+              {
+                "id": 181,
+                "count": 4
+              }
+            ]
+          },
+          {
+            "node_id": 52373,
+            "topk_ids": [
+              27,
+              114,
+              181
+            ],
+            "with_anchor": [
+              27
+            ],
+            "across_matches": [
+              {
+                "id": 27,
+                "count": 5
+              },
+              {
+                "id": 114,
+                "count": 2
+              },
+              {
+                "id": 181,
+                "count": 4
+              }
+            ]
+          },
+          {
+            "node_id": 191236,
+            "topk_ids": [
+              27,
+              102,
+              181
+            ],
+            "with_anchor": [
+              27
+            ],
+            "across_matches": [
+              {
+                "id": 27,
+                "count": 5
+              },
+              {
+                "id": 102,
+                "count": 2
+              },
+              {
+                "id": 181,
+                "count": 4
+              }
+            ]
+          },
+          {
+            "node_id": 44992,
+            "topk_ids": [
+              27,
+              114,
+              181
+            ],
+            "with_anchor": [
+              27
+            ],
+            "across_matches": [
+              {
+                "id": 27,
+                "count": 5
+              },
+              {
+                "id": 114,
+                "count": 2
+              },
+              {
+                "id": 181,
+                "count": 4
+              }
+            ]
+          }
+        ]
+      },
+      "pattern_analysis": {
+        "schema_version": 1,
+        "available": true,
+        "title": "Dense Foliage",
+        "description": "Dense natural foliage or vegetation consisting of dark green and brown organic textures with irregular edges.",
+        "supporting_patches": [
+          "Match 1",
+          "Match 2",
+          "Match 3",
+          "Match 5"
+        ],
+        "supporting_count": 4,
+        "nonsupporting_patches": [
+          "Anchor",
+          "Match 4"
+        ],
+        "nonsupporting_count": 2,
+        "unknown_patches": [],
+        "patches": [
+          {
+            "index": 0,
+            "label": "Anchor",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Runway surface and landing gear components in shadow",
+            "color": "Dark gray, black",
+            "texture": "Granular asphalt and metallic mechanical parts",
+            "edge_description": "Horizontal and vertical straight/angular edges of the landing gear",
+            "low_level_visual_features": "Dark low-contrast tones with mechanical highlights"
+          },
+          {
+            "index": 1,
+            "label": "Match 1",
+            "support": "supporting",
+            "semantic_object_or_part": "Dense foliage and a vertical light-colored post",
+            "color": "Dark green, brown, and white",
+            "texture": "Leafy, fibrous natural texture",
+            "edge_description": "Irregular organic outlines with one vertical straight edge on the right",
+            "low_level_visual_features": "Mixed dark organic patterns with a bright vertical stripe"
+          },
+          {
+            "index": 2,
+            "label": "Match 2",
+            "support": "supporting",
+            "semantic_object_or_part": "Dense shrubbery or foliage",
+            "color": "Dark brown and muted green",
+            "texture": "Rough, dense, leafy texture",
+            "edge_description": "Irregular organic edges",
+            "low_level_visual_features": "Low-contrast dark natural tones"
+          },
+          {
+            "index": 3,
+            "label": "Match 3",
+            "support": "supporting",
+            "semantic_object_or_part": "Vegetation and bushes on a slope",
+            "color": "Dark green and earthy brown",
+            "texture": "Leafy, organic texture",
+            "edge_description": "Irregular organic boundaries",
+            "low_level_visual_features": "Natural green and earthy color gradients"
+          },
+          {
+            "index": 4,
+            "label": "Match 4",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Asphalt road surface and lower car body edge",
+            "color": "Dark gray, black, and white",
+            "texture": "Smooth paved asphalt with a painted line",
+            "edge_description": "Horizontal straight line and curved car body edge",
+            "low_level_visual_features": "Uniform dark gray background with a high-contrast white stripe"
+          },
+          {
+            "index": 5,
+            "label": "Match 5",
+            "support": "supporting",
+            "semantic_object_or_part": "Tree foliage and canopy above a roof",
+            "color": "Dark green and brown",
+            "texture": "Dense leafy canopy texture",
+            "edge_description": "Irregular, rounded organic edges",
+            "low_level_visual_features": "Clustered natural green and dark vegetative tones"
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "anchor": {
+        "id": 99568,
+        "frame_id": 1185,
+        "stage": "stage4",
+        "row": 2,
+        "col": 4,
+        "grid_h": 7,
+        "grid_w": 12,
+        "pred_score": 15.812609672546387,
+        "pred_percentile": 0.9759036144578314,
+        "gt_score": 0.039473291486501694,
+        "gt_percentile": 0.9397590361445783,
+        "topk_ids": [
+          28,
+          90,
+          101
+        ],
+        "topk_logits": [
+          5.831473350524902,
+          5.775669574737549,
+          5.552455425262451
+        ],
+        "active_ids": [
+          28,
+          51,
+          79,
+          90,
+          101,
+          116,
+          139,
+          180
+        ],
+        "active_weights": [
+          0.19061388075351715,
+          0.08026184886693954,
+          0.08726939558982849,
+          0.18026824295520782,
+          0.14420442283153534,
+          0.08486804366111755,
+          0.09227775782346725,
+          0.14023642241954803
+        ],
+        "dataset": "train",
+        "video": "123",
+        "target_name": "0096.png",
+        "target_index": 95,
+        "window_start": 64,
+        "dataset_index": 1185,
+        "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/123/images/0096.png",
+        "thumb_path": "frames/frame_000001185.jpg",
+        "input_h": 360,
+        "input_w": 640,
+        "replayed_pred_score": 15.81261157989502,
+        "replayed_pred_percentile": 0.9759036144578314,
+        "crop_file": "crops/anchor_99568.png",
+        "frame_file": "frame.png",
+        "crop_source": "replayed model-input RGB",
+        "api_context": {
+          "mode": "padded_patch_red_box_v1",
+          "file": "api_crops/anchor_99568.png",
+          "padding_fraction_per_side": 1.0,
+          "frame_size": [
+            640,
+            360
+          ],
+          "original_patch_box": [
+            213,
+            103,
+            267,
+            154
+          ],
+          "context_crop_box": [
+            159,
+            52,
+            321,
+            205
+          ],
+          "context_size": [
+            162,
+            153
+          ],
+          "transmitted_size": [
+            162,
+            153
+          ],
+          "red_box_inclusive": [
+            54,
+            51,
+            107,
+            101
+          ],
+          "box_width": 2
+        }
+      },
+      "matches": [
+        {
+          "id": 169610,
+          "frame_id": 2019,
+          "stage": "stage4",
+          "row": 1,
+          "col": 2,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -2.0038206577301025,
+          "pred_percentile": 0.8554216867469879,
+          "gt_score": 0.054306503385305405,
+          "gt_percentile": 0.927710843373494,
+          "topk_ids": [
+            28,
+            175,
+            157
+          ],
+          "topk_logits": [
+            7.421875,
+            6.110490798950195,
+            5.970982074737549
+          ],
+          "active_ids": [
+            28,
+            71,
+            136,
+            157,
+            162,
+            175,
+            216,
+            246
+          ],
+          "active_weights": [
+            0.4353761374950409,
+            0.06529324501752853,
+            0.09384195506572723,
+            0.10203515738248825,
+            0.0537087582051754,
+            0.11731073260307312,
+            0.06714072078466415,
+            0.06529324501752853
+          ],
+          "dataset": "train",
+          "video": "216",
+          "target_name": "0736.png",
+          "target_index": 735,
+          "window_start": 704,
+          "dataset_index": 2019,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/216/images/0736.png",
+          "thumb_path": "frames/frame_000002019.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.14117825297200898,
+          "rgb_mae": 0.1644200343095387,
+          "rgb_structure_cosine": 0.40836264303593844,
+          "visual_score": 1.3851208616984088,
+          "selected_prototype_id": 28,
+          "query_visual_similarity_rank": 1,
+          "prototype_graph_rank": 3,
+          "prototype_activation": 0.4353761374950409,
+          "crop_file": "crops/node_169610.png",
+          "frame_file": "frames/frame_000002019.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_169610.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              64,
+              31,
+              96,
+              62
+            ],
+            "context_crop_box": [
+              32,
+              0,
+              128,
+              93
+            ],
+            "context_size": [
+              96,
+              93
+            ],
+            "transmitted_size": [
+              96,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 111789,
+          "frame_id": 1330,
+          "stage": "stage4",
+          "row": 5,
+          "col": 9,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 15.275561332702637,
+          "pred_percentile": 0.9518072289156626,
+          "gt_score": 0.21608859300613403,
+          "gt_percentile": 0.9759036144578314,
+          "topk_ids": [
+            28,
+            216,
+            248
+          ],
+          "topk_logits": [
+            7.700892925262451,
+            6.696428298950195,
+            6.3895087242126465
+          ],
+          "active_ids": [
+            8,
+            28,
+            109,
+            137,
+            180,
+            216,
+            237,
+            248
+          ],
+          "active_weights": [
+            0.09846342355012894,
+            0.37576764822006226,
+            0.06479047983884811,
+            0.07449017465114594,
+            0.06662368774414062,
+            0.13762140274047852,
+            0.08099380880594254,
+            0.10124941170215607
+          ],
+          "dataset": "train",
+          "video": "141",
+          "target_name": "0160.png",
+          "target_index": 159,
+          "window_start": 128,
+          "dataset_index": 1330,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/141/images/0160.png",
+          "thumb_path": "frames/frame_000001330.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.014836679970592242,
+          "rgb_mae": 0.18258297788755348,
+          "rgb_structure_cosine": 0.5271041845437316,
+          "visual_score": 1.3593578866267704,
+          "selected_prototype_id": 28,
+          "query_visual_similarity_rank": 2,
+          "prototype_graph_rank": 10,
+          "prototype_activation": 0.37576764822006226,
+          "crop_file": "crops/node_111789.png",
+          "frame_file": "frames/frame_000001330.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_111789.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              288,
+              154,
+              320,
+              185
+            ],
+            "context_crop_box": [
+              256,
+              123,
+              352,
+              216
+            ],
+            "context_size": [
+              96,
+              93
+            ],
+            "transmitted_size": [
+              96,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 186965,
+          "frame_id": 2225,
+          "stage": "stage4",
+          "row": 5,
+          "col": 5,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": -1.6574143171310425,
+          "pred_percentile": 0.891566265060241,
+          "gt_score": 0.0,
+          "gt_percentile": 0.3855421686746988,
+          "topk_ids": [
+            28,
+            180,
+            109
+          ],
+          "topk_logits": [
+            7.477678298950195,
+            6.1941962242126465,
+            6.138392925262451
+          ],
+          "active_ids": [
+            0,
+            8,
+            28,
+            109,
+            137,
+            175,
+            180,
+            248
+          ],
+          "active_weights": [
+            0.08315642178058624,
+            0.07232820242643356,
+            0.385800838470459,
+            0.10109250247478485,
+            0.07647912949323654,
+            0.0786430835723877,
+            0.10689416527748108,
+            0.09560567885637283
+          ],
+          "dataset": "train",
+          "video": "242",
+          "target_name": "0096.png",
+          "target_index": 95,
+          "window_start": 64,
+          "dataset_index": 2225,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/242/images/0096.png",
+          "thumb_path": "frames/frame_000002225.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.048720420885611,
+          "rgb_mae": 0.16915009778070575,
+          "rgb_structure_cosine": 0.38530579541801124,
+          "visual_score": 1.2648761185229165,
+          "selected_prototype_id": 28,
+          "query_visual_similarity_rank": 3,
+          "prototype_graph_rank": 6,
+          "prototype_activation": 0.385800838470459,
+          "crop_file": "crops/node_186965.png",
+          "frame_file": "frames/frame_000002225.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_186965.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              160,
+              154,
+              192,
+              185
+            ],
+            "context_crop_box": [
+              128,
+              123,
+              224,
+              216
+            ],
+            "context_size": [
+              96,
+              93
+            ],
+            "transmitted_size": [
+              96,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 66989,
+          "frame_id": 797,
+          "stage": "stage4",
+          "row": 3,
+          "col": 5,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 44.639678955078125,
+          "pred_percentile": 0.9759036144578314,
+          "gt_score": 0.19316168129444122,
+          "gt_percentile": 0.9879518072289156,
+          "topk_ids": [
+            28,
+            136,
+            246
+          ],
+          "topk_logits": [
+            7.3660712242126465,
+            6.138392925262451,
+            5.970982074737549
+          ],
+          "active_ids": [
+            8,
+            28,
+            136,
+            137,
+            157,
+            175,
+            246,
+            248
+          ],
+          "active_weights": [
+            0.06326673179864883,
+            0.398966521024704,
+            0.11688601225614548,
+            0.06879045814275742,
+            0.09350217133760452,
+            0.09092936664819717,
+            0.09886828064918518,
+            0.06879045814275742
+          ],
+          "dataset": "train",
+          "video": "080",
+          "target_name": "0480.png",
+          "target_index": 479,
+          "window_start": 448,
+          "dataset_index": 797,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/080/images/0480.png",
+          "thumb_path": "frames/frame_000000797.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.05212444304267753,
+          "rgb_mae": 0.2428854319199066,
+          "rgb_structure_cosine": 0.4026889074433621,
+          "visual_score": 1.211927918566133,
+          "selected_prototype_id": 28,
+          "query_visual_similarity_rank": 4,
+          "prototype_graph_rank": 4,
+          "prototype_activation": 0.398966521024704,
+          "crop_file": "crops/node_66989.png",
+          "frame_file": "frames/frame_000000797.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_66989.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              160,
+              93,
+              192,
+              123
+            ],
+            "context_crop_box": [
+              128,
+              63,
+              224,
+              153
+            ],
+            "context_size": [
+              96,
+              90
+            ],
+            "transmitted_size": [
+              96,
+              90
+            ],
+            "red_box_inclusive": [
+              32,
+              30,
+              63,
+              59
+            ],
+            "box_width": 2
+          }
+        },
+        {
+          "id": 114355,
+          "frame_id": 1361,
+          "stage": "stage4",
+          "row": 2,
+          "col": 7,
+          "grid_h": 7,
+          "grid_w": 12,
+          "pred_score": 27.981374740600586,
+          "pred_percentile": 0.9759036144578314,
+          "gt_score": 0.28904831409454346,
+          "gt_percentile": 1.0,
+          "topk_ids": [
+            28,
+            162,
+            248
+          ],
+          "topk_logits": [
+            7.421875,
+            6.305803298950195,
+            5.719865798950195
+          ],
+          "active_ids": [
+            8,
+            28,
+            53,
+            136,
+            146,
+            153,
+            162,
+            248
+          ],
+          "active_weights": [
+            0.05484098568558693,
+            0.4571326971054077,
+            0.05962907522916794,
+            0.07249052822589874,
+            0.05798831582069397,
+            0.06483520567417145,
+            0.14974023401737213,
+            0.08334298431873322
+          ],
+          "dataset": "train",
+          "video": "144",
+          "target_name": "0416.png",
+          "target_index": 415,
+          "window_start": 384,
+          "dataset_index": 1361,
+          "source_path": "/data/quantization/zaima/videosal_datasets/dhf1k/train/144/images/0416.png",
+          "thumb_path": "frames/frame_000001361.jpg",
+          "input_h": 360,
+          "input_w": 640,
+          "stage4_cosine": 0.0406730844167667,
+          "rgb_mae": 0.2295737447893771,
+          "rgb_structure_cosine": 0.33665863993607026,
+          "visual_score": 1.1477579795634598,
+          "selected_prototype_id": 28,
+          "query_visual_similarity_rank": 5,
+          "prototype_graph_rank": 2,
+          "prototype_activation": 0.4571326971054077,
+          "crop_file": "crops/node_114355.png",
+          "frame_file": "frames/frame_000001361.jpg",
+          "crop_source": "cached model-input RGB thumbnail; uniform stage4 cell, not a receptive-field boundary",
+          "api_context": {
+            "mode": "padded_patch_red_box_v1",
+            "file": "api_crops/node_114355.png",
+            "padding_fraction_per_side": 1.0,
+            "frame_size": [
+              384,
+              216
+            ],
+            "original_patch_box": [
+              224,
+              62,
+              256,
+              93
+            ],
+            "context_crop_box": [
+              192,
+              31,
+              288,
+              124
+            ],
+            "context_size": [
+              96,
+              93
+            ],
+            "transmitted_size": [
+              96,
+              93
+            ],
+            "red_box_inclusive": [
+              32,
+              31,
+              63,
+              61
+            ],
+            "box_width": 2
+          }
+        }
+      ],
+      "prototype_selection": {
+        "mode": "top8_activation_best_mean_visual_group_v1",
+        "top_activated_prototype_ids": [
+          28,
+          90,
+          101,
+          180,
+          139,
+          79,
+          116,
+          51
+        ],
+        "activation_source": "native cached visual_activations, full bank; ties by prototype ID",
+        "visual_similarity_formula": "stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine",
+        "selection": "maximum mean anchor-to-group visual similarity; lowest prototype ID breaks ties",
+        "group_mean_scope": "every generated graph member, including anchor self-membership when present",
+        "graph_group_size": 10,
+        "group_size_source": "neighborhood.json:patches_per_prototype",
+        "candidate_scores": [
+          {
+            "prototype_id": 28,
+            "anchor_activation_rank": 1,
+            "anchor_activation": 0.19061388075351715,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              250099,
+              114355,
+              169610,
+              66989,
+              35309,
+              186965,
+              321079,
+              253361,
+              168019,
+              111789
+            ],
+            "mean_visual_similarity": 1.1302902710124016,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 90,
+            "anchor_activation_rank": 2,
+            "anchor_activation": 0.18026824295520782,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              66894,
+              14981,
+              280574,
+              385253,
+              252938,
+              45963,
+              1290,
+              110274,
+              213401,
+              94110
+            ],
+            "mean_visual_similarity": 0.9739637678863327,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 101,
+            "anchor_activation_rank": 3,
+            "anchor_activation": 0.14420442283153534,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              108715,
+              426316,
+              228433,
+              257829,
+              313505,
+              426148,
+              161395,
+              449587,
+              426315,
+              136626
+            ],
+            "mean_visual_similarity": 1.0543668063590173,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 180,
+            "anchor_activation_rank": 4,
+            "anchor_activation": 0.14023642241954803,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              439949,
+              321350,
+              35071,
+              64706,
+              64538,
+              262864,
+              64622,
+              156283,
+              228701,
+              185849
+            ],
+            "mean_visual_similarity": 1.1046251445434156,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 139,
+            "anchor_activation_rank": 5,
+            "anchor_activation": 0.09227775782346725,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              450200,
+              144872,
+              271507,
+              59924,
+              238409,
+              166519,
+              20955,
+              444401,
+              370326,
+              420029
+            ],
+            "mean_visual_similarity": 0.9351946472390736,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 79,
+            "anchor_activation_rank": 6,
+            "anchor_activation": 0.08726939558982849,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              334205,
+              333700,
+              146862,
+              147030,
+              147142,
+              172061,
+              333928,
+              334204,
+              379436,
+              415801
+            ],
+            "mean_visual_similarity": 0.8099015606993681,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 116,
+            "anchor_activation_rank": 7,
+            "anchor_activation": 0.08486804366111755,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              210441,
+              199802,
+              114162,
+              102160,
+              450081,
+              321235,
+              195149,
+              314714,
+              357102,
+              195152
+            ],
+            "mean_visual_similarity": 0.9005381586337828,
+            "anchor_is_graph_member": false
+          },
+          {
+            "prototype_id": 51,
+            "anchor_activation_rank": 8,
+            "anchor_activation": 0.08026184886693954,
+            "graph_patch_count": 10,
+            "graph_patch_ids": [
+              403911,
+              128299,
+              405689,
+              307166,
+              187183,
+              371481,
+              319414,
+              116408,
+              158464,
+              309839
+            ],
+            "mean_visual_similarity": 1.051246921837334,
+            "anchor_is_graph_member": false
+          }
+        ],
+        "selected_prototype_id": 28,
+        "selected_mean_visual_similarity": 1.1302902710124016,
+        "selected_graph_patch_ids": [
+          250099,
+          114355,
+          169610,
+          66989,
+          35309,
+          186965,
+          321079,
+          253361,
+          168019,
+          111789
+        ],
+        "query_patch_count": 5,
+        "thresholds": {
+          "min_stage4_cosine": 0.0,
+          "max_rgb_mae": 1.0,
+          "min_rgb_structure_cosine": 0.0,
+          "policy": "all_three_metrics_v1",
+          "operators": {
+            "stage4_cosine": ">=",
+            "rgb_mae": "<=",
+            "rgb_structure_cosine": ">="
+          },
+          "cosine_source": "settings_minimum_minus_relaxation",
+          "cosine_relaxation": 0.0,
+          "cosine_baseline": 0.0,
+          "scope": "non-anchor members of the chosen graph group; before ranking/count limit"
+        },
+        "available_before_thresholds": 10,
+        "threshold_pass_count": 9,
+        "threshold_rejected_count": 1,
+        "threshold_failure_counts": {
+          "stage4_cosine": 1,
+          "rgb_mae": 0,
+          "rgb_structure_cosine": 0
+        },
+        "threshold_rejections": [
+          {
+            "node_id": 250099,
+            "failed_metrics": [
+              "stage4_cosine"
+            ],
+            "stage4_cosine": -0.008574382751773173,
+            "rgb_mae": 0.17497794929022348,
+            "rgb_structure_cosine": 0.3039751748216844
+          }
+        ],
+        "available_query_patch_count": 9,
+        "returned_query_patch_count": 5,
+        "query_patch_ranking": "visual_score descending; node ID ascending for ties; anchor excluded before limiting",
+        "returned_match_ids": [
+          169610,
+          111789,
+          186965,
+          66989,
+          114355
+        ],
+        "anchor_removed_from_match_list": false
+      },
+      "matched_video_count": 5,
+      "groups": {
+        "all": [
+          169610,
+          111789,
+          186965,
+          66989,
+          114355
+        ],
+        "salient": [
+          66989,
+          114355
+        ],
+        "non_salient": [
+          169610,
+          111789,
+          186965
+        ]
+      },
+      "query": {
+        "status": "complete",
+        "anchor_id": 99568,
+        "node_ids": [
+          169610,
+          111789,
+          186965,
+          66989,
+          114355
+        ],
+        "includes_anchor": true,
+        "matched_patch_count": 5,
+        "image_context_mode": "padded_patch_red_box_v1",
+        "image_order": [
+          {
+            "role": "anchor",
+            "node_id": 99568
+          },
+          {
+            "role": "match",
+            "node_id": 169610
+          },
+          {
+            "role": "match",
+            "node_id": 111789
+          },
+          {
+            "role": "match",
+            "node_id": 186965
+          },
+          {
+            "role": "match",
+            "node_id": 66989
+          },
+          {
+            "role": "match",
+            "node_id": 114355
+          }
+        ],
+        "prompt": "Each image is a context crop. The RED RECTANGLE marks the original target patch.\nCompare only the visual content INSIDE the rectangles. Use the surroundings\nonly to help identify what the boxed content depicts. Ignore the red outlines\nthemselves. Distinguish visible appearance from uncertain semantic inferences.\nThe first image is the ANCHOR PATCH; subsequent images are numbered matches.\n\nYour task is to identify the visual pattern shared by most of the given patches. Observe each patch, and report the visual pattern present in STRICTLY MORE THAN HALF of the 6 patches as the common visual pattern.\n\nEach image contains two regions:\n\n- **Target patch:** ONLY the content inside the red rectangle. This is the region you must describe and compare.\n- **Surrounding context:** The content outside the rectangle. Use it only to help recognize what the patch depicts.\n\nThe first image is the anchor. Subsequent images are labeled Match 1, Match 2, and so on. Use these labels in your answer.\n\n**Rules for describing the patches:**\n1. Describe only what is visible INSIDE each red rectangle. Do not describe the entire crop.\n2. Context may help identify a boxed object part, but your description must remain specific to that part. For example, if the box contains dark hair and a small area of skin, describe those features\u2014not the person's face, clothing, or surroundings outside the box.\n3. If an object extends outside the box, describe only its visible portion inside the box. Do not attribute its unseen features to the patch.\n\n**Rules for identifying the visual pattern:**\n4. From the image descriptions you just generated, identify similarities in 1) color (single color or multiple colors), 2) textures, 3) edge orientations, 4) shapes, 5) contrasts, or 6) semantic objects or parts. \n6. Ignore the red rectangles themselves. Do not count features outside the boxes as supporting evidence.\n7. If there is no clear pattern shared by most target patches, state this explicitly.\n\nBefore answering, check that every described feature belongs inside a target box.\n\nReturn ONLY one valid JSON object with the following schema (replace the placeholders):\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"...\",\n        \"Color\": \"...\",\n        \"Texture\": \"...\",\n        \"Edge Description\": \"...\",\n        \"Low-level visual features\": \"...\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"A concise 1\u20133 sentence description.\",\n  \"Visual pattern title\": \"A short title, or None if there is no majority pattern.\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": []\n}\n\nUse arrays of exact image labels for Supporting patches and Non-supporting patches,\nfor example [\"Anchor\", \"Match 2\"]. Every label must appear in exactly one of these\ntwo arrays. Include one description for every image, in the given image order.\nIf no majority pattern is found, set Visual pattern title to \"None\", explain why\nin the common-pattern description, use an empty supporting array, and put all\nlabels in the non-supporting array. Never invent semantic identities; state\nuncertainty when a visible object or part cannot be confidently identified.",
+        "anchor_index": 3,
+        "submitted_image_count": 6,
+        "submitted_match_count": 5,
+        "submitted_image_files": [
+          "api_crops/anchor_99568.png",
+          "api_crops/node_169610.png",
+          "api_crops/node_111789.png",
+          "api_crops/node_186965.png",
+          "api_crops/node_66989.png",
+          "api_crops/node_114355.png"
+        ],
+        "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"Distant trees and foliage\",\n        \"Color\": \"Dark green and brown silhouettes against a pale sky\",\n        \"Texture\": \"Blurry, vertical foliage\",\n        \"Edge Description\": \"Soft, indistinct vertical boundaries\",\n        \"Low-level visual features\": \"Vertical low-contrast shapes\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"Distant tree or object in an outdoor street setting\",\n        \"Color\": \"Muted green and grey\",\n        \"Texture\": \"Blurry, low detail\",\n        \"Edge Description\": \"Soft, hazy edges\",\n        \"Low-level visual features\": \"Small conical shape against a light background\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"Skin and finger/hand holding an object\",\n        \"Color\": \"Flesh-toned and yellowish-white\",\n        \"Texture\": \"Smooth, blurry\",\n        \"Edge Description\": \"Soft contours\",\n        \"Low-level visual features\": \"Curved flesh-toned patch adjacent to a light object\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"Vertical slats of a bamboo mat or blind\",\n        \"Color\": \"Shades of brown and tan\",\n        \"Texture\": \"Striped, ribbed vertical pattern\",\n        \"Edge Description\": \"Parallel vertical line edges\",\n        \"Low-level visual features\": \"High-frequency vertical stripes\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"Distant tree in an outdoor landscape\",\n        \"Color\": \"Greyish-green and pale background\",\n        \"Texture\": \"Blurry foliage\",\n        \"Edge Description\": \"Soft, scattered outlines\",\n        \"Low-level visual features\": \"Small vertical shape beside a person's back\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"Bird's head and beak area\",\n        \"Color\": \"White and dark blue-grey\",\n        \"Texture\": \"Feathered and smooth skin\",\n        \"Edge Description\": \"Mottled, curved edges\",\n        \"Low-level visual features\": \"Dark patch surrounded by white\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"The patches depict completely different scenes and objects (distant trees, a finger, bamboo blinds, and a bird's head), with only three patches sharing a similar background tree element. Since this does not constitute a majority (strictly more than half of the 6 patches), there is no common visual pattern.\",\n  \"Visual pattern title\": \"None\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 4\",\n    \"Match 5\"\n  ]\n}\n```",
+        "raw_response": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "```json\n{\n  \"Description of each patch\": [\n    {\n      \"Anchor\": {\n        \"Semantic object or part\": \"Distant trees and foliage\",\n        \"Color\": \"Dark green and brown silhouettes against a pale sky\",\n        \"Texture\": \"Blurry, vertical foliage\",\n        \"Edge Description\": \"Soft, indistinct vertical boundaries\",\n        \"Low-level visual features\": \"Vertical low-contrast shapes\"\n      }\n    },\n    {\n      \"Match 1\": {\n        \"Semantic object or part\": \"Distant tree or object in an outdoor street setting\",\n        \"Color\": \"Muted green and grey\",\n        \"Texture\": \"Blurry, low detail\",\n        \"Edge Description\": \"Soft, hazy edges\",\n        \"Low-level visual features\": \"Small conical shape against a light background\"\n      }\n    },\n    {\n      \"Match 2\": {\n        \"Semantic object or part\": \"Skin and finger/hand holding an object\",\n        \"Color\": \"Flesh-toned and yellowish-white\",\n        \"Texture\": \"Smooth, blurry\",\n        \"Edge Description\": \"Soft contours\",\n        \"Low-level visual features\": \"Curved flesh-toned patch adjacent to a light object\"\n      }\n    },\n    {\n      \"Match 3\": {\n        \"Semantic object or part\": \"Vertical slats of a bamboo mat or blind\",\n        \"Color\": \"Shades of brown and tan\",\n        \"Texture\": \"Striped, ribbed vertical pattern\",\n        \"Edge Description\": \"Parallel vertical line edges\",\n        \"Low-level visual features\": \"High-frequency vertical stripes\"\n      }\n    },\n    {\n      \"Match 4\": {\n        \"Semantic object or part\": \"Distant tree in an outdoor landscape\",\n        \"Color\": \"Greyish-green and pale background\",\n        \"Texture\": \"Blurry foliage\",\n        \"Edge Description\": \"Soft, scattered outlines\",\n        \"Low-level visual features\": \"Small vertical shape beside a person's back\"\n      }\n    },\n    {\n      \"Match 5\": {\n        \"Semantic object or part\": \"Bird's head and beak area\",\n        \"Color\": \"White and dark blue-grey\",\n        \"Texture\": \"Feathered and smooth skin\",\n        \"Edge Description\": \"Mottled, curved edges\",\n        \"Low-level visual features\": \"Dark patch surrounded by white\"\n      }\n    }\n  ],\n  \"Description of the common visual pattern\": \"The patches depict completely different scenes and objects (distant trees, a finger, bamboo blinds, and a bird's head), with only three patches sharing a similar background tree element. Since this does not constitute a majority (strictly more than half of the 6 patches), there is no common visual pattern.\",\n  \"Visual pattern title\": \"None\",\n  \"Supporting patches\": [],\n  \"Non-supporting patches\": [\n    \"Anchor\",\n    \"Match 1\",\n    \"Match 2\",\n    \"Match 3\",\n    \"Match 4\",\n    \"Match 5\"\n  ]\n}\n```",
+                    "thoughtSignature": "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"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7559,
+            "candidatesTokenCount": 700,
+            "totalTokenCount": 9509,
+            "promptTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 6528
+              },
+              {
+                "modality": "TEXT",
+                "tokenCount": 1031
+              }
+            ],
+            "thoughtsTokenCount": 1250,
+            "serviceTier": "standard"
+          },
+          "modelVersion": "gemini-3.5-flash-lite",
+          "responseId": "zPj5aqCCELvcytMPtpDpmAM"
+        },
+        "prompt_mode": "gemini_single_anchor_all_matches",
+        "response_model": "gemini-3.5-flash-lite",
+        "input_tokens": 7559,
+        "generated_tokens": 700,
+        "thinking_tokens": 1250,
+        "finish_reason": "STOP",
+        "api_attempts": 1,
+        "possibly_truncated": false,
+        "api_image_payload": {
+          "image_count": 6,
+          "images": [
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/anchor_99568.png",
+              "original_size": [
+                162,
+                153
+              ],
+              "transmitted_size": [
+                162,
+                153
+              ],
+              "original_bytes": 22280,
+              "transmitted_bytes": 5304,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_169610.png",
+              "original_size": [
+                96,
+                93
+              ],
+              "transmitted_size": [
+                96,
+                93
+              ],
+              "original_bytes": 9792,
+              "transmitted_bytes": 2138,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_111789.png",
+              "original_size": [
+                96,
+                93
+              ],
+              "transmitted_size": [
+                96,
+                93
+              ],
+              "original_bytes": 10309,
+              "transmitted_bytes": 2201,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_186965.png",
+              "original_size": [
+                96,
+                93
+              ],
+              "transmitted_size": [
+                96,
+                93
+              ],
+              "original_bytes": 16356,
+              "transmitted_bytes": 4086,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_66989.png",
+              "original_size": [
+                96,
+                90
+              ],
+              "transmitted_size": [
+                96,
+                90
+              ],
+              "original_bytes": 11573,
+              "transmitted_bytes": 2767,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            },
+            {
+              "path": "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/interpretability_exp/exp4_expl_report/pattern_report_outputs/123_0096.png/api_crops/node_114355.png",
+              "original_size": [
+                96,
+                93
+              ],
+              "transmitted_size": [
+                96,
+                93
+              ],
+              "original_bytes": 19447,
+              "transmitted_bytes": 4600,
+              "encoding": "jpeg",
+              "mime_type": "image/jpeg",
+              "resized": false,
+              "retained_original": false
+            }
+          ],
+          "original_request_bytes": 124803,
+          "transmitted_request_bytes": 33261,
+          "reduction_percent": 73.34919833657845
+        }
+      },
+      "prototype_overlap": {
+        "definition": "stage4 top-k prototype candidate IDs; not forward-valid participation",
+        "anchor_ids": [
+          28,
+          90,
+          101
+        ],
+        "match_count": 5,
+        "matches_with_metadata": 5,
+        "common_to_all": [
+          28
+        ],
+        "recurring": [
+          {
+            "id": 28,
+            "count": 5
+          },
+          {
+            "id": 248,
+            "count": 2
+          }
+        ],
+        "per_match": [
+          {
+            "node_id": 169610,
+            "topk_ids": [
+              28,
+              157,
+              175
+            ],
+            "with_anchor": [
+              28
+            ],
+            "across_matches": [
+              {
+                "id": 28,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 111789,
+            "topk_ids": [
+              28,
+              216,
+              248
+            ],
+            "with_anchor": [
+              28
+            ],
+            "across_matches": [
+              {
+                "id": 28,
+                "count": 5
+              },
+              {
+                "id": 248,
+                "count": 2
+              }
+            ]
+          },
+          {
+            "node_id": 186965,
+            "topk_ids": [
+              28,
+              109,
+              180
+            ],
+            "with_anchor": [
+              28
+            ],
+            "across_matches": [
+              {
+                "id": 28,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 66989,
+            "topk_ids": [
+              28,
+              136,
+              246
+            ],
+            "with_anchor": [
+              28
+            ],
+            "across_matches": [
+              {
+                "id": 28,
+                "count": 5
+              }
+            ]
+          },
+          {
+            "node_id": 114355,
+            "topk_ids": [
+              28,
+              162,
+              248
+            ],
+            "with_anchor": [
+              28
+            ],
+            "across_matches": [
+              {
+                "id": 28,
+                "count": 5
+              },
+              {
+                "id": 248,
+                "count": 2
+              }
+            ]
+          }
+        ]
+      },
+      "pattern_analysis": {
+        "schema_version": 1,
+        "available": true,
+        "title": "None",
+        "description": "The patches depict completely different scenes and objects (distant trees, a finger, bamboo blinds, and a bird's head), with only three patches sharing a similar background tree element. Since this does not constitute a majority (strictly more than half of the 6 patches), there is no common visual pattern.",
+        "supporting_patches": [],
+        "supporting_count": 0,
+        "nonsupporting_patches": [
+          "Anchor",
+          "Match 1",
+          "Match 2",
+          "Match 3",
+          "Match 4",
+          "Match 5"
+        ],
+        "nonsupporting_count": 6,
+        "unknown_patches": [],
+        "patches": [
+          {
+            "index": 0,
+            "label": "Anchor",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Distant trees and foliage",
+            "color": "Dark green and brown silhouettes against a pale sky",
+            "texture": "Blurry, vertical foliage",
+            "edge_description": "Soft, indistinct vertical boundaries",
+            "low_level_visual_features": "Vertical low-contrast shapes"
+          },
+          {
+            "index": 1,
+            "label": "Match 1",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Distant tree or object in an outdoor street setting",
+            "color": "Muted green and grey",
+            "texture": "Blurry, low detail",
+            "edge_description": "Soft, hazy edges",
+            "low_level_visual_features": "Small conical shape against a light background"
+          },
+          {
+            "index": 2,
+            "label": "Match 2",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Skin and finger/hand holding an object",
+            "color": "Flesh-toned and yellowish-white",
+            "texture": "Smooth, blurry",
+            "edge_description": "Soft contours",
+            "low_level_visual_features": "Curved flesh-toned patch adjacent to a light object"
+          },
+          {
+            "index": 3,
+            "label": "Match 3",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Vertical slats of a bamboo mat or blind",
+            "color": "Shades of brown and tan",
+            "texture": "Striped, ribbed vertical pattern",
+            "edge_description": "Parallel vertical line edges",
+            "low_level_visual_features": "High-frequency vertical stripes"
+          },
+          {
+            "index": 4,
+            "label": "Match 4",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Distant tree in an outdoor landscape",
+            "color": "Greyish-green and pale background",
+            "texture": "Blurry foliage",
+            "edge_description": "Soft, scattered outlines",
+            "low_level_visual_features": "Small vertical shape beside a person's back"
+          },
+          {
+            "index": 5,
+            "label": "Match 5",
+            "support": "non-supporting",
+            "semantic_object_or_part": "Bird's head and beak area",
+            "color": "White and dark blue-grey",
+            "texture": "Feathered and smooth skin",
+            "edge_description": "Mottled, curved edges",
+            "low_level_visual_features": "Dark patch surrounded by white"
+          }
+        ],
+        "warnings": []
+      }
+    }
+  ],
+  "prediction_display": {
+    "available": true,
+    "image": "predicted_saliency.png",
+    "minimum": -3.9452109336853027,
+    "maximum": 152.62379455566406,
+    "constant": false,
+    "alpha": 0.5,
+    "colormap": "jet",
+    "format": "jet_overlay_v1",
+    "source_mtime_ns": 1794766921364085596,
+    "frame_mtime_ns": 1794766921363840304,
+    "prediction_shape": [
+      224,
+      384
+    ],
+    "frame_shape": [
+      360,
+      640,
+      3
+    ],
+    "scaling": "per-frame min-max to [0,1] for display only; bilinear resize to frame size"
+  },
+  "query_execution": {
+    "mode": "sequential_one_query_per_anchor",
+    "queries_per_anchor": 1,
+    "conversation_scope": "fresh_per_anchor",
+    "anchor_in_prompt": true,
+    "min_retrieved_matches": 2,
+    "salient_anchors": 3,
+    "eligible_anchors": 3,
+    "completed_model_queries": 3,
+    "skipped_empty_anchors": 0,
+    "skipped_small_anchors": 0
+  },
+  "llm": {
+    "provider": "gemini",
+    "model_id": "gemini-3.5-flash-lite",
+    "api": "generateContent REST v1beta",
+    "max_new_tokens": 2048,
+    "min_request_interval_seconds": 65.0,
+    "max_retries": 3,
+    "max_retry_wait_seconds": 300.0,
+    "anchor_in_prompt": true,
+    "saliency_labels_in_prompt": false,
+    "image_input": "anchor context crop first, followed by every retrieved match context crop; original patch boxed in red",
+    "image_context_mode": "padded_patch_red_box_v1",
+    "context_padding_fraction_per_side": 1.0,
+    "context_box_color": "red",
+    "context_box_width_pixels": 2,
+    "api_image_max_side": 256,
+    "api_jpeg_quality": 90,
+    "queries_per_anchor": 1,
+    "independent_conversations": true
+  }
+}

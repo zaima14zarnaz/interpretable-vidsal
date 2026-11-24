@@ -2,7 +2,10 @@
 """Prototype/patch visual-similarity explorer (offline HTML or local server).
 
 Edit SETTINGS and run this script in src/interpretability_exp/exp4_expl_report/.
-No command-line arguments. Actions:
+Optional serve-only argument: --serve-patch-per-prot N (default SETTINGS N).
+For ACTION='serve', build the browser graph from only each prototype's first N
+positive-activation-ranked patches. Signatures/statistics use that same subset.
+Actions:
   extract: checkpoint inference; save patches, descriptors and ALL stage4
            prototype activations; build ranked index and offline viewer.
   cache_similarity: upgrade an existing complete patch database in place.
@@ -50,6 +53,7 @@ rank, not a calibrated fixation probability. Model weights/forward outputs are
 never changed.
 """
 from __future__ import annotations
+import argparse
 import base64
 import csv
 import hashlib
@@ -76,11 +80,11 @@ import numpy as np
 from PIL import Image
 
 # SETTINGS: edit here, then run the script.
-ACTION = "serve"  # extract | cache_similarity | view | serve | export_edges | selftest
+ACTION = "extract"  # extract | cache_similarity | view | serve | export_edges | selftest
 SCRIPT_DIR = Path(__file__).resolve().parent
 SRC_DIR = SCRIPT_DIR.parents[1]
 EVALUATION_FILE = SRC_DIR / "evaluation.py"
-CHECKPOINT_PATH = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261115_030905/epoch_086.pth"
+CHECKPOINT_PATH = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261115_030905/epoch_119.pth"
 DATASET_ROOTS = "/data/quantization/zaima/videosal_datasets/dhf1k/train"
 STAGES = ("stage4",)
 WINDOW_STRIDE = 64
@@ -95,7 +99,7 @@ SAVE_FRAME_THUMBNAILS = True
 FRAME_THUMB_WIDTH = 384
 SEED = 42
 SERVER_PORT = 8765
-PATCHES_PER_PROTOTYPE = 10  # Maximum N; fewer positive matches remain a smaller group.
+PATCHES_PER_PROTOTYPE = 100  # Maximum N; fewer positive matches remain a smaller group.
 MIN_PROTOTYPE_ACTIVATION = 0.0  # Strict > cutoff; 0.0 excludes zero/negative activations.
 RANKING_VERSION = "positive_activation_v1"
 RANK_CACHE_CAPACITY = 50  # speed future changes of N; not a gallery limit
@@ -111,6 +115,7 @@ STAGE4_FEATURE_LAYOUT = "auto"  # auto | BCTHW | BTCHW | BTHWC | BCHW | BHWC
 # model_backbone: descriptors from the loaded eval checkpoint's backbone
 # (legacy; must fingerprint that backbone and rebuild the training cache to match).
 DESCRIPTOR_FEATURE_SOURCE = "frozen_reference"  # frozen_reference | model_backbone
+REFERENCE_BACKBONE_CHECKPOINT = None  # None -> train.py setting / cache default; replay uses manifest.
 SIMILARITY_VERSION = "stage4_rgb_structure_v1"
 SIMILARITY_FORMULA = "stage4_cosine + (1 - rgb_mae) + rgb_structure_cosine"
 GRAPH_VERSION = "prototype_patch_v3_positive"
@@ -250,6 +255,8 @@ def frame_names_for_video(dataset, root, video):
 
 def unpack_batch(batch):
     # Current train.py has six entries; the earlier loader has five.
+    if isinstance(batch, (list, tuple)) and len(batch) == 7:
+        batch = batch[:6]  # Metadata-enabled collate: metadata follows valid_mask.
     if not isinstance(batch, (list, tuple)) or len(batch) not in (5, 6):
         raise RuntimeError("Expected collate output (video_names,rgb,sal,[fix,]n_frames,valid_mask). "
                            f"Received {type(batch).__name__} with length "
@@ -357,6 +364,9 @@ def extract_graph():
         if stage not in model.backbone_stages:
             raise ValueError(f"{stage} not in model.backbone_stages={model.backbone_stages}.")
     capture = Stage4Capture(model)
+    global REFERENCE_BACKBONE_CHECKPOINT
+    if REFERENCE_BACKBONE_CHECKPOINT is None:
+        REFERENCE_BACKBONE_CHECKPOINT = getattr(ev.train_cfg, "REFERENCE_BACKBONE_CHECKPOINT", None)
     feature_provenance, reference_backbone = build_descriptor_feature_provenance(model, device, ckpt)
     if reference_backbone is not None:
         print(
@@ -619,13 +629,62 @@ def _import_reference_feature_tools():
     }
 
 
-def build_descriptor_feature_provenance(model, device, ckpt):
+def restore_descriptor_settings(manifest, settings=None):
+    """Use persisted semantics for replay/view/backfill, never current defaults.
+
+    A pre-source-setting database used the model backbone. Do not relabel its
+    existing vectors as frozen-reference features merely by changing SETTINGS.
+    """
+    global DESCRIPTOR_FEATURE_SOURCE, STAGE4_FEATURE_MODULE
+    global STAGE4_FEATURE_OUTPUT_PATH, STAGE4_FEATURE_LAYOUT, RGB_DESCRIPTOR_SIZE
+    settings = dict(settings if settings is not None else manifest.get("similarity_settings") or {})
+    recorded = manifest.get("similarity_settings") or {}
+    for key, value in recorded.items():
+        if key in settings and settings[key] != value:
+            raise ValueError(f"Graph manifest and SQLite descriptor settings disagree for {key!r}.")
+    source = settings.get("descriptor_feature_source", recorded.get("descriptor_feature_source", "model_backbone"))
+    if source not in ("frozen_reference", "model_backbone"):
+        raise ValueError(f"Unsupported recorded descriptor source: {source!r}")
+    if settings.get("version", SIMILARITY_VERSION) != SIMILARITY_VERSION:
+        raise ValueError("Graph descriptor version differs from this generator.")
+    DESCRIPTOR_FEATURE_SOURCE = source
+    STAGE4_FEATURE_MODULE = settings.get("feature_module", STAGE4_FEATURE_MODULE)
+    STAGE4_FEATURE_OUTPUT_PATH = tuple(settings.get("feature_output_path", STAGE4_FEATURE_OUTPUT_PATH))
+    STAGE4_FEATURE_LAYOUT = settings.get("feature_layout", STAGE4_FEATURE_LAYOUT)
+    RGB_DESCRIPTOR_SIZE = int(settings.get("rgb_size", RGB_DESCRIPTOR_SIZE))
+    canonical = similarity_settings()
+    for key, value in settings.items():
+        if canonical.get(key) != value:
+            raise ValueError(f"Unsupported recorded descriptor setting {key!r}: {value!r}")
+    return canonical
+
+
+def verify_descriptor_provenance(expected, actual):
+    """Check weights and preprocessing without comparing unrelated file hashes."""
+    expected = expected or {}
+    for key in ("backbone_fingerprint", "preprocess", "temporal_selection"):
+        if expected.get(key) is not None and expected[key] != actual.get(key):
+            raise ValueError(f"Descriptor reference {key} differs from the graph manifest; "
+                             "restore the recorded reference or extract a new graph directory.")
+
+
+def build_descriptor_feature_provenance(model, device, ckpt, manifest=None):
     """Record the backbone that produces stored stage4 descriptor vectors."""
+    if manifest is not None:
+        restore_descriptor_settings(manifest)
     tools = _import_reference_feature_tools()
+    expected = (manifest or {}).get("reference_feature_provenance") or {}
     if DESCRIPTOR_FEATURE_SOURCE == "frozen_reference":
-        ref_ckpt = tools["DEFAULT_REFERENCE_CHECKPOINT"]
+        if manifest is not None and not expected.get("backbone_fingerprint"):
+            raise ValueError("Frozen-reference graph lacks a recorded backbone fingerprint. "
+                             "Use a fresh extraction; do not label legacy descriptors as verified.")
+        ref_ckpt = (REFERENCE_BACKBONE_CHECKPOINT or expected.get("source_checkpoint_path")
+                    or expected.get("checkpoint_path") or tools["DEFAULT_REFERENCE_CHECKPOINT"])
+        preprocess = expected.get("preprocess") or {}
+        resize_to = preprocess.get("resize_to", (224, 384))
+        normalize = bool(preprocess.get("normalize", True))
         reference = tools["build_reference_backbone"](
-            checkpoint=ref_ckpt, device=device, resize_to=(224, 384), normalize=True,
+            checkpoint=ref_ckpt, device=device, resize_to=resize_to, normalize=normalize,
         )
         fingerprint = tools["fingerprint_state_dict"](reference.state_dict())
         provenance = tools["build_reference_feature_provenance"](
@@ -634,7 +693,7 @@ def build_descriptor_feature_provenance(model, device, ckpt):
             checkpoint_sha256=tools["sha256_file"](ref_ckpt),
             weight_scope="FrozenBackboneFeatureCache / build_reference_backbone state_dict",
             preprocess=tools["preprocess_config"](
-                resize_to=(224, 384), normalize=True, input_format="BTCHW", output_format="BCTHW",
+                resize_to=resize_to, normalize=normalize, input_format="BTCHW", output_format="BCTHW",
             ),
             temporal_selection="last_backbone_step",
             feature_module="frozen_reference_backbone",
@@ -648,6 +707,7 @@ def build_descriptor_feature_provenance(model, device, ckpt):
                 "the same FrozenBackboneFeatureCache fingerprint."
             ),
         )
+        verify_descriptor_provenance(expected, provenance)
         return provenance, reference
     if DESCRIPTOR_FEATURE_SOURCE != "model_backbone":
         raise ValueError(
@@ -679,6 +739,7 @@ def build_descriptor_feature_provenance(model, device, ckpt):
             "weights (or rebuild descriptors with frozen_reference)."
         ),
     )
+    verify_descriptor_provenance(expected, provenance)
     return provenance, None
 
 
@@ -704,7 +765,8 @@ def stage4_features_bhwc(rgb_btchw, info, batch_size, *, capture=None, reference
         video = video.to(device=ref_device, dtype=torch.float32, non_blocking=(ref_device.type == "cuda"))
         if video.numel() > 0 and float(video.max()) > 2.0:
             video = video / 255.0
-        with torch.no_grad():
+        # Reference targets are always FP32, independently of the saliency AMP mode.
+        with torch.inference_mode(), torch.autocast(ref_device.type, enabled=False):
             feats = reference_backbone(video)
             stage4 = feats["stage4"]
             if stage4.dim() != 5:
@@ -747,6 +809,12 @@ def ensure_graph_schema(con):
     """)
     expected = json.dumps(similarity_settings(), sort_keys=True)
     row = con.execute("SELECT value FROM similarity_metadata WHERE key='settings'").fetchone()
+    if row:
+        stored = json.loads(row[0])
+        # Only the absent source field has a defined legacy interpretation.
+        stored.setdefault("descriptor_feature_source", "model_backbone")
+        if stored == similarity_settings():
+            expected = row[0]  # Preserve original bytes for read-only report consumers.
     if row and row[0] != expected:
         if con.execute("SELECT 1 FROM visual_descriptors LIMIT 1").fetchone():
             raise ValueError("Visual descriptor settings differ from the populated cache. Restore its original settings or use a new OUTPUT_DIR.")
@@ -799,18 +867,29 @@ def store_frame_cache(con, frame_id, stage, node_ids, info, bi, features, rgb, p
     bank = con.execute("SELECT prototype_count FROM prototype_banks WHERE stage=?", (stage,)).fetchone()
     if bank and int(bank[0]) != m:
         raise RuntimeError("Prototype bank size changed between frames.")
+    prepared = []
+    # Validate existing descriptors BEFORE changing activations or ranking metadata.
+    for idx, nid in enumerate(ids):
+        row, col = divmod(idx, w)
+        feature, color = features[row, col], rgb_descriptor(rgb, row, col, h, w)
+        old = con.execute("SELECT feature_dim,stage4_vector,rgb_vector FROM visual_descriptors WHERE node_id=?",
+                          (int(nid),)).fetchone() if preserve_descriptors else None
+        if old:
+            old_f, old_rgb = unpack_vector(old[1]), unpack_vector(old[2])
+            if (int(old[0]) != np.asarray(feature).size or old_f.shape != np.asarray(feature).reshape(-1).shape
+                    or not np.allclose(old_f, np.asarray(feature).reshape(-1), atol=1e-4, rtol=.005)
+                    or old_rgb.shape != color.shape or not np.allclose(old_rgb, color, atol=1e-5, rtol=1e-5)):
+                raise ValueError(f"Replay descriptors differ at node {int(nid)} using {DESCRIPTOR_FEATURE_SOURCE}. "
+                                 "Restore the graph's recorded backbone/preprocessing or extract to a new OUTPUT_DIR; "
+                                 "existing descriptors were not overwritten.")
+        prepared.append((int(nid), feature, color, old is not None))
     con.execute("INSERT OR IGNORE INTO prototype_banks VALUES (?,?)", (stage, m))
     con.execute("INSERT OR REPLACE INTO prototype_activation_frames VALUES (?,?,?,?,?,?)",
                 (int(frame_id), stage, h*w, m, zlib.compress(ids.tobytes(), 3), pack_vector(a)))
     con.execute("DELETE FROM prototype_graph_metadata WHERE key='ranking'")
-    existing = set()
-    if preserve_descriptors:
-        existing = {int(r[0]) for r in con.execute("SELECT d.node_id FROM visual_descriptors d JOIN nodes n ON n.id=d.node_id WHERE n.frame_id=? AND n.stage=?", (int(frame_id), stage))}
-    for idx, nid in enumerate(ids):
-        if int(nid) in existing:
-            continue
-        row, col = divmod(idx, w)
-        store_descriptor(con, nid, features[row, col], rgb_descriptor(rgb, row, col, h, w))
+    for nid, feature, color, exists in prepared:
+        if not exists:
+            store_descriptor(con, nid, feature, color)
 
 
 def cosine(a, b, flat_equal=False):
@@ -926,13 +1005,19 @@ def rebuild_rank_cache(con, capacity):
     print(f"Indexed up to {capacity} positive matches for {m} prototypes across {count:,} patches; {metadata['eligible_match_count']:,} retained edges, {int(np.count_nonzero(positive_counts == 0))} isolated prototypes.", flush=True)
 
 
-def ensure_rank_cache(directory, con=None):
-    if int(PATCHES_PER_PROTOTYPE) < 1 or int(RANK_CACHE_CAPACITY) < 1 or int(GALLERY_COLUMNS) < 1:
+def ensure_rank_cache(directory, con=None, n=None):
+    n = PATCHES_PER_PROTOTYPE if n is None else int(n)
+    if n < 1 or int(RANK_CACHE_CAPACITY) < 1 or int(GALLERY_COLUMNS) < 1:
         raise ValueError("PATCHES_PER_PROTOTYPE, RANK_CACHE_CAPACITY and GALLERY_COLUMNS must be positive.")
     own = con is None
     if own:
         con = connect_db(Path(directory)/"graph.sqlite")
     try:
+        settings = con.execute("SELECT value FROM similarity_metadata WHERE key='settings'").fetchone() if has_table(con, "similarity_metadata") else None
+        if settings:
+            path = Path(directory) / "manifest.json"
+            manifest = json.loads(path.read_text()) if path.is_file() else {}
+            restore_descriptor_settings(manifest, json.loads(settings[0]))
         ensure_graph_schema(con)
         m = require_dense_cache(con)
         row = con.execute("SELECT value FROM prototype_graph_metadata WHERE key='ranking'").fetchone()
@@ -946,10 +1031,10 @@ def ensure_rank_cache(directory, con=None):
         except RuntimeError:
             expected_rows, policy_valid = -1, False
         invalid_row = con.execute("SELECT 1 FROM prototype_patches WHERE stage='stage4' AND activation<=? LIMIT 1", (activation_cutoff(),)).fetchone()
-        if (not policy_valid or meta.get("capacity", 0) < PATCHES_PER_PROTOTYPE
+        if (not policy_valid or meta.get("capacity", 0) < n
                 or meta.get("patch_count") != patches or meta.get("prototype_count") != m
                 or cached != expected_rows or invalid_row is not None):
-            rebuild_rank_cache(con, max(PATCHES_PER_PROTOTYPE, RANK_CACHE_CAPACITY))
+            rebuild_rank_cache(con, max(n, RANK_CACHE_CAPACITY))
     finally:
         if own:
             con.close()
@@ -1086,6 +1171,10 @@ def cache_similarity(directory):
     con = connect_db(directory/"graph.sqlite")
     capture = None
     try:
+        settings = con.execute("SELECT value FROM similarity_metadata WHERE key='settings'").fetchone() if has_table(con, "similarity_metadata") else None
+        if settings:
+            canonical = restore_descriptor_settings(manifest, json.loads(settings[0]))
+            manifest = dict(manifest, similarity_settings=canonical)
         ensure_graph_schema(con)
         pending = con.execute("""SELECT DISTINCT f.* FROM frames f JOIN nodes n ON n.frame_id=f.id
             LEFT JOIN prototype_activation_frames a ON a.frame_id=f.id AND a.stage=n.stage
@@ -1100,7 +1189,7 @@ def cache_similarity(directory):
             if torch.cuda.is_available() and (GPU_ID < 0 or GPU_ID >= torch.cuda.device_count()):
                 raise ValueError(f"GPU_ID={GPU_ID} unavailable.")
             device = torch.device(f"cuda:{GPU_ID}" if torch.cuda.is_available() else "cpu")
-            ckpt = str(CHECKPOINT_PATH or manifest.get("checkpoint") or ev.CHECKPOINT_PATH)
+            ckpt = str(manifest.get("checkpoint") or CHECKPOINT_PATH or ev.CHECKPOINT_PATH)
             if sha256_file(ckpt) != manifest.get("checkpoint_sha256"):
                 raise ValueError("Checkpoint differs from original graph; refusing mixed caches.")
             model = ev.build_model(device, device)
@@ -1114,7 +1203,7 @@ def cache_similarity(directory):
             if amp and manifest.get("amp_dtype") and manifest["amp_dtype"] != str(dtype):
                 raise ValueError("Backfill requires original AMP dtype.")
             capture = Stage4Capture(model)
-            feature_provenance, reference_backbone = build_descriptor_feature_provenance(model, device, ckpt)
+            feature_provenance, reference_backbone = build_descriptor_feature_provenance(model, device, ckpt, manifest=manifest)
             existing_prov = manifest.get("reference_feature_provenance")
             if (
                 isinstance(existing_prov, dict)
@@ -1324,19 +1413,19 @@ def select_prototypes(graph, selection=None):
             "image_pool":{k:v for k,v in graph["image_pool"].items() if k in frames}}
 
 
-def write_viewer(directory, con=None, graph=None):
+def write_viewer(directory, con=None, graph=None, n=None):
     directory = Path(directory)
     if EDGE_COLOR_RANGE is not None:
         low,high = map(float,EDGE_COLOR_RANGE)
         if not math.isfinite(low) or not math.isfinite(high) or low>=high:
             raise ValueError("EDGE_COLOR_RANGE must be a finite increasing pair.")
     if graph is None:
-        ensure_rank_cache(directory,con)
+        ensure_rank_cache(directory,con,n=n)
         own = con is None
         if own:
             con = connect_db(directory/"graph.sqlite",readonly=True)
         try:
-            graph = build_graph(con,directory)
+            graph = build_graph(con,directory,n=n)
         finally:
             if own:
                 con.close()
@@ -1347,10 +1436,10 @@ def write_viewer(directory, con=None, graph=None):
     return graph
 
 
-def serve_graph(directory):
+def serve_graph(directory, patches_per_prototype=None):
     directory = Path(directory).resolve()
     require_complete(directory)
-    graph = write_viewer(directory)
+    graph = write_viewer(directory, n=patches_per_prototype)
     html = (directory/"graph_viewer.html").read_text().replace('const online=false;','const online=true;').encode('utf-8')
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -1644,10 +1733,26 @@ def selftest():
           'two edge types; pairwise similarity; mean ± population SD; sparse positive-only groups; filtering; offline HTML; incomplete-cache detection; preserved original nodes.')
 
 
+def parse_arguments(argv=None):
+    parser = argparse.ArgumentParser(description="Generate/view the prototype graph; ACTION is configured in SETTINGS.")
+    parser.add_argument(
+        '--serve-patch-per-prot', type=int, default=None, metavar='N',
+        help='With ACTION=serve, build the browser graph using only the first N positive-activation-ranked patches per prototype. Defaults to PATCHES_PER_PROTOTYPE in SETTINGS; groups with fewer matches stay smaller.',
+    )
+    args = parser.parse_args(argv)
+    if args.serve_patch_per_prot is not None:
+        if args.serve_patch_per_prot < 1:
+            parser.error('--serve-patch-per-prot must be a positive integer.')
+        if ACTION != 'serve':
+            parser.error('--serve-patch-per-prot applies only when ACTION="serve".')
+    return args
+
+
 def main():
+    args = parse_arguments()
     actions = {'extract':extract_graph,'cache_similarity':lambda:cache_similarity(OUTPUT_DIR),
                'view':lambda:(require_complete(OUTPUT_DIR),write_viewer(OUTPUT_DIR)),
-               'serve':lambda:serve_graph(OUTPUT_DIR),'export_edges':lambda:export_edges(OUTPUT_DIR),
+               'serve':lambda:serve_graph(OUTPUT_DIR, patches_per_prototype=args.serve_patch_per_prot),'export_edges':lambda:export_edges(OUTPUT_DIR),
                'selftest':selftest}
     if ACTION not in actions:
         raise ValueError(f'Unknown ACTION={ACTION!r}; choose from {list(actions)}')

@@ -41,7 +41,7 @@ import webbrowser
 
 from PIL import Image, ImageDraw, ImageOps
 
-DEFAULT_CLUSTER_DIR = Path('/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster')
+DEFAULT_CLUSTER_DIR = Path('/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster_frozen_ref')
 FORMAT_VERSION = 'fixed_stage4_patch_clusters_v1'
 
 
@@ -282,7 +282,7 @@ def make_server(store, port=8767, prototype=0, columns=8):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--cluster-dir', type=Path, default=DEFAULT_CLUSTER_DIR)
-    parser.add_argument('--prototype', type=int, default=0)
+    parser.add_argument('--prototype', type=int, default=28)
     parser.add_argument('--port', type=int, default=8767)
     parser.add_argument('--columns', type=int, default=8)
     parser.add_argument('--no-browser', action='store_true')
