@@ -1,0 +1,2 @@
+# To form patch clusters:
+form_patch_clusters.py --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster_frozen_ref

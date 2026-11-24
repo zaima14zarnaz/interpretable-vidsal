@@ -24,8 +24,12 @@ Distance = wf*(1-feature_cosine) + wr*RGB_MAE + ws*(1-RGB_structure_cosine).
 Structure is per-channel spatially centered RGB; both flat=1, one flat=0.
 RGB bank vectors are HWC (converted to CHW inside concept_creation.py).
 
-Fitting uses seeded approximate k-medoids on a video-capped sample, then
-assigns every patch to the closest final medoid. Write only to a new
+Clustering (--clustering):
+  finch     (default) FINCH on a video-capped sample using the composite distance
+            above. The number of clusters is NOT given; FINCH yields a hierarchy
+            of partitions and one is chosen automatically (or via --finch-level).
+  kmedoids  seeded approximate k-medoids with a fixed --num-prototypes.
+Either way every patch is then assigned to the closest final medoid. Write only to a new
 --output-dir; never overwrite the active bank or feature caches in place.
 
 Output schema (concept_creation.py / view_patch_clusters.py):
@@ -48,6 +52,8 @@ import time
 import zlib
 
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import cdist
 
 DEFAULT_SOURCE_DB = Path('/data/quantization/zaima/videosal_datasets/dhf1k/explanation_graphs/prototype_graph_outputs/graph.sqlite')
@@ -269,6 +275,121 @@ def fit_medoids(data, sample, args, weights):
     return medoids, history, best[0][0]
 
 
+def first_neighbors(data, reps, weights, batch_size):
+    """Exact first neighbour (self excluded) of every representative under the composite distance."""
+    refs = data.take(reps)
+    nn = np.empty(len(reps), dtype=np.int64)
+    for start in range(0, len(reps), batch_size):
+        stop = min(start + batch_size, len(reps))
+        costs = pair_distance(tuple(a[start:stop] for a in refs), refs, weights)
+        costs[np.arange(stop - start), np.arange(start, stop)] = np.inf
+        nn[start:stop] = costs.argmin(axis=1)
+    return nn
+
+
+def cluster_representative(data, members, weights, rng, candidates, cap):
+    """Real patch (descriptor index) of a cluster with the lowest summed distance to its members.
+
+    Exact for small clusters; large clusters use sampled candidates / sampled members.
+    """
+    if len(members) == 1:
+        return int(members[0])
+    cand = members if len(members) <= candidates else rng.choice(members, size=candidates, replace=False)
+    pool = members if len(members) <= cap else rng.choice(members, size=cap, replace=False)
+    costs = pair_distance(data.take(cand), data.take(pool), weights).sum(axis=1)
+    return int(cand[int(costs.argmin())])
+
+
+def finch_partitions(data, sample, weights, args, rng):
+    """FINCH hierarchy (Sarfraz et al., CVPR 2019) with the composite distance.
+
+    Level 0 links every sample patch to its first (nearest) neighbour; connected
+    components of that graph are the first partition. Each later level repeats this
+    on one representative patch per cluster. Representatives are real medoid patches
+    (the composite distance has no meaningful mean), not feature means as in the
+    original FINCH. Returns partitions finest to coarsest.
+    """
+    labels = np.arange(len(sample), dtype=np.int32)
+    reps = np.asarray(sample, dtype=np.int64).copy()
+    partitions = []
+    while len(reps) > 1:
+        m = len(reps)
+        nn = first_neighbors(data, reps, weights, args.batch_size)
+        # Edge i - nn[i]; components of this graph equal FINCH's adjacency
+        # (i->j, j->i, or shared first neighbour) components.
+        graph = coo_matrix((np.ones(m, dtype=np.int8), (np.arange(m), nn)), shape=(m, m))
+        k, comp = connected_components(graph, directed=False)
+        labels = comp[labels].astype(np.int32)
+        order = np.argsort(labels, kind='stable')
+        bounds = np.flatnonzero(np.diff(labels[order])) + 1
+        groups = np.split(np.asarray(sample)[order], bounds)  # groups[j] <-> label j
+        reps = np.array([cluster_representative(data, g, weights, rng, args.medoid_candidates, 512)
+                         for g in groups], dtype=np.int64)
+        partitions.append({'k': int(k), 'labels': labels.copy(), 'reps': reps.copy()})
+        print(f'FINCH level {len(partitions) - 1}: {k:,} clusters', flush=True)
+        if k >= m:  # defensive; cannot happen for m >= 2
+            break
+    return partitions
+
+
+def score_partition(data, sample, labels, reps, weights, batch_size):
+    """Mean distance to own representative and a medoid-based simplified silhouette."""
+    refs = data.take(reps)
+    own_sum, sil_sum = 0., 0.
+    for start in range(0, len(sample), batch_size):
+        stop = min(start + batch_size, len(sample))
+        costs = pair_distance(data.take(sample[start:stop]), refs, weights)
+        pos = np.arange(stop - start)
+        own = costs[pos, labels[start:stop]].copy()
+        costs[pos, labels[start:stop]] = np.inf
+        other = costs.min(axis=1)
+        denom = np.maximum(own, other)
+        sil_sum += float(np.where(denom > 1e-12, (other - own) / np.where(denom > 1e-12, denom, 1.), 0.).sum())
+        own_sum += float(own.sum())
+    n = len(sample)
+    return own_sum / n, sil_sum / n
+
+
+def fit_finch(data, sample, args, weights):
+    """Run FINCH and pick one partition. Returns (medoids, history, mean_distance, info)."""
+    rng = np.random.default_rng(args.seed + 1009)
+    parts = finch_partitions(data, sample, weights, args, rng)
+    if not parts:
+        raise ValueError('FINCH produced no partitions (fit sample too small).')
+    history = []
+    for level, p in enumerate(parts):
+        row = {'level': level, 'num_clusters': p['k'], 'mean_distance': None, 'silhouette': None}
+        if p['k'] >= 2:
+            row['mean_distance'], row['silhouette'] = score_partition(
+                data, sample, p['labels'], p['reps'], weights, args.batch_size)
+        history.append(row)
+    max_k = args.max_clusters if args.max_clusters else math.inf
+    if args.finch_level is not None:
+        if not 0 <= args.finch_level < len(parts):
+            raise ValueError(f'--finch-level must be in [0, {len(parts) - 1}] (0 = finest); '
+                             f'cluster counts per level: {[p["k"] for p in parts]}')
+        chosen, rule = args.finch_level, 'explicit_level'
+    else:
+        eligible = [r for r in history if r['silhouette'] is not None and args.min_clusters <= r['num_clusters'] <= max_k]
+        if not eligible:
+            raise ValueError(f'No FINCH level has {args.min_clusters}..{args.max_clusters or "inf"} clusters; '
+                             f'counts per level: {[p["k"] for p in parts]}. Adjust --min/--max-clusters or --finch-level.')
+        # Highest silhouette; ties go to fewer clusters.
+        chosen = max(eligible, key=lambda r: (round(r['silhouette'], 9), -r['num_clusters']))['level']
+        rule = 'max_simplified_silhouette_within_bounds'
+    for row in history:
+        row['selected'] = row['level'] == chosen
+        print('FINCH level {level}: k={num_clusters:,} mean_dist={mean_distance} silhouette={silhouette}{mark}'.format(
+            mark='  <== selected' if row['selected'] else '', **row), flush=True)
+    medoids = parts[chosen]['reps']
+    medoids = medoids[np.argsort(data.node_ids[medoids], kind='stable')]  # stable vocabulary order
+    mean_distance = history[chosen]['mean_distance']
+    info = {'selection_rule': rule, 'selected_level': chosen, 'num_clusters': int(len(medoids)),
+            'min_clusters': args.min_clusters, 'max_clusters': args.max_clusters,
+            'cluster_counts_per_level': [p['k'] for p in parts]}
+    return medoids, history, (0. if mean_distance is None else float(mean_distance)), info
+
+
 def create_schema(con):
     con.executescript('''
     PRAGMA foreign_keys=ON;
@@ -486,7 +607,18 @@ def finalize_fit(destination, directory, data, manifest, args, weights, started)
         f'{data.count:,} patches, {videos:,} videos; fitting on {len(sample):,} patches.',
         flush=True,
     )
-    medoids, fit_history, objective = fit_medoids(data, sample, args, weights)
+    if args.clustering == 'finch':
+        medoids, fit_history, objective, finch_info = fit_finch(data, sample, args, weights)
+        args.num_prototypes = int(len(medoids))  # cluster count is an output of FINCH
+        manifest.update(
+            algorithm='sampled_finch_composite_distance_medoid_representatives_then_full_closest_medoid_assignment',
+            num_prototypes=args.num_prototypes,
+            finch=finch_info,
+        )
+        for stale in ('iterations', 'restarts'):
+            manifest.pop(stale, None)
+    else:
+        medoids, fit_history, objective = fit_medoids(data, sample, args, weights)
     stats = save_assignments(destination, data, directory, medoids, args, weights)
     remaining = destination.execute('SELECT COUNT(*) FROM patches WHERE prototype_id IS NULL').fetchone()[0]
     if remaining or destination.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
@@ -985,8 +1117,16 @@ def parser():
         action='store_true',
         help='Fail on missing cache entries (disables --allow-compute).',
     )
+    p.add_argument('--clustering', choices=('finch', 'kmedoids'), default='finch',
+                   help='finch: cluster count determined automatically (default). kmedoids: fixed --num-prototypes.')
     p.add_argument('--num-prototypes', '--num-clusters', dest='num_prototypes', type=int, default=256,
-                   help='Number of fixed reference clusters (explicit cluster count).')
+                   help='kmedoids only: number of fixed reference clusters. Ignored with --clustering finch.')
+    p.add_argument('--finch-level', type=int, default=None,
+                   help='finch only: use this hierarchy level (0 = finest) instead of automatic selection.')
+    p.add_argument('--min-clusters', type=int, default=16,
+                   help='finch auto-selection: smallest acceptable cluster count.')
+    p.add_argument('--max-clusters', type=int, default=1024,
+                   help='finch auto-selection: largest acceptable cluster count (0 = no limit).')
     p.add_argument('--fit-sample-size', type=int, default=4096)
     p.add_argument('--fit-max-per-video', type=int, default=128, help='Discovery-sample cap per video; 0 disables it. Every patch is still assigned.')
     p.add_argument('--iterations', type=int, default=10)
@@ -1017,11 +1157,19 @@ def main(argv=None):
         args.output_dir = DEFAULT_CACHE_OUTPUT_DIR if args.source_mode == 'cache' else DEFAULT_OUTPUT_DIR
     if args.cache_read_only:
         args.allow_compute = False
+    if args.clustering == 'finch':
+        if args.num_prototypes != p.get_default('num_prototypes'):
+            print('NOTE: --num-prototypes is ignored with --clustering finch.', flush=True)
+        if args.min_clusters < 2 or args.max_clusters < 0 or (args.max_clusters and args.max_clusters < args.min_clusters):
+            p.error('--min-clusters must be >= 2 and <= --max-clusters (0 = no limit).')
+        # Placeholder so the pre-checks (enough patches / sample) use the lower bound;
+        # fit_finch overwrites it with the discovered count.
+        args.num_prototypes = args.min_clusters
     for name in ('num_prototypes', 'fit_sample_size', 'iterations', 'restarts', 'medoid_candidates', 'batch_size', 'threads', 'window_len', 'stride', 'rgb_size'):
         if getattr(args, name) < 1:
             p.error(f'--{name.replace("_", "-")} must be positive.')
     if args.fit_sample_size < args.num_prototypes or args.fit_max_per_video < 0:
-        p.error('Fit sample must be >= num-prototypes; fit-max-per-video must be >= 0.')
+        p.error('Fit sample must be >= num-prototypes (--min-clusters with finch); fit-max-per-video must be >= 0.')
     if args.max_windows is not None and args.max_windows < 1:
         p.error('--max-windows must be positive when set.')
     weights = (args.feature_weight, args.rgb_weight, args.structure_weight)
