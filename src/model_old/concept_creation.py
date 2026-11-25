@@ -63,7 +63,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .diagnostic_trace import record as _diag_record
 
-DEFAULT_PATCH_CLUSTER_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster"
+DEFAULT_PATCH_CLUSTER_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0"
 PATCH_CLUSTER_REFERENCE_FORMAT = "patch_cluster_reference_v1"
 
 # Deprecated path for legacy external snapshot helpers (no longer used by train.py).

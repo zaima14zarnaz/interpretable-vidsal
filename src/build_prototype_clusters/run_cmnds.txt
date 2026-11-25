@@ -1,0 +1,28 @@
+# To form patch clusters at different FINCH levels:
+python form_patch_clusters.py \
+  --gpu 0 \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref
+
+# To form patch clusters at a particular level
+python form_patch_clusters.py \
+    --gpu 0 \
+    --clustering finch \
+    --finch-level 0 \
+    --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0
+
+# To view the patch clusters
+python view_patch_clusters.py \
+    --cluster-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0
+
+# To form temporal clusters at difference FINCH levels
+python form_temporal_clusters.py \
+  --gpu 0 \
+  --flow-estimator farneback \
+  --clustering finch \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/temporal_cluster/temporal_cluster_level0
+
+# To view the temporal clusters
+python view_temporal_clusters.py \
+  --cluster-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/temporal_cluster/temporal_cluster_level0 \
+  --top-k 12 \
+  --columns 3

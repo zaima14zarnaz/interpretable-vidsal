@@ -16,7 +16,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 from torch.utils.data import DataLoader
@@ -40,23 +40,24 @@ CHECKPOINT_PATH = (
     "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/saved_weights/best_dhf1k.pth"
     # "/data/quantization/zaima/videosal_datasets/dhf1k/proto_replaced/projection/projected_best_dhf1k.pth"
 )
-VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val" # "/data/quantization/zaima/videosal_datasets/ucfsports/testing"
+VAL_DATASET_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/val"  # "/data/quantization/zaima/videosal_datasets/ucfsports/testing"
 WINDOW_LEN = train_cfg.WINDOW_LEN
 BATCH_SIZE = train_cfg._dataloader_batch_size()
 NUM_WORKERS = train_cfg.NUM_WORKERS
 SEED = train_cfg.SEED
 OUTPUT_DIR = "evaluation_outputs"
+EVALUATION_GPU_ID = 0  # Keep the original evaluation GPU selection explicit.
 SAVE_VAL_MAPS = False
 MAP_SAVE_INTERVAL = train_cfg.MAP_SAVE_INTERVAL if SAVE_VAL_MAPS else 10**9
 
 
 def _resolve_devices() -> Tuple[torch.device, torch.device]:
-    """Match train.py: backbone + head on a single GPU (DEFAULT_GPU_ID)."""
-    gpu_id = 0 #int(getattr(train_cfg, "DEFAULT_GPU_ID", 0))
+    """Place the backbone and head together on the selected evaluation GPU."""
+    gpu_id = EVALUATION_GPU_ID
     if torch.cuda.is_available():
         if gpu_id >= torch.cuda.device_count():
             raise ValueError(
-                f"DEFAULT_GPU_ID={gpu_id} is unavailable; "
+                f"EVALUATION_GPU_ID={gpu_id} is unavailable; "
                 f"found {torch.cuda.device_count()} CUDA device(s)."
             )
         device = torch.device(f"cuda:{gpu_id}")
@@ -67,61 +68,35 @@ def _resolve_devices() -> Tuple[torch.device, torch.device]:
 def build_model(
     backbone_device: torch.device,
     head_device: torch.device,
+    model_config: Optional[Dict[str, Any]] = None,
 ) -> ExplainableVidSalModel:
-    """Match the architecture used in train.py."""
-    return ExplainableVidSalModel(
-        backbone_stages=("stage1", "stage2", "stage3", "stage4"),
-        pretrained_backbone=True,
-        freeze_backbone=train_cfg.FREEZE_BACKBONE,
-        backbone_gradient_checkpointing=False,
-        input_format="BTCHW",
-        resize_to=(224, 384),
-        concept_dim=128,
-        num_concepts=256,  # must match train.py / checkpoint visual_concepts bank size
-        concept_hidden_dim=256,
-        saliency_hidden_dim=256,
-        top_k=8,
-        max_source_patches=64,
-        tau_pi=0.5,
-        tau_alpha=0.07,
-        tau_concept=0.07,
-        concept_residual_weight=0.0,
-        last_transition_only=True,
-        use_rgb_refinement=False,
-        use_feature_refinement=False,
-        output_activation="none",
-        return_details=True,
-        use_subpatch_head=True,
-        subpatch_factor=4,
-        subpatch_residual_scale=0.5,
-        use_temporal_transition_aggregation=True,
-        temporal_aggregation_hidden_channels=128,
-        temporal_aggregation_temperature=1.0,
-        visual_concept_on=train_cfg.VISUAL_CONCEPT_ON,
-        temporal_concepts_on=train_cfg.TEMPORAL_CONCEPTS_ON,
-        visual_concept_logit_scale=train_cfg.VISUAL_CONCEPT_LOGIT_SCALE,
-        visual_concept_residual_weight=1.0,
-        use_temporal_feature_infusion=True,
-        use_shared_concept_activations=True,
-        prototype_bottleneck_strength=train_cfg.PROTOTYPE_BOTTLENECK_STRENGTH,
-        prototype_application_position=train_cfg.PROTOTYPE_APPLICATION_POSITION,
-        fine_unary_mask_strength=getattr(
-            train_cfg, "FINE_UNARY_MASK_STRENGTH", 1.0
-        ),
-        stage2_backbone_fusion_enabled=getattr(
-            train_cfg, "STAGE2_BACKBONE_FUSION_ENABLED", True
-        ),
-    ).to_split_devices(backbone_device, head_device)
+    """Use the checkpoint's architecture; fall back to train.py for older weights."""
+    config = train_cfg.get_model_kwargs()
+    if model_config is not None:
+        if not isinstance(model_config, dict):
+            raise TypeError("checkpoint['model_config'] must be a dictionary")
+        config.update(model_config)
+    # The full backbone weights are loaded from the evaluated checkpoint.
+    config["pretrained_backbone"] = False
+    config["backbone_gradient_checkpointing"] = False
+    return train_cfg.build_model(
+        backbone_device,
+        head_device,
+        model_kwargs=config,
+    )
 
 
 def load_checkpoint(
     model: ExplainableVidSalModel,
     checkpoint_path: str,
+    *,
+    checkpoint: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if checkpoint is None:
+        checkpoint = train_cfg._read_checkpoint(checkpoint_path)
     state_dict = checkpoint.get("model_state_dict")
     if state_dict is None:
         raise KeyError(
@@ -181,8 +156,17 @@ def evaluate_checkpoint(
     print(f"Backbone device: {backbone_device} | Head device: {head_device}")
     print(f"Loading checkpoint: {checkpoint_path}")
 
-    model = build_model(backbone_device, head_device)
-    checkpoint = load_checkpoint(model, checkpoint_path)
+    checkpoint = train_cfg._read_checkpoint(checkpoint_path)
+    model_config = checkpoint.get("model_config")
+    if model_config is None:
+        print(
+            "Checkpoint has no model_config; using train.py configuration "
+            f"(top_k={train_cfg.MODEL_TOP_K}). For older checkpoints, set "
+            "MODEL_TOP_K to the value used during their training."
+        )
+    model = build_model(backbone_device, head_device, model_config=model_config)
+    load_checkpoint(model, checkpoint_path, checkpoint=checkpoint)
+    print(f"Evaluating with top_k={model.concept_creations['stage4'].top_k}")
     val_loader, val_dataset = build_val_loader()
 
     print(
@@ -224,7 +208,7 @@ def evaluate_checkpoint(
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    print(f"\nEvaluation complete.")
+    print("\nEvaluation complete.")
     print(f"  Mean val loss: {val_loss:.6f}")
     if val_metrics is not None:
         print(

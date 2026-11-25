@@ -19,7 +19,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from pre_process.collate import video_saliency_collate_fn
@@ -30,14 +30,12 @@ from model.metrics import (
     compute_saliency_metrics_excluding_empty_fixations,
 )
 from metrics import prepare_target_last_map
-from model.model import ExplainableVidSalModel
 from pre_process.dataloader import DatasetLoader
-from model.concept_creation import (
+from model.model import (
+    ExplainableVidSalModel,
     DEFAULT_PATCH_CLUSTER_DIR,
     VisualConceptCreation,
     build_patch_cluster_reference_checkpoint_metadata,
-)
-from model.backbone_feature_cache import (
     CACHE_ROOT as DEFAULT_BACKBONE_FEATURE_CACHE_ROOT,
     DEFAULT_REFERENCE_CHECKPOINT,
     FrozenBackboneFeatureCache,
@@ -58,7 +56,7 @@ TRAIN_DATASET_DIR = (
     # "/data/quantization/zaima/videosal_datasets/ucfsports/training"
     "/data/quantization/zaima/videosal_datasets/dhf1k/train"
 )
-VAL_DATASET_DIR = ( 
+VAL_DATASET_DIR = (
     # "/data/quantization/zaima/videosal_datasets/hollywood2/videos/testing"
     # "/data/quantization/zaima/videosal_datasets/ucfsports/testing"
     "/data/quantization/zaima/videosal_datasets/dhf1k/val"
@@ -77,7 +75,7 @@ MICRO_BATCH_SIZE = 2
 BACKBONE_GRADIENT_CHECKPOINTING = True
 SKIP_VISUAL_EQUIV_WHEN_BACKBONE_TRAINABLE = True
 
-# Frozen reference-feature cache plumbing (targets only; no feature-similarity loss yet).
+# Frozen reference-feature cache for the fixed stage4 appearance objective.
 USE_CACHED_BACKBONE_FEATURES = True
 BACKBONE_FEATURE_CACHE_ROOT = str(DEFAULT_BACKBONE_FEATURE_CACHE_ROOT)
 REFERENCE_BACKBONE_CHECKPOINT = DEFAULT_REFERENCE_CHECKPOINT
@@ -114,17 +112,14 @@ USE_AMP = True
 # Default GPU index when --gpu is not provided (backbone + head on same device).
 DEFAULT_GPU_ID = 1
 
-# Concept-branch switches. Set a branch to False for ablations.
+# Auxiliary-loss switches; these do not disable the model's visual modules.
 VISUAL_CONCEPT_ON = True
 TEMPORAL_CONCEPTS_ON = False
-VISUAL_CONCEPT_LOGIT_SCALE = 1.0
+MODEL_TOP_K = 1  # Shared by train/eval; recorded in new checkpoints.
 
-# Fixed convex blend at stage3/stage4 patch-priority fusion:
-# guided_last = (1 - lambda) * base_last + lambda * prototype_branch_last
-PROTOTYPE_BOTTLENECK_STRENGTH = 1.0
-# "pre_refine": blend into FiLM features before prev-up + refine (legacy).
-# "post_refine": blend into refined decoder features after prev-up + refine.
-PROTOTYPE_APPLICATION_POSITION = "post_refine"
+# Last-slice residual priority masking at stages3/4:
+# guided_last = base_last * ((1 - strength) + strength * priority_mask)
+PROTOTYPE_SPATIAL_MASK_STRENGTH = 1.0
 # Residual unary mask strength at stage1/stage2 (after refine):
 # guided_last = decoded_base_last * ((1 - s) + s * priority_mask_last)
 FINE_UNARY_MASK_STRENGTH = 1.0
@@ -172,7 +167,6 @@ LOSS_LAMBDA = {
     # Old / auxiliary saliency-head losses: off for new decoder
     "lambda_delta": 0.0,
     "lambda_fid": 0.0,
-
     # Main dense saliency losses
     "lambda_dense": 1.0,
     "lambda_bce": 0.0,
@@ -180,32 +174,25 @@ LOSS_LAMBDA = {
     "lambda_cc": 1.0,
     "lambda_nss": 0.1,
     "lambda_similarity": 0.05,
-
     # Disable explicit background suppression for now
     "topk_percent": 0.000,
     "topk_bg_weight": 0.0,
-
     # Disable old concept-map saliency supervision for now
     "lambda_concept_dense": 0.0,
     "lambda_concept_kl": 0.0,
-
     # Temporarily weaken concept regularizers until maps stop collapsing
     "lambda_align": 0.00,
     "lambda_sparse": 0.00,
     "lambda_div": 0.00,
     "lambda_gate": 0.0,
-
     # Temporarily reduce visual regularizers
     "lambda_visual_entropy": 0.005,
     "lambda_visual_usage": 3.0,
     "lambda_visual_equiv": 0.00,
     "lambda_temporal_attention_entropy": 0.0,
-
     "priority_map_loss_weight": PRIORITY_MAP_LOSS_WEIGHT,
     "priority_loss_weight": PRIORITY_MAP_LOSS_WEIGHT,
-
     "patch_from_logits": False,
-
     # Deep supervision on per-stage decoder side outputs (training only).
     "side_stage_weights": {
         "stage1": 0.20,
@@ -214,6 +201,59 @@ LOSS_LAMBDA = {
         "stage4": 0.05,
     },
 }
+
+
+def get_model_kwargs(
+    *,
+    visual_cluster_dir: Optional[str] = None,
+    visual_cluster_max_patches_per_prototype: Optional[int] = None,
+    visual_cluster_seed: Optional[int] = None,
+) -> Dict[str, Any]:
+    """One architecture configuration shared by training and evaluation."""
+    return {
+        "backbone_stages": ("stage1", "stage2", "stage3", "stage4"),
+        "pretrained_backbone": True,
+        "freeze_backbone": FREEZE_BACKBONE,
+        "backbone_gradient_checkpointing": BACKBONE_GRADIENT_CHECKPOINTING,
+        "input_format": "BTCHW",
+        "resize_to": (224, 384),
+        "concept_dim": 128,
+        "num_concepts": 561,
+        "concept_hidden_dim": 256,
+        "saliency_hidden_dim": 256,
+        "top_k": MODEL_TOP_K,
+        "output_activation": "none",
+        "return_details": True,
+        "visual_concept_residual_weight": 1.0,
+        "use_temporal_feature_infusion": False,
+        "use_shared_concept_activations": True,
+        "prototype_spatial_mask_strength": PROTOTYPE_SPATIAL_MASK_STRENGTH,
+        "fine_unary_mask_strength": FINE_UNARY_MASK_STRENGTH,
+        "stage2_backbone_fusion_enabled": STAGE2_BACKBONE_FUSION_ENABLED,
+        "visual_cluster_dir": VISUAL_CLUSTER_DIR
+        if visual_cluster_dir is None
+        else visual_cluster_dir,
+        "visual_cluster_max_patches_per_prototype": VISUAL_CLUSTER_MAX_PATCHES_PER_PROTOTYPE
+        if visual_cluster_max_patches_per_prototype is None
+        else visual_cluster_max_patches_per_prototype,
+        "visual_cluster_seed": VISUAL_CLUSTER_SEED
+        if visual_cluster_seed is None
+        else visual_cluster_seed,
+    }
+
+
+def build_model(
+    backbone_device: torch.device,
+    head_device: torch.device,
+    *,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+) -> ExplainableVidSalModel:
+    """Construct the consolidated model without obsolete constructor options."""
+    kwargs = get_model_kwargs() if model_kwargs is None else dict(model_kwargs)
+    return ExplainableVidSalModel(**kwargs).to_split_devices(
+        backbone_device, head_device
+    )
+
 
 def _resolve_devices(gpu_id: int = DEFAULT_GPU_ID) -> Tuple[torch.device, torch.device]:
     """Place backbone and head on the same GPU."""
@@ -260,7 +300,9 @@ def _backbone_is_trainable(model: ExplainableVidSalModel) -> bool:
     return not model._backbone_frozen
 
 
-def _should_run_visual_equiv(model: ExplainableVidSalModel, epoch: Optional[int] = None) -> bool:
+def _should_run_visual_equiv(
+    model: ExplainableVidSalModel, epoch: Optional[int] = None
+) -> bool:
     loss_lambda = _effective_loss_lambda(epoch)
     if loss_lambda.get("lambda_visual_equiv", 0.0) <= 0.0 or not VISUAL_CONCEPT_ON:
         return False
@@ -457,7 +499,9 @@ def _verify_stage4_patch_cluster_bank(model: ExplainableVidSalModel) -> None:
         )
     meta = dict(stage4._cluster_metadata)
     full_counts = meta.get("full_counts") or []
-    selected_counts = meta.get("selected_counts") or meta.get("reference_patch_counts") or []
+    selected_counts = (
+        meta.get("selected_counts") or meta.get("reference_patch_counts") or []
+    )
     bytes_used = int(meta.get("reference_tensor_bytes") or 0)
     print(
         "Stage4 fixed patch-cluster bank | "
@@ -468,7 +512,7 @@ def _verify_stage4_patch_cluster_bank(model: ExplainableVidSalModel) -> None:
         f"selected_members={int(meta.get('num_reference_patches', sum(selected_counts) if selected_counts else 0))} | "
         f"rgb_descriptor_size={stage4.visual_appearance_patch_size} | "
         f"reference_memory_bytes={bytes_used} "
-        f"({bytes_used / (1024 ** 2):.2f} MiB) | "
+        f"({bytes_used / (1024**2):.2f} MiB) | "
         f"max_patches_per_prototype={stage4.visual_cluster_max_patches_per_prototype} | "
         f"seed={stage4.visual_cluster_seed}",
         flush=True,
@@ -479,7 +523,9 @@ def _build_reference_cache(
     device: torch.device,
     model: Optional[ExplainableVidSalModel] = None,
 ) -> Optional[FrozenBackboneFeatureCache]:
-    if not USE_CACHED_BACKBONE_FEATURES or (model is not None and not _needs_reference_features(model)):
+    if not USE_CACHED_BACKBONE_FEATURES or (
+        model is not None and not _needs_reference_features(model)
+    ):
         return None
     cache = FrozenBackboneFeatureCache(
         root=BACKBONE_FEATURE_CACHE_ROOT,
@@ -562,8 +608,10 @@ def _identities_for_rgb_view(
     for index, meta in enumerate(sample_metadata):
         height, width = _content_hw_from_meta(meta)
         frames = int(n_frames[index])
-        clip = rgb_batch[index, :frames, :, :height, :width].detach().to(
-            dtype=torch.float32
+        clip = (
+            rgb_batch[index, :frames, :, :height, :width]
+            .detach()
+            .to(dtype=torch.float32)
         )
         if clip.numel() > 0 and float(clip.max()) > 2.0:
             clip = clip / 255.0
@@ -755,15 +803,21 @@ def _is_obsolete_fifo_state_key(key: str) -> bool:
     return any(marker in key for marker in _OBSOLETE_FIFO_STATE_MARKERS)
 
 
-def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, checkpoint_path: str) -> None:
+def _load_model_checkpoint(
+    model: ExplainableVidSalModel, checkpoint: dict, checkpoint_path: str
+) -> None:
     state_dict = checkpoint["model_state_dict"]
     incompatible = model.load_state_dict(state_dict, strict=False)
     missing = list(incompatible.missing_keys)
     unexpected = list(incompatible.unexpected_keys)
     allowed_missing = [k for k in missing if _is_allowed_missing_fine_unary_key(k)]
-    disallowed_missing = [k for k in missing if not _is_allowed_missing_fine_unary_key(k)]
+    disallowed_missing = [
+        k for k in missing if not _is_allowed_missing_fine_unary_key(k)
+    ]
     obsolete_fifo = [k for k in unexpected if _is_obsolete_fifo_state_key(k)]
-    disallowed_unexpected = [k for k in unexpected if not _is_obsolete_fifo_state_key(k)]
+    disallowed_unexpected = [
+        k for k in unexpected if not _is_obsolete_fifo_state_key(k)
+    ]
     if disallowed_unexpected or disallowed_missing:
         details = []
         if disallowed_missing:
@@ -771,9 +825,7 @@ def _load_model_checkpoint(model: ExplainableVidSalModel, checkpoint: dict, chec
                 "unexpected missing keys:\n  " + "\n  ".join(disallowed_missing)
             )
         if disallowed_unexpected:
-            details.append(
-                "unexpected keys:\n  " + "\n  ".join(disallowed_unexpected)
-            )
+            details.append("unexpected keys:\n  " + "\n  ".join(disallowed_unexpected))
         raise RuntimeError(
             f"Failed to load checkpoint '{checkpoint_path}' with selective "
             "compatibility for new stage1/stage2 unary-mask parameters.\n"
@@ -823,7 +875,10 @@ def _verify_patch_cluster_checkpoint_metadata(
                 flush=True,
             )
         return
-    if not isinstance(recorded, dict) or recorded.get("format") != "patch_cluster_reference_v1":
+    if (
+        not isinstance(recorded, dict)
+        or recorded.get("format") != "patch_cluster_reference_v1"
+    ):
         raise ValueError(
             f"Unrecognized patch_cluster_reference format in {checkpoint_path}: "
             f"{recorded.get('format') if isinstance(recorded, dict) else type(recorded)!r}"
@@ -861,7 +916,11 @@ def _verify_patch_cluster_checkpoint_metadata(
     live_prov = live.get("reference_feature_provenance")
     if isinstance(rec_prov, dict) and isinstance(live_prov, dict):
         for key in ("backbone_fingerprint", "temporal_selection"):
-            if rec_prov.get(key) and live_prov.get(key) and rec_prov.get(key) != live_prov.get(key):
+            if (
+                rec_prov.get(key)
+                and live_prov.get(key)
+                and rec_prov.get(key) != live_prov.get(key)
+            ):
                 mismatches.append(
                     f"Reference feature {key}: checkpoint={rec_prov.get(key)!r} "
                     f"live={live_prov.get(key)!r}"
@@ -894,7 +953,9 @@ def _verify_patch_cluster_checkpoint_metadata(
     )
 
 
-def _optimizer_hparams_from_checkpoint(checkpoint: dict, checkpoint_path: str) -> Tuple[float, float]:
+def _optimizer_hparams_from_checkpoint(
+    checkpoint: dict, checkpoint_path: str
+) -> Tuple[float, float]:
     optimizer_state = checkpoint.get("optimizer_state_dict")
     if not isinstance(optimizer_state, dict):
         raise ValueError(
@@ -926,7 +987,11 @@ def _init_saliency_head_prior_bias(model: ExplainableVidSalModel) -> None:
             initialized.append("final_upsample_head.head")
 
     patch_head = getattr(model.saliency_prediction, "patch_logit_head", None)
-    if patch_head is not None and hasattr(patch_head, "bias") and patch_head.bias is not None:
+    if (
+        patch_head is not None
+        and hasattr(patch_head, "bias")
+        and patch_head.bias is not None
+    ):
         patch_head.bias.fill_(bias_value)
         initialized.append("patch_logit_head")
 
@@ -1095,7 +1160,9 @@ def save_batch_maps(
         optional_patch_maps = {
             "patch_transition_region.png": pred_out.get("patch_transition_region"),
             "patch_persistence_region.png": pred_out.get("patch_persistence_region"),
-            "concept_context_patch_logits.png": pred_out.get("concept_context_patch_logits"),
+            "concept_context_patch_logits.png": pred_out.get(
+                "concept_context_patch_logits"
+            ),
             "temporal_saliency_map.png": pred_out.get("temporal_saliency_map"),
             "visual_saliency_map.png": pred_out.get("visual_saliency_map"),
         }
@@ -1113,7 +1180,9 @@ def save_first_batch_maps(
     rgb_batch: torch.Tensor,
     output_dir: str,
 ) -> None:
-    save_batch_maps(model_out, sal_batch, fix_batch, rgb_batch, output_dir, epoch=1, batch_idx=0)
+    save_batch_maps(
+        model_out, sal_batch, fix_batch, rgb_batch, output_dir, epoch=1, batch_idx=0
+    )
 
 
 def update_loss_curve(
@@ -1161,27 +1230,6 @@ def tensor_stats(name: str, x: torch.Tensor) -> None:
     )
 
 
-def _print_temporal_aggregation_debug(model_out: dict) -> None:
-    pred_out = model_out.get("prediction_out")
-    if pred_out is None:
-        return
-
-    tw = pred_out.get("temporal_transition_weights")
-    if tw is not None:
-        print("temporal_transition_weights shape:", tuple(tw.shape))
-        print(
-            "temporal weight min/max/mean:",
-            tw.min().item(),
-            tw.max().item(),
-            tw.mean().item(),
-        )
-        print("temporal weight sum over time mean:", tw.sum(dim=1).mean().item())
-
-    tpl = pred_out.get("temporal_patch_saliency_logits")
-    if tpl is not None:
-        print("temporal_patch_saliency_logits shape:", tuple(tpl.shape))
-
-
 def _print_first_batch_debug(model_out: dict, sal_batch: torch.Tensor) -> None:
     tensor_stats("pred_saliency", model_out["saliency_map"])
     tensor_stats("sal_batch", sal_batch.float())
@@ -1195,108 +1243,13 @@ def _print_first_batch_debug(model_out: dict, sal_batch: torch.Tensor) -> None:
             f"min={cov.min().item():.4f} max={cov.max().item():.4f} "
             f"mean={cov.mean().item():.4f}"
         )
-    _print_temporal_aggregation_debug(model_out)
 
 
-def _print_gate_debug(
-    model_out: dict,
-    model: Optional[ExplainableVidSalModel] = None,
-    sal_batch: Optional[torch.Tensor] = None,
-) -> None:
-    concept_out = model_out.get("concept_out")
-    if not isinstance(concept_out, dict):
-        print("DEBUG gate: no concept_out found")
-        return
-
-    found = False
-
-    for stage, out_s in concept_out.items():
-        if not isinstance(out_s, dict):
-            continue
-
-        losses = out_s.get("losses", {})
-        dbg: Optional[dict] = None
-        if isinstance(losses, dict):
-            maybe_dbg = losses.get("gate_debug")
-            if isinstance(maybe_dbg, dict) and maybe_dbg:
-                dbg = maybe_dbg
-
-        if dbg is None and model is not None and sal_batch is not None:
-            features_shape = model_out.get("features_shape", {}).get(stage)
-            gate_probs = out_s.get("gate_probs")
-            metadata = out_s.get("metadata")
-            if (
-                features_shape is not None
-                and torch.is_tensor(gate_probs)
-                and isinstance(metadata, dict)
-                and stage in model.concept_creations
-            ):
-                dbg = model.concept_creations[stage].summarize_gate_debug(
-                    sal_batch,
-                    metadata,
-                    gate_probs,
-                    tuple(features_shape),
-                )
-
-        if not isinstance(dbg, dict) or not dbg:
-            continue
-
-        found = True
-
-        valid_total = 100.0 * float(dbg.get("gate_valid_frac_total", 0.0))
-        tr_total = 100.0 * float(dbg.get("gate_transition_frac_total", 0.0))
-        per_total = 100.0 * float(dbg.get("gate_persistence_frac_total", 0.0))
-        amb_total = 100.0 * float(dbg.get("gate_ambiguous_frac_total", 0.0))
-
-        tr_valid = 100.0 * float(dbg.get("gate_transition_frac_valid", 0.0))
-        per_valid = 100.0 * float(dbg.get("gate_persistence_frac_valid", 0.0))
-
-        conf_mean = float(dbg.get("gate_confidence_mean", 0.0))
-        conf_valid_mean = float(dbg.get("gate_confidence_valid_mean", 0.0))
-        visual_mean = float(dbg.get("gate_visual_sim_mean", 0.0))
-        visual_std = float(dbg.get("gate_visual_sim_std", 0.0))
-        visual_tr_mean = float(dbg.get("gate_visual_sim_transition_mean", 0.0))
-        visual_tr_std = float(dbg.get("gate_visual_sim_transition_std", 0.0))
-        visual_per_mean = float(dbg.get("gate_visual_sim_persistence_mean", 0.0))
-        visual_per_std = float(dbg.get("gate_visual_sim_persistence_std", 0.0))
-        visual_valid_mean = float(dbg.get("gate_visual_sim_valid_mean", 0.0))
-        visual_valid_std = float(dbg.get("gate_visual_sim_valid_std", 0.0))
-
-        n_tr = int(dbg.get("gate_transition_count", 0))
-        n_per = int(dbg.get("gate_persistence_count", 0))
-        n_valid = int(dbg.get("gate_valid_count", 0))
-        n_total = int(dbg.get("gate_total_count", 0))
-        delta_mean = float(dbg.get("gate_delta_abs_mean", 0.0))
-        dist_mean = float(dbg.get("gate_dist_mean", 0.0))
-
-        print(
-            f"DEBUG gate [{stage}] | "
-            f"valid: {valid_total:.2f}% | "
-            f"transition: {tr_total:.2f}% total / {tr_valid:.2f}% valid | "
-            f"persistence: {per_total:.2f}% total / {per_valid:.2f}% valid | "
-            f"ambiguous: {amb_total:.2f}% | "
-            f"conf mean: {conf_mean:.4f} | "
-            f"conf valid mean: {conf_valid_mean:.4f} | "
-            f"visual_sim all: {visual_mean:.4f}±{visual_std:.4f} | "
-            f"visual_sim transition: {visual_tr_mean:.4f}±{visual_tr_std:.4f} (n={n_tr}) | "
-            f"visual_sim persistence: {visual_per_mean:.4f}±{visual_per_std:.4f} (n={n_per}) | "
-            f"visual_sim valid: {visual_valid_mean:.4f}±{visual_valid_std:.4f} (n={n_valid}/{n_total}) | "
-            f"|delta_s| mean: {delta_mean:.4f} | "
-            f"dist mean: {dist_mean:.4f}"
-        )
-
-    if not found:
-        print(
-            "DEBUG gate: no gate_debug available. "
-            "This usually means return_concept_losses=False or lambda_gate=0."
-        )
-
-
-def _print_decoder_concept_gate_debug(
+def _print_decoder_priority_debug(
     model: ExplainableVidSalModel,
     model_out: dict,
 ) -> None:
-    """Print visual FiLM diagnostics and prototype bottleneck strength."""
+    """Print the actual priority masks and contextual comparison diagnostics."""
     decoder = getattr(model, "saliency_prediction", None)
     if decoder is None:
         print("DEBUG decoder gates: no saliency_prediction module found")
@@ -1308,7 +1261,7 @@ def _print_decoder_concept_gate_debug(
     fusion_blocks = getattr(decoder, "fusion_blocks", None)
     if fusion_blocks is not None:
         for stage, block in fusion_blocks.items():
-            msg = f"DEBUG decoder visual FiLM [{stage}]"
+            msg = f"DEBUG decoder priority mask [{stage}]"
             if isinstance(stage_gates, dict) and stage in stage_gates:
                 gamma = stage_gates[stage].detach().float()
                 gamma_mean = float(gamma.mean().cpu())
@@ -1316,18 +1269,18 @@ def _print_decoder_concept_gate_debug(
                 gamma_min = float(gamma.min().cpu())
                 gamma_max = float(gamma.max().cpu())
                 msg += (
-                    f" | film_gamma mean/std/min/max="
+                    f" | priority_mask mean/std/min/max="
                     f"{gamma_mean:.4f}/{gamma_std:.4f}/{gamma_min:.4f}/{gamma_max:.4f}"
                 )
             else:
                 msg += (
-                    " | film_gamma=unavailable "
+                    " | priority_mask=unavailable "
                     "(pass return_decoder_diagnostics=True)"
                 )
-            if getattr(block, "enable_patch_prioritization", False):
+            if getattr(block, "priority_mode", "none") in ("pairwise", "unary_mask"):
                 msg += (
-                    " | prototype_bottleneck_strength="
-                    f"{float(block.prototype_bottleneck_strength):.4f}"
+                    " | prototype_spatial_mask_strength="
+                    f"{float(block.prototype_spatial_mask_strength if block.priority_mode == 'pairwise' else block.fine_unary_mask_strength):.4f}"
                     " | prototype_application_position="
                     f"{block.prototype_application_position}"
                 )
@@ -1387,8 +1340,8 @@ def _print_patch_priority_diagnostics(model_out: dict) -> None:
             f"max={float(diag.get('patch_priority_max', float('nan'))):.6f} | "
             f"prototype_application_position="
             f"{diag.get('prototype_application_position', 'n/a')} | "
-            f"prototype_bottleneck_strength="
-            f"{float(diag.get('prototype_bottleneck_strength', float('nan'))):.6f} | "
+            f"prototype_spatial_mask_strength="
+            f"{float(diag.get('prototype_spatial_mask_strength', float('nan'))):.6f} | "
             f"prototype_to_base_norm_ratio={float(ratio):.6f}"
         )
 
@@ -1428,12 +1381,10 @@ def _print_visual_concept_usage_debug(model_out: dict, top_n: int = 10) -> None:
         if torch.is_tensor(logits):
             probs = F.softmax(logits.detach().float(), dim=-1)
             mean_probs = probs.mean(dim=0)
-            usage_entropy = -(
-                mean_probs * (mean_probs + 1e-8).log()
-            ).sum() / max(math.log(mean_probs.numel()), 1e-8)
-            print(
-                f"  normalized usage entropy: {float(usage_entropy.cpu()):.4f}"
+            usage_entropy = -(mean_probs * (mean_probs + 1e-8).log()).sum() / max(
+                math.log(mean_probs.numel()), 1e-8
             )
+            print(f"  normalized usage entropy: {float(usage_entropy.cpu()):.4f}")
 
 
 def _compute_batch_metrics(
@@ -1629,7 +1580,9 @@ def _finalize_appearance_epoch_stats(acc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _print_appearance_coverage_summary(epoch: int, appearance_stats: Dict[str, Any]) -> None:
+def _print_appearance_coverage_summary(
+    epoch: int, appearance_stats: Dict[str, Any]
+) -> None:
     """Print stage4 evaluated/total coverage and RGB / feature / structure counts."""
     stages = appearance_stats.get("stages") or {}
     row = stages.get("stage4")
@@ -1674,7 +1627,9 @@ def train_one_epoch(
     feature_cache: Optional[FrozenBackboneFeatureCache] = None,
 ) -> Tuple[float, Optional[Dict[str, float]], Dict[str, Any]]:
     model.train()
-    reference_stats_before = dict(feature_cache.stats) if feature_cache is not None else {}
+    reference_stats_before = (
+        dict(feature_cache.stats) if feature_cache is not None else {}
+    )
     running_loss = 0.0
     num_batches = 0
     metric_averager = MetricAverager()
@@ -1705,7 +1660,10 @@ def train_one_epoch(
         cached_backbone_features = None
         if _needs_reference_features(model):
             cached_backbone_features = _resolve_cached_backbone_features(
-                feature_cache, rgb_batch_cpu, sample_metadata, n_frames_cpu,
+                feature_cache,
+                rgb_batch_cpu,
+                sample_metadata,
+                n_frames_cpu,
                 view_id="identity",
             )
         rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
@@ -1738,8 +1696,11 @@ def train_one_epoch(
                 cached_backbone_features_flip = None
                 if _needs_reference_features(model):
                     cached_backbone_features_flip = _resolve_cached_backbone_features(
-                        feature_cache, torch.flip(rgb_batch_cpu, dims=[-1]),
-                        sample_metadata, n_frames_cpu, view_id="hflip",
+                        feature_cache,
+                        torch.flip(rgb_batch_cpu, dims=[-1]),
+                        sample_metadata,
+                        n_frames_cpu,
+                        view_id="hflip",
                     )
                 equiv_model_out = model(
                     rgb_batch_flip,
@@ -1752,14 +1713,19 @@ def train_one_epoch(
 
             if batch_idx == 0:
                 _print_first_batch_debug(model_out, sal_batch)
-                _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
-                _print_decoder_concept_gate_debug(model, model_out)
+                _print_decoder_priority_debug(model, model_out)
                 _print_patch_priority_diagnostics(model_out)
                 _print_visual_concept_usage_debug(model_out)
 
             if batch_idx % MAP_SAVE_INTERVAL == 0:
                 save_batch_maps(
-                    model_out, sal_batch, fix_batch, rgb_batch, output_dir, epoch, batch_idx
+                    model_out,
+                    sal_batch,
+                    fix_batch,
+                    rgb_batch,
+                    output_dir,
+                    epoch,
+                    batch_idx,
                 )
 
             loss_dict = _compute_batch_loss(
@@ -1835,7 +1801,16 @@ def train_one_epoch(
         pbar.set_postfix(loss=f"{loss.item():.4f}")
 
         # Drop graph references so activations can be freed before the next batch.
-        del model_out, loss_dict, loss, rgb_batch, sal_batch, fix_batch, rgb_batch_cpu, cached_backbone_features
+        del (
+            model_out,
+            loss_dict,
+            loss,
+            rgb_batch,
+            sal_batch,
+            fix_batch,
+            rgb_batch_cpu,
+            cached_backbone_features,
+        )
         if equiv_model_out is not None:
             del equiv_model_out
 
@@ -1843,10 +1818,16 @@ def train_one_epoch(
     appearance_stats = _finalize_appearance_epoch_stats(appearance_acc)
     _print_appearance_coverage_summary(epoch, appearance_stats)
     if feature_cache is not None:
-        delta = {k: int(v) - int(reference_stats_before.get(k, 0)) for k, v in feature_cache.stats.items()}
-        print(f"Reference cache epoch {epoch}: hits={delta.get('hits', 0)} "
-              f"misses={delta.get('misses', 0)} rejected={delta.get('rejected', 0)} "
-              f"teacher_forwards={delta.get('reference_forwards', 0)} writes={delta.get('writes', 0)}", flush=True)
+        delta = {
+            k: int(v) - int(reference_stats_before.get(k, 0))
+            for k, v in feature_cache.stats.items()
+        }
+        print(
+            f"Reference cache epoch {epoch}: hits={delta.get('hits', 0)} "
+            f"misses={delta.get('misses', 0)} rejected={delta.get('rejected', 0)} "
+            f"teacher_forwards={delta.get('reference_forwards', 0)} writes={delta.get('writes', 0)}",
+            flush=True,
+        )
     if calculate_metrics:
         return mean_loss, metric_averager.mean(), appearance_stats
     else:
@@ -1948,7 +1929,7 @@ def validate_one_epoch(
                 cached_backbone_features=cached_backbone_features,
             )
             if batch_idx == 0:
-                _print_decoder_concept_gate_debug(model, model_out)
+                _print_decoder_priority_debug(model, model_out)
                 _print_patch_priority_diagnostics(model_out)
             if batch_idx % MAP_SAVE_INTERVAL == 0:
                 save_batch_maps(
@@ -1962,7 +1943,10 @@ def validate_one_epoch(
                     maps_subdir="val_maps",
                 )
             loss_dict = _compute_batch_loss(
-                model_out, sal_batch, fix_batch=fix_batch, epoch=epoch,
+                model_out,
+                sal_batch,
+                fix_batch=fix_batch,
+                epoch=epoch,
                 enable_side_aux=False,
             )
             batch_loss = loss_dict["loss_total"].item()
@@ -2027,7 +2011,9 @@ def main() -> None:
     device = head_device
     print(f"Using single device: {device} (gpu={args.gpu})")
     if is_resume:
-        print(f"Training phase: {args.phase} | epochs={num_epochs} | lr/weight_decay=<from checkpoint>")
+        print(
+            f"Training phase: {args.phase} | epochs={num_epochs} | lr/weight_decay=<from checkpoint>"
+        )
     else:
         print(
             f"Training phase: {args.phase} | epochs={num_epochs} | "
@@ -2037,11 +2023,11 @@ def main() -> None:
         print(f"Checkpoint: {args.checkpoint}")
     print(f"Run checkpoints will be saved to: {run_ckpt_dir}")
     print(
-        "Concept branches | "
+        "Auxiliary-loss switches | "
         f"visual_concept_on={VISUAL_CONCEPT_ON} | "
         f"temporal_concepts_on={TEMPORAL_CONCEPTS_ON} | "
         f"priority_map_loss_weight={PRIORITY_MAP_LOSS_WEIGHT} | "
-        f"visual_concept_logit_scale={VISUAL_CONCEPT_LOGIT_SCALE}"
+        f"top_k={MODEL_TOP_K}"
     )
     print(
         "Dense-loss warmup | "
@@ -2116,57 +2102,18 @@ def main() -> None:
         **loader_kwargs,
     )
 
-
     print(
         f"Train: {len(train_dataset)} windows ({TRAIN_DATASET_DIR}) | "
         f"Val: {len(val_dataset)} windows ({VAL_DATASET_DIR}) | "
         f"window_len={WINDOW_LEN}"
     )
 
-    model = ExplainableVidSalModel(
-        backbone_stages=("stage1", "stage2", "stage3", "stage4"),
-        pretrained_backbone=True,
-        freeze_backbone=FREEZE_BACKBONE,
-        backbone_gradient_checkpointing=BACKBONE_GRADIENT_CHECKPOINTING,
-        input_format="BTCHW",
-        resize_to=(224, 384),
-        concept_dim=128,
-        num_concepts=256,
-        concept_hidden_dim=256,
-        saliency_hidden_dim=256,
-        top_k=1,
-        max_source_patches=64,
-        tau_pi=0.5,
-        tau_alpha=0.07,
-        tau_concept=0.07,
-        concept_residual_weight=0.0,
-        last_transition_only=True,
-        use_rgb_refinement=False,
-        use_feature_refinement=False,
-        output_activation="none",
-        return_details=True,
-        use_subpatch_head=True,
-        subpatch_factor=4,
-        subpatch_residual_scale=0.5,
-        use_temporal_transition_aggregation=True,
-        temporal_aggregation_hidden_channels=128,
-        temporal_aggregation_temperature=1.0,
-        visual_concept_on=VISUAL_CONCEPT_ON,
-        temporal_concepts_on=TEMPORAL_CONCEPTS_ON,
-        visual_concept_logit_scale=VISUAL_CONCEPT_LOGIT_SCALE,
-        visual_concept_residual_weight=1.0,
-        use_temporal_feature_infusion=True,
-        use_shared_concept_activations=True,
-        prototype_bottleneck_strength=PROTOTYPE_BOTTLENECK_STRENGTH,
-        prototype_application_position=PROTOTYPE_APPLICATION_POSITION,
-        fine_unary_mask_strength=FINE_UNARY_MASK_STRENGTH,
-        stage2_backbone_fusion_enabled=STAGE2_BACKBONE_FUSION_ENABLED,
+    model_kwargs = get_model_kwargs(
         visual_cluster_dir=args.visual_cluster_dir,
-        visual_cluster_max_patches_per_prototype=(
-            args.visual_cluster_max_patches_per_prototype
-        ),
+        visual_cluster_max_patches_per_prototype=args.visual_cluster_max_patches_per_prototype,
         visual_cluster_seed=args.visual_cluster_seed,
-    ).to_split_devices(backbone_device, head_device)
+    )
+    model = build_model(backbone_device, head_device, model_kwargs=model_kwargs)
 
     # Immutable stage4 appearance bank must be loaded/compatible before any batch.
     _verify_stage4_patch_cluster_bank(model)
@@ -2258,7 +2205,9 @@ def main() -> None:
         )
         if "Epoch_no" in prior_df.columns and len(prior_df) > 0:
             try:
-                csv_epoch_offset = int(pd.to_numeric(prior_df["Epoch_no"], errors="coerce").max())
+                csv_epoch_offset = int(
+                    pd.to_numeric(prior_df["Epoch_no"], errors="coerce").max()
+                )
             except (TypeError, ValueError):
                 csv_epoch_offset = len(prior_df)
 
@@ -2324,10 +2273,7 @@ def main() -> None:
         if run_validation:
             print(f"  Mean val loss:   {val_loss:.6f}")
         else:
-            print(
-                f"  Validation:    skipped "
-                f"(runs every {val_every_n_epochs} epochs)"
-            )
+            print(f"  Validation:    skipped (runs every {val_every_n_epochs} epochs)")
         print(f"  Current LR:      {current_lr:.2e}")
         app_loss = appearance_stats.get("app_loss") if appearance_stats else None
         app_count = (
@@ -2362,6 +2308,7 @@ def main() -> None:
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
+            "model_config": dict(model_kwargs),
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
             "train_losses": train_losses,
@@ -2382,7 +2329,7 @@ def main() -> None:
             best_val_loss = val_loss
             torch.save(checkpoint, best_ckpt_path)
             print(f"  New best val loss: {best_val_loss:.6f} (saved {best_ckpt_path})")
-        
+
         # columns= forces the full header. Older resumed/history rows that omit
         # App_loss_patch_count / app_loss become empty cells (NaN), not zeros.
         val_metrics_df = pd.DataFrame(
@@ -2427,7 +2374,11 @@ def _run_overfit_one_batch(
     cached_backbone_features = None
     if _needs_reference_features(model):
         cached_backbone_features = _resolve_cached_backbone_features(
-            feature_cache, rgb_batch, sample_metadata, n_frames, view_id="identity",
+            feature_cache,
+            rgb_batch,
+            sample_metadata,
+            n_frames,
+            view_id="identity",
         )
     rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
         rgb_batch,
@@ -2448,10 +2399,11 @@ def _run_overfit_one_batch(
             cached_backbone_features=cached_backbone_features,
         )
         if step == 1:
-            save_first_batch_maps(model_out, sal_batch, fix_batch, rgb_batch, output_dir)
+            save_first_batch_maps(
+                model_out, sal_batch, fix_batch, rgb_batch, output_dir
+            )
             _print_first_batch_debug(model_out, sal_batch)
-            _print_gate_debug(model_out, model=model, sal_batch=sal_batch)
-            _print_decoder_concept_gate_debug(model, model_out)
+            _print_decoder_priority_debug(model, model_out)
             _print_patch_priority_diagnostics(model_out)
         loss_dict = _compute_batch_loss(
             model_out,
@@ -2471,4 +2423,3 @@ def _run_overfit_one_batch(
 
 if __name__ == "__main__":
     main()
-

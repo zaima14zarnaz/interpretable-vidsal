@@ -41,7 +41,7 @@ import webbrowser
 
 from PIL import Image, ImageDraw, ImageOps
 
-DEFAULT_CLUSTER_DIR = Path('/data/quantization/zaima/videosal_datasets/dhf1k/patch_cluster_frozen_ref')
+DEFAULT_CLUSTER_DIR = Path('/data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0')
 FORMAT_VERSION = 'fixed_stage4_patch_clusters_v1'
 
 
@@ -313,3 +313,4 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
