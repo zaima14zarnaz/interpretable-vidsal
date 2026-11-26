@@ -20,7 +20,7 @@ import numpy as np
 import torch
 from model.backbones.video_swin_custom import VideoSwinTransformer
 
-CACHE_ROOT = Path("/data/quantization/zaima/videosal_datasets/dhf1k/cached_feats")
+CACHE_ROOT = Path("/data/quantization/zaima/videosal_datasets/dhf1k/cached_vis_feats")
 
 DEFAULT_REFERENCE_CHECKPOINT = VideoSwinTransformer.DEFAULT_PRETRAINED_PATH
 

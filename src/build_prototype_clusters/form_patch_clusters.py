@@ -92,7 +92,7 @@ DEFAULT_CACHE_OUTPUT_DIR = Path(
 )
 DEFAULT_DATASET_ROOT = Path("/data/quantization/zaima/videosal_datasets/dhf1k")
 DEFAULT_CACHE_ROOT = Path(
-    "/data/quantization/zaima/videosal_datasets/dhf1k/cached_feats"
+    "/data/quantization/zaima/videosal_datasets/dhf1k/cached_vis_feats"
 )
 # Same Kinetics VideoSwin pack as train.py / FrozenBackboneFeatureCache.
 DEFAULT_REFERENCE_CHECKPOINT = Path(

@@ -2,6 +2,10 @@
 """Prototype/patch visual-similarity explorer (offline HTML or local server).
 
 Edit SETTINGS and run this script in src/interpretability_exp/exp4_expl_report/.
+The model is built through the current evaluation.py API using the checkpoint's
+model_config (including native top_k and temporal-infusion/decoder flags).
+CHECKPOINT_PATH=None follows evaluation.py. Legacy weights without model_config
+require matching train.py settings. Model configuration is recorded for replay.
 Optional serve-only argument: --serve-patch-per-prot N (default SETTINGS N).
 For ACTION='serve', build the browser graph from only each prototype's first N
 positive-activation-ranked patches. Signatures/statistics use that same subset.
@@ -84,7 +88,7 @@ ACTION = "extract"  # extract | cache_similarity | view | serve | export_edges |
 SCRIPT_DIR = Path(__file__).resolve().parent
 SRC_DIR = SCRIPT_DIR.parents[1]
 EVALUATION_FILE = SRC_DIR / "evaluation.py"
-CHECKPOINT_PATH = "/home/z/zaimazarnaz/research1/ExplainableSaliency/src/training_outputs/ckpts/20261115_030905/epoch_119.pth"
+CHECKPOINT_PATH = None  # None -> evaluation.py CHECKPOINT_PATH; or set a specific checkpoint.
 DATASET_ROOTS = "/data/quantization/zaima/videosal_datasets/dhf1k/train"
 STAGES = ("stage4",)
 WINDOW_STRIDE = 64
@@ -238,6 +242,78 @@ def load_evaluation():
     spec.loader.exec_module(module)
     return module
 
+def load_graph_model(ev, device, checkpoint_path, manifest=None):
+    """Use the consolidated evaluation API and restore checkpoint behavior flags.
+
+    Read weights once on CPU, before constructing the architecture. Saved config
+    includes parameter-free switches such as top_k and temporal infusion, which
+    cannot be recovered from a state_dict. A replay uses its recorded config so
+    later edits to train.py cannot silently change an existing graph.
+    """
+    import inspect
+
+    checkpoint = ev.train_cfg._read_checkpoint(checkpoint_path)
+    saved = checkpoint.get("model_config")
+    recorded = (manifest or {}).get("model_config")
+    if saved is not None and not isinstance(saved, dict):
+        raise TypeError("checkpoint['model_config'] must be a dictionary.")
+    if recorded is not None and not isinstance(recorded, dict):
+        raise TypeError("Graph manifest model_config must be a dictionary.")
+    if recorded is not None:
+        config = dict(recorded)
+        # A completed graph records effective evaluation config. Saved fields
+        # may only differ for the two explicit evaluation-only overrides below.
+        for key, value in (saved or {}).items():
+            if key not in ("pretrained_backbone", "backbone_gradient_checkpointing"):
+                if key not in config or json.dumps(value, sort_keys=True) != json.dumps(config[key], sort_keys=True):
+                    raise RuntimeError(f"Checkpoint/graph model_config differs at {key!r}; use a fresh OUTPUT_DIR.")
+        source = "graph_manifest"
+    else:
+        config = dict(ev.train_cfg.get_model_kwargs())
+        if saved is not None:
+            config.update(saved)
+            source = "checkpoint"
+        else:
+            source = "train.py_legacy_fallback"
+            print("Checkpoint has no model_config: using train.py. Confirm its prototype count, "
+                  "MODEL_TOP_K, and temporal/decoder flags match the original run.", flush=True)
+    # Full backbone weights are restored by load_checkpoint; do not initialize
+    # pretrained weights or enable training-only gradient checkpointing.
+    config["pretrained_backbone"] = False
+    config["backbone_gradient_checkpointing"] = False
+    model = ev.build_model(device, device, model_config=config)
+    ev.load_checkpoint(model, checkpoint_path, checkpoint=checkpoint)
+    model.eval()
+    assignments = {}
+    for stage in model.backbone_stages:
+        concept = model.concept_creations[stage]
+        assignments[stage] = {
+            "num_prototypes": int(concept.num_visual_concepts),
+            "top_k": int(concept.top_k),
+            "assignment_mode": str(concept.visual_assignment_mode),
+            "assignment_temperature": float(concept.visual_assignment_temperature),
+        }
+    behavior = {
+        "use_temporal_feature_infusion": bool(model.use_temporal_feature_infusion),
+        "input_format": model.input_format,
+        "backbone_stages": list(model.backbone_stages),
+        "assignments": assignments,
+    }
+    old_behavior = (manifest or {}).get("model_behavior")
+    if old_behavior is not None and old_behavior != behavior:
+        raise RuntimeError("Model assignment/temporal behavior differs from the original graph; use a fresh OUTPUT_DIR.")
+    source_path = Path(inspect.getfile(type(model))).resolve()
+    source_hash = sha256_file(source_path)
+    old_hash = (manifest or {}).get("model_source_sha256")
+    if old_hash is not None and old_hash != source_hash:
+        raise RuntimeError("model.py changed since graph extraction; use the original implementation for replay or a fresh OUTPUT_DIR.")
+    provenance = {"model_config": config, "model_config_source": source,
+                  "model_behavior": behavior, "model_source": str(source_path),
+                  "model_source_sha256": source_hash}
+    print(f"Model config: {source}; temporal infusion={behavior['use_temporal_feature_infusion']}; "
+          f"stage4={assignments.get('stage4')}", flush=True)
+    return model, checkpoint, provenance
+
 def frame_names_for_video(dataset, root, video):
     mapping = getattr(dataset, "video_frame_names", None)
     if isinstance(mapping, dict) and video in mapping:
@@ -353,9 +429,7 @@ def extract_graph():
         device = torch.device("cpu")
     ckpt = str(CHECKPOINT_PATH or ev.CHECKPOINT_PATH)
     print(f"Building evaluation architecture on {device}; checkpoint={ckpt}", flush=True)
-    model = ev.build_model(device, device)
-    checkpoint = ev.load_checkpoint(model, ckpt)
-    model.eval()
+    model, checkpoint, model_provenance = load_graph_model(ev, device, ckpt)
     amp_enabled_fn = getattr(ev.train_cfg, "_amp_enabled", None)
     amp_dtype_fn = getattr(ev.train_cfg, "_amp_dtype", None)
     amp_enabled = bool(USE_EVAL_AMP and callable(amp_enabled_fn) and amp_enabled_fn(device))
@@ -405,7 +479,8 @@ def extract_graph():
                 "topk_semantics": "highest matching logits; candidates may be inactive",
                 "active_semantics": "native active indices AND native validity mask",
                 "pred_score_semantics": "mean raw model saliency_map in patch cell; midrank within frame",
-                "cell_mapping": "uniform concept grid over model input; not a receptive-field boundary"}
+                "cell_mapping": "uniform concept grid over model input; not a receptive-field boundary",
+                **model_provenance}
     dump_json(outdir / "manifest.json", manifest)
     con = connect_db(dbpath)
     create_schema(con)
@@ -681,8 +756,8 @@ def build_descriptor_feature_provenance(model, device, ckpt, manifest=None):
         ref_ckpt = (REFERENCE_BACKBONE_CHECKPOINT or expected.get("source_checkpoint_path")
                     or expected.get("checkpoint_path") or tools["DEFAULT_REFERENCE_CHECKPOINT"])
         preprocess = expected.get("preprocess") or {}
-        resize_to = preprocess.get("resize_to", (224, 384))
-        normalize = bool(preprocess.get("normalize", True))
+        resize_to = preprocess.get("resize_to", getattr(model.backbone, "resize_to", (224, 384)))
+        normalize = bool(preprocess.get("normalize", getattr(model.backbone, "normalize", True)))
         reference = tools["build_reference_backbone"](
             checkpoint=ref_ckpt, device=device, resize_to=resize_to, normalize=normalize,
         )
@@ -925,7 +1000,6 @@ def merge_top_matches(old_ids, old_scores, ids, scores, capacity):
     the cut boundary correctly (argpartition alone does not).
     """
     scores = np.asarray(scores, dtype=np.float32)
-    m = scores.shape[1]
     ids2 = np.broadcast_to(np.asarray(ids, dtype=np.int64)[:, None], scores.shape)
     if old_scores is not None:
         ids2 = np.concatenate((old_ids, ids2), axis=0)
@@ -1192,9 +1266,7 @@ def cache_similarity(directory):
             ckpt = str(manifest.get("checkpoint") or CHECKPOINT_PATH or ev.CHECKPOINT_PATH)
             if sha256_file(ckpt) != manifest.get("checkpoint_sha256"):
                 raise ValueError("Checkpoint differs from original graph; refusing mixed caches.")
-            model = ev.build_model(device, device)
-            ev.load_checkpoint(model, ckpt)
-            model.eval()
+            model, checkpoint, model_provenance = load_graph_model(ev, device, ckpt, manifest=manifest)
             enabled, dtype_fn = getattr(ev.train_cfg,"_amp_enabled",None), getattr(ev.train_cfg,"_amp_dtype",None)
             amp = bool(USE_EVAL_AMP and callable(enabled) and enabled(device))
             dtype = dtype_fn(device) if amp and callable(dtype_fn) else torch.float16
@@ -1220,6 +1292,7 @@ def cache_similarity(directory):
                 prototype_cache_status="building",
                 reference_feature_provenance=feature_provenance,
                 similarity_settings=similarity_settings(),
+                **model_provenance,
             )
             dump_json(directory/"manifest.json", manifest)
             for label in dict.fromkeys(r["dataset"] for r in pending):
@@ -1251,6 +1324,14 @@ def cache_similarity(directory):
                     stored = [get_node(con,r[0]) for r in rows]
                     if len(stored) != info["h"]*info["w"]:
                         raise RuntimeError("Stored grid no longer agrees with native model outputs.")
+                    import torch.nn.functional as F
+                    pred = result["saliency_map"].detach().float().cpu()
+                    if pred.ndim != 4 or tuple(pred.shape[:2]) != (1, 1) or not bool(torch.isfinite(pred).all()):
+                        raise RuntimeError("Invalid saliency output during cache replay.")
+                    replay_scores = F.adaptive_avg_pool2d(pred, (info["h"], info["w"]))[0,0].reshape(-1).numpy()
+                    if not np.allclose(replay_scores, [n["pred_score"] for n in stored], atol=1e-4, rtol=.005):
+                        raise RuntimeError("Saliency predictions changed since extraction; refusing mixed-model cache. "
+                                           "Restore the original model/config or use a fresh OUTPUT_DIR.")
                     for flat,n in enumerate(stored):
                         row,col = divmod(flat,info["w"])
                         top = list(map(int,info["top"][0,row,col]))
@@ -1761,3 +1842,4 @@ def main():
 
 if __name__=='__main__':
     main()
+

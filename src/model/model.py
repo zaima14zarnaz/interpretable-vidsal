@@ -4,6 +4,25 @@ Loss calculations stay in the existing losses.py. Frozen reference-backbone
 caching and provenance live in backbone_feature_cache.py; its public helpers
 are re-exported here to preserve existing training and clustering imports.
 The custom Video Swin backbone remains an external dependency.
+
+Stage4 prototype design (enabled by default with visual_routing_mode="medoid"):
+  * Load the existing fixed-stage4 cluster bank via visual_cluster_dir. Its
+    num_prototypes must equal num_concepts; RGB patch size must also match.
+  * Initialize trainable embeddings once from encoded medoid features. Loading
+    a checkpoint preserves its trained embeddings, including legacy checkpoints.
+  * Select prototype IDs/weights using frozen feature cosine distance, RGB MAE,
+    and centered RGB structure cosine distance to the fixed cluster medoids.
+    Metric weights come from the bank, independently of auxiliary loss weights.
+  * Keep all existing prototype loss formulas. Legacy visual_concept_logits and
+    visual_assignment_probs are LEARNED COSINE AUXILIARY scores, so existing
+    losses.py continues to train embeddings/encoder. Actual selection is exposed
+    in visual_routing_logits/probs, visual_activations, and active indices.
+  * Decoder relevance weighting remains trainable within the selected set.
+  * RGB is required at inference too. The parent uses supplied cached features,
+    or its frozen live backbone (must match the bank's reference checkpoint).
+    With an unfrozen backbone, supply frozen-reference features on every forward.
+  * Stages1-3 retain cosine selection: the supplied bank only covers stage4.
+    Set visual_routing_mode="cosine" to restore the prior stage4 selection.
 """
 
 from __future__ import annotations
@@ -145,6 +164,7 @@ class ExplainableVidSalModel(nn.Module):
         visual_cluster_seed: int = 42,
         visual_cluster_expected_checkpoint_sha256: Optional[str] = None,
         visual_appearance_patch_size: int = 16,
+        visual_routing_mode: str = "medoid",
     ):
         super().__init__()
         if input_format not in ("BTCHW", "BCTHW"):
@@ -206,6 +226,7 @@ class ExplainableVidSalModel(nn.Module):
                 visual_cluster_max_patches_per_prototype=self.visual_cluster_max_patches_per_prototype,
                 visual_cluster_seed=self.visual_cluster_seed,
                 visual_cluster_expected_checkpoint_sha256=self.visual_cluster_expected_checkpoint_sha256,
+                visual_routing_mode=visual_routing_mode,
             )
         self.temporal_feature_infusers = nn.ModuleDict()
         for stage in self.backbone_stages:
@@ -363,6 +384,13 @@ class ExplainableVidSalModel(nn.Module):
         self.backbone.train()
         self._backbone_frozen = False
 
+    def train(self, mode: bool = True) -> "ExplainableVidSalModel":
+        super().train(mode)
+        # Frozen features used for medoid matching must not acquire dropout noise.
+        if self._backbone_frozen:
+            self.backbone.eval()
+        return self
+
     def get_trainable_parameters(self) -> List[nn.Parameter]:
         """Parameters for the optimizer (concept + saliency, optionally backbone)."""
         params: List[nn.Parameter] = []
@@ -472,7 +500,9 @@ class ExplainableVidSalModel(nn.Module):
         cached_backbone_features: optional dict of detached frozen-reference
             last-slice tensors ``{stage: [B,C_stage,1,H,W]}``. Live prediction
             features are still computed from the trainable backbone; reference
-            tensors are only forwarded into concept modules for later losses."""
+            tensors drive stage4 medoid routing and frozen-reference losses.
+            Without a cache, a frozen live backbone supplies routing features;
+            an unfrozen backbone requires an explicit frozen-reference cache."""
         if return_details is None:
             return_details = self.return_details
         inference_ctx = torch.inference_mode if not self.training else nullcontext
@@ -507,7 +537,10 @@ class ExplainableVidSalModel(nn.Module):
                 saliency_maps if return_concept_losses else None
             )
             rgb_last_frame_for_concepts = None
-            if self.training and return_concept_losses:
+            needs_routing_rgb = any(
+                module.uses_medoid_routing for module in self.concept_creations.values()
+            )
+            if needs_routing_rgb or (self.training and return_concept_losses):
                 rgb_last_frame_for_concepts = self._prepare_rgb_last_frame_for_concepts(
                     last_rgb_frame
                 )
@@ -523,6 +556,12 @@ class ExplainableVidSalModel(nn.Module):
                         cached_backbone_features, stage, concept_features
                     )
                 )
+                if (
+                    concept_creations[stage].uses_medoid_routing
+                    and reference_stage_features is None
+                    and self._backbone_frozen
+                ):
+                    reference_stage_features = stage_features[:, :, -1:].detach().float()
                 concept_creations[stage]._diagnostic_label = f"concept.{stage}"
                 visual_out = concept_creations[stage](
                     concept_features,
@@ -803,7 +842,11 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
     Patch-concept assignments are computed on the last frame only; earlier
     frames in the window are retained in metadata via ``window_T`` for the
     decoder. Each normalized last-frame patch feature is encoded and matched
-    to a visual concept bank via ``visual_encoder`` and ``visual_concepts``."""
+    to a visual concept bank via ``visual_encoder`` and ``visual_concepts``.
+    Stage4 defaults to fixed composite-distance medoid routing. Learned cosine
+    logits/probabilities remain auxiliary loss inputs; ``visual_activations``
+    and active indices are the actual prediction assignments. Stages1-3 retain
+    cosine routing because the supplied reference bank contains only stage4."""
 
     DROPOUT_P = 0.2
 
@@ -831,6 +874,7 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         visual_cluster_max_patches_per_prototype: int = 0,
         visual_cluster_seed: int = 42,
         visual_cluster_expected_checkpoint_sha256: Optional[str] = None,
+        visual_routing_mode: str = "medoid",
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -850,6 +894,10 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
                 in_channels
             )
         )
+        if visual_routing_mode not in ("medoid", "cosine"):
+            raise ValueError("visual_routing_mode must be 'medoid' or 'cosine'.")
+        self.visual_routing_mode = visual_routing_mode
+        self.uses_medoid_routing = self.stage_name == "stage4" and visual_routing_mode == "medoid"
         self._appearance_stage_source = (
             "explicit" if stage_name is not None else "video_swin_channels"
         )
@@ -976,15 +1024,26 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         self._cluster_counts = torch.empty(0, dtype=torch.long)
         self._cluster_rgb_sorted = ()
         self._cluster_rgb_prefix = ()
+        # Small immutable routing references are reloaded from the bank rather
+        # than duplicating all descriptors in every model checkpoint.
+        self._medoid_feature = torch.empty(0, dtype=torch.float32)
+        self._medoid_rgb = torch.empty(0, dtype=torch.float32)
+        self._medoid_structure = torch.empty(0, dtype=torch.float32)
+        self._medoid_flat = torch.empty(0, dtype=torch.bool)
+        self._medoid_weights = torch.empty(0, dtype=torch.float32)
+        self._medoid_loaded = False
+        self.register_buffer("_medoid_initialized", torch.tensor(False))
+        self.register_buffer("_medoid_reference_digest", torch.zeros(32, dtype=torch.uint8))
         self._appearance_forward_count = 0
         self.reset_appearance_forward_counter()
         if (
             self.stage_name == "stage4"
-            and self.loss_weights["visual_appearance"] > 0
-            and any(
-                self.loss_weights[k] > 0
-                for k in ("visual_rgb", "visual_feature", "visual_structure")
-            )
+            and (self.uses_medoid_routing or (
+                self.loss_weights["visual_appearance"] > 0 and any(
+                    self.loss_weights[k] > 0
+                    for k in ("visual_rgb", "visual_feature", "visual_structure")
+                )
+            ))
             and (Path(self.visual_cluster_dir) / "manifest.json").is_file()
         ):
             self.load_visual_patch_clusters()
@@ -993,8 +1052,12 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         "_cluster_feature_mean",
         "_cluster_structure_mean",
         "_cluster_flat_fraction",
+        "_medoid_feature",
+        "_medoid_rgb",
+        "_medoid_structure",
+        "_medoid_weights",
     )
-    _CLUSTER_INT_TENSORS = ("_cluster_counts",)
+    _CLUSTER_INT_TENSORS = ("_cluster_counts", "_medoid_flat")
 
     def _apply(self, fn, recurse=True):
         # References move with the module but retain FP32, including under half().
@@ -1020,6 +1083,163 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
     def _init_concept_parameters(self) -> None:
         with torch.no_grad():
             self.visual_concepts.copy_(F.normalize(self.visual_concepts, dim=-1))
+
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict,
+        missing_keys, unexpected_keys, error_msgs,
+    ):
+        # Legacy checkpoints already contain learned vectors: preserve them.
+        # Never re-seed a resumed model from medoids after loading those vectors.
+        init_key = prefix + "_medoid_initialized"
+        digest_key = prefix + "_medoid_reference_digest"
+        if init_key not in state_dict:
+            state_dict[init_key] = torch.tensor(prefix + "visual_concepts" in state_dict)
+        if digest_key not in state_dict:
+            state_dict[digest_key] = self._medoid_reference_digest.clone()
+        incoming_digest = state_dict[digest_key]
+        if (
+            self.uses_medoid_routing and self._medoid_loaded
+            and incoming_digest.shape == self._medoid_reference_digest.shape
+            and bool(incoming_digest.any())
+            and not torch.equal(incoming_digest.cpu(), self._medoid_reference_digest.cpu())
+        ):
+            error_msgs.append(prefix + "checkpoint medoid bank differs from the loaded reference bank")
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs,
+        )
+
+    @torch.no_grad()
+    def _load_visual_medoids(self, root: Path, manifest: Dict[str, Any]) -> None:
+        """Load fixed medoids in prototype-ID order and initialize embeddings once.
+
+        Called by load_visual_patch_clusters, outside forward and before optimizer
+        construction. The Parameter object is preserved (copy_, not replacement).
+        """
+        with np.load(root / "cluster_references.npz", allow_pickle=False) as bank:
+            required = {"prototype_ids", "descriptor_indices", "feature", "rgb", "structure", "flat", "weights"}
+            if not required.issubset(bank.files):
+                raise ValueError(f"Medoid bank lacks fields: {sorted(required - set(bank.files))}")
+            ids = np.asarray(bank["prototype_ids"])
+            if ids.dtype.kind not in "iu" or ids.shape != (self.num_visual_concepts,):
+                raise ValueError("Invalid medoid prototype IDs.")
+            order = np.argsort(ids)
+            if not np.array_equal(ids[order], np.arange(self.num_visual_concepts)):
+                raise ValueError("Medoid IDs must contain every prototype ID exactly once.")
+            f = np.array(bank["feature"][order], dtype=np.float32)
+            rgb = np.array(bank["rgb"][order], dtype=np.float32)
+            structure = np.array(bank["structure"][order], dtype=np.float32)
+            flat = np.asarray(bank["flat"])[order]
+            indices = np.asarray(bank["descriptor_indices"])[order]
+            weights = np.array(bank["weights"], dtype=np.float32)
+        m, r = self.num_visual_concepts, self.visual_appearance_patch_size
+        d = self.visual_appearance_dim
+        if f.shape != (m, self.in_channels) or rgb.shape != (m, d) or structure.shape != (m, d) or flat.shape != (m,):
+            raise ValueError("Medoid descriptor dimensions disagree with the model.")
+        if not all(np.isfinite(a).all() for a in (f, rgb, structure, weights)) or rgb.min() < 0 or rgb.max() > 1:
+            raise ValueError("Medoid descriptors must be finite; RGB must be in [0,1].")
+        if indices.shape != (m,) or indices.dtype.kind not in "iu" or np.any(indices < 0) or np.any(indices >= int(manifest["num_patches"])):
+            raise ValueError("Invalid medoid descriptor indices.")
+        labels = np.load(root / "descriptors/prototype_ids.npy", mmap_mode="r", allow_pickle=False)
+        if not np.array_equal(labels[indices], np.arange(m)):
+            raise ValueError("A medoid must belong to its assigned reference cluster.")
+        source_weights = manifest.get("weights", {})
+        expected_weights = np.asarray([
+            source_weights.get("feature", np.nan), source_weights.get("rgb_mae", np.nan),
+            source_weights.get("structure", np.nan),
+        ], dtype=np.float32)
+        if weights.shape != (3,) or np.any(weights < 0) or not np.any(weights > 0) or not np.array_equal(weights, expected_weights):
+            raise ValueError("Medoid metric weights must match the clustering manifest.")
+        scales = np.max(np.abs(f), axis=1, keepdims=True)
+        scaled = f.astype(np.float64) / np.maximum(scales, 1e-12)
+        norms = np.linalg.norm(scaled, axis=1, keepdims=True)
+        if np.any(norms * scales < 1e-12):
+            raise ValueError("Medoid features must be nonzero.")
+        f = (scaled / norms).astype(np.float32)
+        # Recompute centering in float64, exactly as structure_descriptor in the
+        # clustering script. Store CHW to match the model's RGB query helper.
+        centered = rgb.astype(np.float64).reshape(m, r * r, 3)
+        centered = centered - centered.mean(axis=1, keepdims=True)
+        snorm = np.linalg.norm(centered.reshape(m, d), axis=1)
+        actual_flat = snorm < 1e-12
+        unit = centered / np.maximum(snorm[:, None, None], 1e-12)
+        unit[actual_flat] = 0
+        if not np.array_equal(flat.astype(bool), actual_flat) or not np.allclose(structure, unit.reshape(m, d), atol=2e-6):
+            raise ValueError("Medoid structure descriptors disagree with the clustering formula.")
+        def chw(a):
+            return np.ascontiguousarray(a.reshape(m, r, r, 3).transpose(0, 3, 1, 2).reshape(m, d))
+        device = self.visual_concepts.device
+        digest = torch.tensor(list(bytes.fromhex(manifest["references_sha256"])), dtype=torch.uint8, device=device)
+        if bool(self._medoid_reference_digest.any()) and not torch.equal(digest, self._medoid_reference_digest):
+            raise ValueError("Cannot change the medoid bank of an initialized/restored model.")
+        self._medoid_feature = torch.from_numpy(f).to(device)
+        self._medoid_rgb = torch.from_numpy(chw(rgb)).to(device)
+        self._medoid_structure = torch.from_numpy(chw(unit.astype(np.float32))).to(device)
+        self._medoid_flat = torch.from_numpy(actual_flat).to(device)
+        self._medoid_weights = torch.from_numpy(weights).to(device)
+        self._medoid_reference_digest.copy_(digest)
+        self._medoid_loaded = True
+        if self.uses_medoid_routing and not bool(self._medoid_initialized):
+            # Disable dropout only for this one-time projection; restore even
+            # mixed per-layer train/eval states, and leave requires_grad intact.
+            modes = [(module, module.training) for module in self.visual_encoder.modules()]
+            try:
+                self.visual_encoder.eval()
+                with torch.autocast(device_type=device.type, enabled=False):
+                    encoded = self.visual_encoder(self._medoid_feature.to(self.visual_concepts.dtype))
+                    initialized = F.normalize(encoded.float(), dim=-1)
+                if not torch.isfinite(initialized).all() or (initialized.norm(dim=-1) < 1e-12).any():
+                    raise ValueError("Medoid encoder produced invalid prototype initializations.")
+                self.visual_concepts.copy_(initialized.to(self.visual_concepts.dtype))
+                self._medoid_initialized.fill_(True)
+            finally:
+                for module, mode in modes:
+                    module.training = mode
+
+    @torch.no_grad()
+    def _compute_medoid_distances(
+        self, rgb_last_frame: Optional[torch.Tensor],
+        cached_backbone_features: Optional[torch.Tensor], H: int, W: int,
+    ) -> torch.Tensor:
+        """Composite distances to actual medoids, never cluster-mean costs.
+
+        Inputs are fixed; gradients intentionally do not flow through routing.
+        No straight-through estimator is used. The separate learned cosine
+        logits continue to support the existing prototype auxiliary losses.
+        """
+        if not self._medoid_loaded:
+            raise RuntimeError("Medoid bank not loaded. Call load_visual_patch_clusters(path) before optimizer construction/forward.")
+        if rgb_last_frame is None:
+            raise ValueError("Medoid routing requires unnormalized last-frame RGB during training AND evaluation.")
+        with torch.autocast(device_type=self.visual_concepts.device.type, enabled=False):
+            rgb = self._rgb_appearance_descriptors(rgb_last_frame, H, W)
+            feature = None
+            if float(self._medoid_weights[0]) > 0:
+                if cached_backbone_features is None:
+                    raise ValueError("Medoid feature routing requires frozen-reference features. Supply cached_backbone_features; the parent model also accepts its frozen live backbone.")
+                feature, valid = self._cached_feature_descriptors(cached_backbone_features)
+                if not bool(valid.all()):
+                    raise ValueError("Medoid routing cannot assign a zero/near-zero frozen feature vector.")
+                if feature.shape[0] != rgb.shape[0]:
+                    raise ValueError("Medoid RGB and feature query counts differ.")
+            pixels = rgb.double().reshape(-1, 3, self.visual_appearance_patch_size**2)
+            centered = (pixels - pixels.mean(dim=-1, keepdim=True)).flatten(1)
+            norm = torch.linalg.vector_norm(centered, dim=-1, keepdim=True)
+            flat = norm[:, 0] < 1e-12
+            structure = (centered / norm.clamp_min(1e-12)).float()
+            structure[flat] = 0
+            distances = []
+            for start in range(0, rgb.shape[0], self.visual_appearance_query_chunk_size):
+                stop = start + self.visual_appearance_query_chunk_size
+                sc = (structure[start:stop] @ self._medoid_structure.T).clamp(-1, 1)
+                sc = (sc + flat[start:stop, None].float() * self._medoid_flat[None].float()).clamp(-1, 1)
+                rgb_mae = torch.cdist(rgb[start:stop], self._medoid_rgb, p=1) / self.visual_appearance_dim
+                cost = self._medoid_weights[1] * rgb_mae + self._medoid_weights[2] * (1 - sc)
+                if feature is not None:
+                    fc = (feature[start:stop] @ self._medoid_feature.T).clamp(-1, 1)
+                    cost = cost + self._medoid_weights[0] * (1 - fc)
+                distances.append(cost.clamp_min(0))
+            return torch.cat(distances, dim=0)
 
     @torch.no_grad()
     def reset_appearance_forward_counter(self) -> None:
@@ -1275,7 +1495,9 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         }
 
     def _build_visual_concepts_from_patches(
-        self, features: torch.Tensor
+        self, features: torch.Tensor,
+        rgb_last_frame: Optional[torch.Tensor] = None,
+        cached_backbone_features: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Build visual-only concept assignments from the last-frame patch features.
         Args:
@@ -1304,8 +1526,18 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         assignment_out = self._compute_visual_assignments(raw_similarity)
         visual_logits = assignment_out["visual_logits"]
         visual_probs = assignment_out["visual_probs"]
-        visual_indices = assignment_out["visual_indices"]
-        visual_activations = assignment_out["visual_activations"]
+        # Learned logits/probs retain their original meaning for losses.py and
+        # external entropy/usage/flip losses. They do NOT select stage4 members.
+        routing_out = assignment_out
+        medoid_distances = None
+        if self.uses_medoid_routing:
+            medoid_distances = self._compute_medoid_distances(
+                rgb_last_frame, cached_backbone_features, H, W
+            )
+            # Reuse only top-k/softmax machinery: larger negative distance wins.
+            routing_out = self._compute_visual_assignments(-medoid_distances)
+        visual_indices = routing_out["visual_indices"]
+        visual_activations = routing_out["visual_activations"]
         visual_repr = visual_activations @ c_vis
         if self.visual_concept_residual_weight > 0:
             visual_repr = visual_repr + self.visual_concept_residual_weight * q_vis
@@ -1339,7 +1571,7 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             T=T,
             H=H,
             W=W,
-            selected_indices=assignment_out["topk_indices"],
+            selected_indices=routing_out["topk_indices"],
         )
         _diag_label = getattr(self, "_diagnostic_label", "concept")
         _diag_record(f"{_diag_label}.patch_embeddings", q_vis)
@@ -1348,12 +1580,18 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         _diag_record(f"{_diag_label}.topk_indices", active_visual_prototype_indices)
         _diag_record(f"{_diag_label}.active_prototypes", active_visual_prototypes)
         _diag_record(f"{_diag_label}.concept_representation", visual_repr)
+        _diag_record(f"{_diag_label}.routing_logits", routing_out["visual_logits"])
         return {
             "active_visual_prototypes": active_visual_prototypes,
             "active_visual_prototype_indices": active_visual_prototype_indices,
             "visual_validity_mask": visual_validity_mask,
             "visual_patch_embeddings": q_vis,
             "visual_concept_logits": visual_logits,
+            "visual_routing_logits": routing_out["visual_logits"],
+            "visual_routing_probs": routing_out["visual_probs"],
+            "visual_medoid_distances": medoid_distances,
+            "visual_assignment_source": "fixed_medoid_composite" if self.uses_medoid_routing else "learned_cosine",
+            "visual_auxiliary_logits_source": "learned_cosine",
             "visual_concept_indices": visual_indices,
             "visual_activations": visual_activations,
             "visual_concept_representation": visual_repr,
@@ -1380,17 +1618,20 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             return_losses: whether to compute visual concept auxiliary losses.
             rgb_last_frame: optional unnormalized RGB last frame, float32 in [0, 1],
                 shaped [B, 3, H_rgb, W_rgb], on the same device as ``features``.
+                Required for stage4 medoid routing even without losses/in eval.
                 Prepared by the parent model to match the backbone spatial canvas
                 (``resize_to``) without ImageNet mean/std. Existing callers may omit
                 it. Appearance descriptors use the actual ``features`` H,W grid,
                 in batch-major, row-major patch order. RGB appearance cost is fixed;
-                gradients reach model parameters through live soft assignments.
+                gradients reach model parameters through learned auxiliary scores.
             cached_backbone_features: optional detached frozen-reference last-slice
                 tensor shaped [B, C, 1, H, W], aligned with ``features[:, :, -1:]``.
                 Flattening order matches live visual patches:
                 [B,C,1,H,W] -> [B,H,W,C] -> [B*H*W,C]. Each frozen vector is
                 L2 normalized for fixed-cluster cosine-distance supervision. It remains
-                separate from learned ``visual_patch_embeddings``. When the
+                separate from learned ``visual_patch_embeddings`` and also drives
+                medoid matching. Standalone stage4 callers must supply it when
+                the clustering feature weight is positive. When the
                 feature component is enabled, missing cached features raise an error.
                 Zero vectors are excluded from every component.
                 Set visual_feature=0 for an RGB/structure-only ablation.
@@ -1466,7 +1707,9 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
                 raise ValueError(
                     f"rgb_last_frame must be on the same device as features: {rgb_last_frame.device} vs {features.device}"
                 )
-        visual_out = self._build_visual_concepts_from_patches(features)
+        visual_out = self._build_visual_concepts_from_patches(
+            features, rgb_last_frame, cached_backbone_features
+        )
         losses, align_out = self._compute_concept_losses(
             visual_out,
             saliency_maps,
@@ -1490,6 +1733,11 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             ],
             "visual_activations": visual_out["visual_activations"],
             "visual_concept_logits": visual_out["visual_concept_logits"],
+            "visual_routing_logits": visual_out["visual_routing_logits"],
+            "visual_routing_probs": visual_out["visual_routing_probs"],
+            "visual_medoid_distances": visual_out["visual_medoid_distances"],
+            "visual_assignment_source": visual_out["visual_assignment_source"],
+            "visual_auxiliary_logits_source": visual_out["visual_auxiliary_logits_source"],
             "visual_concept_indices": visual_out["visual_concept_indices"],
             "visual_assignment_probs": visual_out["visual_assignment_probs"],
             "visual_assignment_entropy": visual_out["visual_assignment_entropy"],
@@ -1796,6 +2044,8 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             fixed_prefix,
         )
         self._cluster_metadata, self._cluster_loaded = (metadata, True)
+        if self.uses_medoid_routing:
+            self._load_visual_medoids(root, manifest)
         self.visual_cluster_dir = str(root)
         self.visual_appearance_diagnostics = self._appearance_status(
             False, "fixed_clusters_loaded"

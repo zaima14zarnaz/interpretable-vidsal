@@ -17,12 +17,22 @@ python view_patch_clusters.py \
 # To form temporal clusters at difference FINCH levels
 python form_temporal_clusters.py \
   --gpu 0 \
-  --flow-estimator farneback \
-  --clustering finch \
   --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/temporal_cluster/temporal_cluster_level0
 
 # To view the temporal clusters
 python view_temporal_clusters.py \
   --cluster-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/temporal_cluster/temporal_cluster_level0 \
   --top-k 12 \
-  --columns 3
+  --min-arrow-fraction 0.1 \
+  --columns 4
+
+#Cache backbone features
+
+#Cache temporal features (optical flow)
+python cache_optical_flow.py \
+  --bank-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/temporal_cluster/temporal_cluster_level0 \
+  --dataset-root /data/quantization/zaima/videosal_datasets/dhf1k \
+  --cache-root /data/quantization/zaima/videosal_datasets/dhf1k/cached_temporal_feats \
+  --splits train val test \
+  --augmentations original hflip \
+  --expected-clusters 130

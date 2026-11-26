@@ -190,7 +190,7 @@ STAGE1_SAMPLE_MAX_NEW_TOKENS = 256
 STAGE1_SAMPLE_RETRY_MAX_NEW_TOKENS = 512
 STAGE2_AGGREGATE_MAX_NEW_TOKENS = 512
 STAGE2_AGGREGATE_RETRY_MAX_NEW_TOKENS = 1024
-CACHED_FEATS = "/data/quantization/zaima/videosal_datasets/dhf1k/cached_feats"
+CACHED_FEATS = "/data/quantization/zaima/videosal_datasets/dhf1k/cached_vis_feats"
 
 # Prototypes kept per patch for decoder priority scoring. Not stored in the
 # checkpoint, so it must match the value hard-coded in train.py.

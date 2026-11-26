@@ -4,7 +4,7 @@ Caches last-temporal-slice stage features from an independent frozen
 ``VideoSwinTransformer`` (not the trainable prediction backbone).
 
 Cache root:
-  /data/quantization/zaima/videosal_datasets/dhf1k/cached_feats
+  /data/quantization/zaima/videosal_datasets/dhf1k/cached_vis_feats
 
 Layout:
   reference_backbone.pt          fingerprint + frozen weight snapshot
@@ -38,7 +38,7 @@ import torch.nn as nn
 
 from model.backbones.video_swin_custom import VideoSwinTransformer
 
-CACHE_ROOT = Path("/data/quantization/zaima/videosal_datasets/dhf1k/cached_feats")
+CACHE_ROOT = Path("/data/quantization/zaima/videosal_datasets/dhf1k/cached_vis_feats")
 DEFAULT_REFERENCE_CHECKPOINT = VideoSwinTransformer.DEFAULT_PRETRAINED_PATH
 SCHEMA = "frozen_backbone_last_slice_v2"
 SCHEMA_VERSION = 2
