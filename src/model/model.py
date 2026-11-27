@@ -5,24 +5,15 @@ caching and provenance live in backbone_feature_cache.py; its public helpers
 are re-exported here to preserve existing training and clustering imports.
 The custom Video Swin backbone remains an external dependency.
 
-Stage4 prototype design (enabled by default with visual_routing_mode="medoid"):
-  * Load the existing fixed-stage4 cluster bank via visual_cluster_dir. Its
-    num_prototypes must equal num_concepts; RGB patch size must also match.
-  * Initialize trainable embeddings once from encoded medoid features. Loading
-    a checkpoint preserves its trained embeddings, including legacy checkpoints.
-  * Select prototype IDs/weights using frozen feature cosine distance, RGB MAE,
-    and centered RGB structure cosine distance to the fixed cluster medoids.
-    Metric weights come from the bank, independently of auxiliary loss weights.
-  * Keep all existing prototype loss formulas. Legacy visual_concept_logits and
-    visual_assignment_probs are LEARNED COSINE AUXILIARY scores, so existing
-    losses.py continues to train embeddings/encoder. Actual selection is exposed
-    in visual_routing_logits/probs, visual_activations, and active indices.
-  * Decoder relevance weighting remains trainable within the selected set.
-  * RGB is required at inference too. The parent uses supplied cached features,
-    or its frozen live backbone (must match the bank's reference checkpoint).
-    With an unfrozen backbone, supply frozen-reference features on every forward.
-  * Stages1-3 retain cosine selection: the supplied bank only covers stage4.
-    Set visual_routing_mode="cosine" to restore the prior stage4 selection.
+Optional temporal_cache_dir enables one stage-4 optical-flow concept bank.
+Stage3/4 priority tokens concatenate visual and temporal prototype evidence.
+Only the visual concept volume enters FiLM. Temporal inputs and labels come
+from cache_optical_flow.py; the learned temporal encoder runs every forward.
+
+Backbone stage features feed the concept modules and decoder directly. The
+optional temporal feature infusion branch has been removed. Legacy constructor
+options for that branch are accepted only for disabled configurations; loading
+old model checkpoints discards only temporal_feature_infusers.* weights.
 """
 
 from __future__ import annotations
@@ -42,9 +33,9 @@ import torch.nn.functional as F
 from model.backbones.video_swin_custom import VideoSwinTransformer
 
 if __package__:
-    from .losses import VisualConceptLossMixin
+    from .losses import VisualConceptLossMixin, TemporalConceptLossMixin
 else:
-    from losses import VisualConceptLossMixin
+    from losses import VisualConceptLossMixin, TemporalConceptLossMixin
 
 
 # Cache helpers remain importable from model.model for existing callers.
@@ -110,6 +101,305 @@ else:
     )
 
 
+# Fixed cached flow inputs and the stage-4 temporal concept bank.
+
+_TEMPORAL_INPUT_FIELDS = (
+    "encoder_inputs",
+    "flow_hist",
+    "magnitude",
+    "compact",
+    "global_motion",
+    "flow_valid",
+    "role",
+    "cluster_ids",
+    "temporal_train_mask",
+)
+
+
+def pack_temporal_flow_batch(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Collate load_cached_window() results in the SAME order as RGB clips.
+
+    Call in the dataloader collate function. Each RGB augmentation must match
+    its cached view. Learned embeddings and cluster IDs are never encoder inputs.
+    """
+    if not items:
+        raise ValueError("Cannot collate an empty optical-flow batch.")
+    return {
+        **{
+            name: torch.stack([torch.as_tensor(item[name]) for item in items])
+            for name in _TEMPORAL_INPUT_FIELDS
+        },
+        "metadata": [item["metadata"] for item in items],
+    }
+
+
+class TemporalConceptCreation(TemporalConceptLossMixin, nn.Module):
+    """One learned prototype per immutable flow cluster, only matched at stage 4.
+
+    cache_dir is the namespaced directory containing index.sqlite, manifest.json
+    and bank_references.npz produced by cache_optical_flow.py. The encoder runs
+    live on fixed descriptors. No RGB flow estimation or feature FiLM occurs here.
+    """
+
+    def __init__(
+        self,
+        cache_dir: str,
+        concept_dim: int = 256,
+        hidden_dim: int = 512,
+        top_k: int = 9,
+        expected_clusters: int = 131,
+        temperature: float = 0.07,
+        entropy_weight: float = 0.01,
+        usage_weight: float = 0.02,
+        saliency_align_weight: float = 0.05,
+        use_saliency_alignment: bool = True,
+        loss_weights: Optional[Dict[str, float]] = None,
+        diversity_margin: float = 0.2,
+    ):
+        super().__init__()
+        if top_k < 1 or not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError(
+                "Temporal top_k and assignment temperature must be positive."
+            )
+        directory = Path(cache_dir).expanduser()
+        manifest = json.loads((directory / "manifest.json").read_text())
+        if manifest.get("schema") != "optical_flow_training_inputs_v1":
+            raise ValueError(
+                "temporal_cache_dir must be a namespaced optical-flow training cache."
+            )
+        self.contract = manifest["contract"]
+        contract = self.contract
+        if contract["bank_format"] != "fixed_stage4_temporal_clusters_v2_flow_only":
+            raise ValueError("A flow-only fixed temporal bank is required.")
+        reference_file = directory / "bank_references.npz"
+        reference_sha = hashlib.sha256(reference_file.read_bytes()).hexdigest()
+        if reference_sha != contract["bank_reference_sha256"]:
+            raise ValueError("Temporal bank reference fingerprint mismatch.")
+        with np.load(reference_file, allow_pickle=False) as archive:
+            refs = {name: archive[name] for name in archive.files}
+        self.num_concepts = int(contract["num_prototypes"])
+        if self.num_concepts != expected_clusters or not np.array_equal(
+            refs["prototype_ids"], np.arange(self.num_concepts)
+        ):
+            raise ValueError(
+                f"Expected {expected_clusters} fixed temporal clusters, found {self.num_concepts}."
+            )
+        self.bank_identity = contract["bank_identity"]
+        self.grid_hw = tuple(contract["grid_hw"])
+        self.canvas_hw = tuple(contract["canvas_hw"])
+        self.flow_gaps = list(contract["flow_frame_gaps"])
+        self.concept_dim = int(concept_dim)
+        self.top_k = min(int(top_k), self.num_concepts)
+        self.temperature = float(temperature)
+        self.entropy_weight = float(entropy_weight)
+        self.usage_weight = float(usage_weight)
+        self.saliency_align_weight = float(saliency_align_weight)
+        self.use_saliency_alignment = bool(use_saliency_alignment)
+        self.diversity_margin = float(diversity_margin)
+        self.loss_weights = dict(self.DEFAULT_TEMPORAL_LOSS_WEIGHTS)
+        if loss_weights:
+            unknown = set(loss_weights) - set(self.loss_weights)
+            if unknown:
+                raise ValueError(f"Unknown temporal loss weights: {sorted(unknown)}")
+            self.loss_weights.update(loss_weights)
+        if any(
+            not math.isfinite(v) or v < 0
+            for v in (
+                *self.loss_weights.values(),
+                entropy_weight,
+                usage_weight,
+                saliency_align_weight,
+            )
+        ):
+            raise ValueError("Temporal loss weights must be finite and nonnegative.")
+        self.metric = contract["descriptor"]["histogram_metric"]
+        for name in ("flow_hist", "magnitude", "compact", "global_motion", "role"):
+            self.register_buffer(
+                "reference_" + name, torch.from_numpy(refs[name].copy())
+            )
+        self.register_buffer(
+            "distance_weights", torch.as_tensor(refs["weights"], dtype=torch.float32)
+        )
+        # Same fixed encoder-input layout as cache_optical_flow.merge_pairs().
+        columns = []
+        for name, width in contract["encoder_input_components"]:
+            value = (
+                refs["magnitude"][:, :1]
+                if name == "normalized_flow_magnitude"
+                else (
+                    refs["magnitude"][:, 1:2]
+                    if name == "normalized_cross_gap_std"
+                    else refs[name]
+                )
+            )
+            value = np.asarray(value, np.float32).reshape(self.num_concepts, int(width))
+            columns.append(value)
+        reference_inputs = np.concatenate(columns, axis=1)
+        if not np.isfinite(reference_inputs).all():
+            raise ValueError("Temporal references contain nonfinite encoder inputs.")
+        self.register_buffer(
+            "reference_inputs", torch.from_numpy(reference_inputs.copy())
+        )
+        self.input_dim = reference_inputs.shape[1]
+        self.temporal_encoder = nn.Sequential(
+            nn.Linear(self.input_dim, hidden_dim),
+            nn.GELU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, concept_dim),
+            nn.LayerNorm(concept_dim),
+        )
+        with torch.no_grad():
+            initial = F.normalize(self.temporal_encoder(self.reference_inputs), dim=-1)
+        self.temporal_concepts = nn.Parameter(initial.clone())
+        self.temporal_saliency_head = nn.Sequential(
+            nn.Linear(2 * concept_dim + 2, max(hidden_dim // 2, 1)),
+            nn.GELU(),
+            nn.Linear(max(hidden_dim // 2, 1), 1),
+        )
+
+    def get_extra_state(self) -> Dict[str, Any]:
+        return {"bank_identity": self.bank_identity}
+
+    def set_extra_state(self, state: Dict[str, Any]) -> None:
+        if state.get("bank_identity") != self.bank_identity:
+            raise RuntimeError(
+                "Checkpoint temporal cluster identity differs from the configured bank."
+            )
+
+    def _prepare_batch(self, batch, B, H, W, input_window_len, canvas_hw):
+        if not isinstance(batch, dict):
+            raise ValueError(
+                "Temporal concepts require cached_optical_flow=pack_temporal_flow_batch(items)."
+            )
+        if (H, W) != self.grid_hw or tuple(canvas_hw) != self.canvas_hw:
+            raise ValueError(
+                "Cached temporal grid/canvas must match stage 4 and the resized RGB input; descriptors cannot be interpolated."
+            )
+        metadata = batch.get("metadata")
+        if not isinstance(metadata, (list, tuple)) or len(metadata) != B:
+            raise ValueError(
+                "Optical-flow metadata must contain one cache item per RGB clip."
+            )
+        for meta in metadata:
+            if (
+                meta["bank_identity"] != self.bank_identity
+                or tuple(meta["grid_hw"]) != self.grid_hw
+                or tuple(meta["canvas_hw"]) != self.canvas_hw
+                or list(meta["flow_frame_gaps"]) != self.flow_gaps
+                or int(meta["window_len"]) != input_window_len
+                or int(meta["target_index"])
+                != int(meta["window_start"]) + input_window_len - 1
+                or max(self.flow_gaps) >= input_window_len
+                or meta["augmentation"] not in ("original", "hflip")
+            ):
+                raise ValueError(
+                    "Cached flow bank, frame interval, augmentation, or window geometry mismatch."
+                )
+        device = self.temporal_concepts.device
+        widths = {
+            "encoder_inputs": self.input_dim,
+            "flow_hist": 9,
+            "magnitude": 2,
+            "compact": 3,
+            "global_motion": 2,
+        }
+        result = {}
+        for name in _TEMPORAL_INPUT_FIELDS:
+            value = batch.get(name)
+            if not torch.is_tensor(value) or value.requires_grad:
+                raise ValueError(f"Cached {name} must be a detached tensor.")
+            shape = (B, H * W, widths[name]) if name in widths else (B, H * W)
+            if tuple(value.shape) != shape:
+                raise ValueError(
+                    f"Cached {name} must have shape {shape}, got {tuple(value.shape)}."
+                )
+            if name in ("flow_valid", "temporal_train_mask"):
+                value = value.to(device=device, dtype=torch.bool, non_blocking=True)
+            elif name in ("role", "cluster_ids"):
+                if value.is_floating_point():
+                    raise ValueError(f"Cached {name} must use integer IDs.")
+                value = value.to(device=device, dtype=torch.long, non_blocking=True)
+            else:
+                value = value.to(device=device, dtype=torch.float32, non_blocking=True)
+                if not torch.isfinite(value).all():
+                    raise ValueError(f"Nonfinite cached {name}.")
+            result[name] = value.flatten(0, 1)
+        if ((result["role"] < 0) | (result["role"] > 2)).any():
+            raise ValueError("Unknown temporal reliability/motion role.")
+        labels = result["cluster_ids"]
+        supervised = result["temporal_train_mask"]
+        if ((labels < -1) | (labels >= self.num_concepts)).any() or (
+            supervised & (labels < 0)
+        ).any():
+            raise ValueError("Invalid cached temporal cluster targets.")
+        if (
+            supervised & (self.reference_role[labels.clamp_min(0)] != result["role"])
+        ).any():
+            raise ValueError(
+                "Temporal cluster target has the wrong motion/reliability role."
+            )
+        return result
+
+    def forward(
+        self,
+        batch,
+        feature_shape,
+        input_window_len,
+        canvas_hw,
+        saliency_maps=None,
+        return_losses=True,
+    ):
+        B, _, window_T, H, W = feature_shape
+        fixed = self._prepare_batch(batch, B, H, W, input_window_len, canvas_hw)
+        # Cache values remain fixed; the learned encoder and cosine matches stay live.
+        q = F.normalize(
+            self.temporal_encoder(
+                fixed["encoder_inputs"].to(self.temporal_concepts.dtype)
+            ),
+            dim=-1,
+        )
+        prototypes = F.normalize(self.temporal_concepts, dim=-1)
+        eligible = fixed["role"][:, None] == self.reference_role[None, :]
+        valid = fixed["flow_valid"] & eligible.any(dim=-1)
+        eligible = eligible & valid[:, None]
+        similarity = q.float() @ prototypes.float().T
+        logits = (similarity / self.temperature).masked_fill(~eligible, -1e4)
+        probs = torch.softmax(logits, dim=-1) * eligible
+        probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        selected_logits, selected = logits.topk(self.top_k, dim=-1)
+        selected_valid = eligible.gather(1, selected)
+        weights = torch.softmax(selected_logits, dim=-1) * selected_valid
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        activations = torch.zeros_like(probs).scatter(1, selected, weights)
+        representation = activations.to(prototypes.dtype) @ prototypes
+        fs = {"B": B, "C": self.concept_dim, "T": 1, "H": H, "W": W}
+        out = {
+            "active_temporal_prototypes": prototypes[selected].view(
+                B, 1, H, W, self.top_k, -1
+            ),
+            "active_temporal_prototype_indices": selected.view(B, 1, H, W, self.top_k),
+            "temporal_validity_mask": selected_valid.view(B, 1, H, W, self.top_k),
+            "temporal_topk_weights": weights.view(B, 1, H, W, self.top_k),
+            "temporal_patch_embeddings": q,
+            "temporal_concept_representation": representation,
+            "temporal_assignment_probs": probs,
+            "temporal_activations": activations,
+            "temporal_concept_logits": logits,
+            "temporal_concept_indices": torch.where(valid, logits.argmax(-1), -1),
+            "temporal_patch_valid": valid,
+            "temporal_metadata": {
+                "feature_shape": fs,
+                "window_T": window_T,
+                "bank_identity": self.bank_identity,
+                "flow_frame_gaps": self.flow_gaps,
+            },
+            "losses": {},
+        }
+        if return_losses:
+            out["losses"] = self._compute_temporal_losses(out, fixed, saliency_maps)
+        return out
+
+
 # End-to-end model
 
 
@@ -146,15 +436,7 @@ class ExplainableVidSalModel(nn.Module):
         use_visual_saliency_alignment: bool = True,
         visual_saliency_align_weight: float = 0.05,
         allow_eval_concept_losses: bool = False,
-        temporal_dim: Optional[int] = None,
-        temporal_dropout: float = 0.0,
-        temporal_use_difference: bool = True,
-        temporal_num_blocks: int = 2,
-        temporal_mlp_ratio: float = 2.0,
-        temporal_residual_gate_init: float = -2.0,
-        temporal_enhance_last_only: bool = False,
         decoder_use_side_logit_fusion: bool = True,
-        use_temporal_feature_infusion: bool = True,
         use_shared_concept_activations: bool = False,
         prototype_spatial_mask_strength: float = 1.0,
         fine_unary_mask_strength: float = 0.6,
@@ -164,9 +446,27 @@ class ExplainableVidSalModel(nn.Module):
         visual_cluster_seed: int = 42,
         visual_cluster_expected_checkpoint_sha256: Optional[str] = None,
         visual_appearance_patch_size: int = 16,
-        visual_routing_mode: str = "medoid",
+        temporal_cache_dir: Optional[str] = None,
+        temporal_top_k: Optional[int] = None,
+        temporal_expected_clusters: int = 131,
+        temporal_loss_weights: Optional[Dict[str, float]] = None,
+        **legacy_temporal_options: Any,
     ):
         super().__init__()
+        # Small migration shim; no modules/parameters are created for these.
+        allowed_legacy_options = {
+            "temporal_dim",
+            "temporal_dropout",
+            "temporal_use_difference",
+            "temporal_num_blocks",
+            "temporal_mlp_ratio",
+            "temporal_residual_gate_init",
+            "temporal_enhance_last_only",
+        }
+        unknown_options = set(legacy_temporal_options) - allowed_legacy_options
+        if unknown_options:
+            raise TypeError(f"Unexpected model options: {sorted(unknown_options)}")
+
         if input_format not in ("BTCHW", "BCTHW"):
             raise ValueError("input_format must be 'BTCHW' or 'BCTHW'")
         if backbone_stages is None:
@@ -178,10 +478,6 @@ class ExplainableVidSalModel(nn.Module):
         self.return_details = return_details
         self._backbone_frozen = freeze_backbone
         self.allow_eval_concept_losses = bool(allow_eval_concept_losses)
-        if temporal_dim is None:
-            temporal_dim = concept_dim
-        self.temporal_dim = int(temporal_dim)
-        self.use_temporal_feature_infusion = bool(use_temporal_feature_infusion)
         self.visual_cluster_dir = visual_cluster_dir
         self.visual_cluster_max_patches_per_prototype = int(
             visual_cluster_max_patches_per_prototype
@@ -226,21 +522,26 @@ class ExplainableVidSalModel(nn.Module):
                 visual_cluster_max_patches_per_prototype=self.visual_cluster_max_patches_per_prototype,
                 visual_cluster_seed=self.visual_cluster_seed,
                 visual_cluster_expected_checkpoint_sha256=self.visual_cluster_expected_checkpoint_sha256,
-                visual_routing_mode=visual_routing_mode,
             )
-        self.temporal_feature_infusers = nn.ModuleDict()
-        for stage in self.backbone_stages:
-            self.temporal_feature_infusers[stage] = SpatioTemporal3DFeatureInfusion(
-                in_channels=self.stage_channels[stage],
-                temporal_dim=self.temporal_dim,
-                num_blocks=temporal_num_blocks,
-                mlp_ratio=temporal_mlp_ratio,
-                dropout=temporal_dropout,
-                use_temporal_difference=temporal_use_difference,
-                residual_gate_init=temporal_residual_gate_init,
-                enhance_last_only=temporal_enhance_last_only,
-                layer_scale_init=0.001,
+        if temporal_cache_dir is not None and "stage4" not in self.backbone_stages:
+            raise ValueError("The temporal bank requires stage4 backbone features.")
+        self.temporal_concept_creation = (
+            TemporalConceptCreation(
+                cache_dir=temporal_cache_dir,
+                concept_dim=concept_dim,
+                hidden_dim=concept_hidden_dim,
+                top_k=top_k if temporal_top_k is None else temporal_top_k,
+                expected_clusters=temporal_expected_clusters,
+                temperature=visual_assignment_temperature,
+                entropy_weight=visual_entropy_weight,
+                usage_weight=visual_usage_weight,
+                saliency_align_weight=visual_saliency_align_weight,
+                use_saliency_alignment=use_visual_saliency_alignment,
+                loss_weights=temporal_loss_weights,
             )
+            if temporal_cache_dir is not None
+            else None
+        )
         self.saliency_prediction = ConceptGatedMultiScaleSaliencyDecoder(
             stage_channels=self.stage_channels,
             concept_dim=concept_dim,
@@ -252,11 +553,40 @@ class ExplainableVidSalModel(nn.Module):
             prototype_spatial_mask_strength=prototype_spatial_mask_strength,
             fine_unary_mask_strength=fine_unary_mask_strength,
             stage2_backbone_fusion_enabled=stage2_backbone_fusion_enabled,
+            temporal_concept_dim=(
+                concept_dim if self.temporal_concept_creation is not None else None
+            ),
         )
         if freeze_backbone:
             self.freeze_backbone()
         self._backbone_device: Optional[torch.device] = None
         self._head_device: Optional[torch.device] = None
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        # Preserve strict validation of all retained layers while allowing
+        # model weights from the earlier disabled-branch implementation.
+        removed_prefix = prefix + "temporal_feature_infusers."
+        for key in list(state_dict):
+            if key.startswith(removed_prefix):
+                del state_dict[key]
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     @property
     def input_device(self) -> torch.device:
@@ -278,7 +608,8 @@ class ExplainableVidSalModel(nn.Module):
         """Place backbone on one device and all downstream modules on another."""
         self.backbone.to(backbone_device)
         self.concept_creations.to(head_device)
-        self.temporal_feature_infusers.to(head_device)
+        if self.temporal_concept_creation is not None:
+            self.temporal_concept_creation.to(head_device)
         self.saliency_prediction.to(head_device)
         self._backbone_device = torch.device(backbone_device)
         self._head_device = torch.device(head_device)
@@ -384,19 +715,12 @@ class ExplainableVidSalModel(nn.Module):
         self.backbone.train()
         self._backbone_frozen = False
 
-    def train(self, mode: bool = True) -> "ExplainableVidSalModel":
-        super().train(mode)
-        # Frozen features used for medoid matching must not acquire dropout noise.
-        if self._backbone_frozen:
-            self.backbone.eval()
-        return self
-
     def get_trainable_parameters(self) -> List[nn.Parameter]:
         """Parameters for the optimizer (concept + saliency, optionally backbone)."""
         params: List[nn.Parameter] = []
         params.extend(self.concept_creations.parameters())
-        if self.use_temporal_feature_infusion:
-            params.extend(self.temporal_feature_infusers.parameters())
+        if self.temporal_concept_creation is not None:
+            params.extend(self.temporal_concept_creation.parameters())
         params.extend(self.saliency_prediction.parameters())
         if not self._backbone_frozen:
             params.extend(self.backbone.parameters())
@@ -410,15 +734,6 @@ class ExplainableVidSalModel(nn.Module):
             if hasattr(torch, "set_float32_matmul_precision"):
                 torch.set_float32_matmul_precision("high")
         return self
-
-    def get_temporal_diagnostics(self) -> Dict[str, Dict[str, float]]:
-        """Return last temporal-infusion diagnostics for each backbone stage."""
-        if not self.use_temporal_feature_infusion:
-            return {}
-        return {
-            stage: self.temporal_feature_infusers[stage].get_last_diagnostics()
-            for stage in self.backbone_stages
-        }
 
     def _prepare_cached_backbone_features_for_stage(
         self,
@@ -485,6 +800,7 @@ class ExplainableVidSalModel(nn.Module):
         return_concept_losses: Optional[bool] = None,
         return_decoder_diagnostics: bool = False,
         cached_backbone_features: Optional[Dict[str, torch.Tensor]] = None,
+        cached_optical_flow: Optional[Dict[str, Any]] = None,
     ) -> Union[torch.Tensor, Dict[str, Any]]:
         """Args:
         x: RGB video window from the dataloader.
@@ -500,9 +816,10 @@ class ExplainableVidSalModel(nn.Module):
         cached_backbone_features: optional dict of detached frozen-reference
             last-slice tensors ``{stage: [B,C_stage,1,H,W]}``. Live prediction
             features are still computed from the trainable backbone; reference
-            tensors drive stage4 medoid routing and frozen-reference losses.
-            Without a cache, a frozen live backbone supplies routing features;
-            an unfrozen backbone requires an explicit frozen-reference cache."""
+            tensors are only forwarded into concept modules for later losses.
+        cached_optical_flow: pack_temporal_flow_batch() of matching cache items;
+            required when temporal_cache_dir is configured. The live encoder runs
+            every forward. IDs are loss targets only, never prediction inputs."""
         if return_details is None:
             return_details = self.return_details
         inference_ctx = torch.inference_mode if not self.training else nullcontext
@@ -537,15 +854,11 @@ class ExplainableVidSalModel(nn.Module):
                 saliency_maps if return_concept_losses else None
             )
             rgb_last_frame_for_concepts = None
-            needs_routing_rgb = any(
-                module.uses_medoid_routing for module in self.concept_creations.values()
-            )
-            if needs_routing_rgb or (self.training and return_concept_losses):
+            if self.training and return_concept_losses:
                 rgb_last_frame_for_concepts = self._prepare_rgb_last_frame_for_concepts(
                     last_rgb_frame
                 )
             concept_creations = self.concept_creations
-            temporal_feature_infusers = self.temporal_feature_infusers
             for stage in self.backbone_stages:
                 stage_features = features_dict[stage]
                 concept_features = stage_features
@@ -556,12 +869,6 @@ class ExplainableVidSalModel(nn.Module):
                         cached_backbone_features, stage, concept_features
                     )
                 )
-                if (
-                    concept_creations[stage].uses_medoid_routing
-                    and reference_stage_features is None
-                    and self._backbone_frozen
-                ):
-                    reference_stage_features = stage_features[:, :, -1:].detach().float()
                 concept_creations[stage]._diagnostic_label = f"concept.{stage}"
                 visual_out = concept_creations[stage](
                     concept_features,
@@ -571,13 +878,38 @@ class ExplainableVidSalModel(nn.Module):
                     cached_backbone_features=reference_stage_features,
                 )
                 concept_outs[stage] = visual_out
-                if self.use_temporal_feature_infusion:
-                    decoder_features_dict[stage] = temporal_feature_infusers[stage](
-                        stage_features
-                    )
-                else:
-                    decoder_features_dict[stage] = concept_features
+                decoder_features_dict[stage] = concept_features
                 _diag_record(f"decoder_features.{stage}", decoder_features_dict[stage])
+            if self.temporal_concept_creation is not None:
+                temporal_out = self.temporal_concept_creation(
+                    cached_optical_flow,
+                    decoder_features_dict["stage4"].shape,
+                    input_window_len=int(
+                        x.shape[1] if self.input_format == "BTCHW" else x.shape[2]
+                    ),
+                    canvas_hw=(
+                        tuple(rgb_last_frame_for_concepts.shape[-2:])
+                        if rgb_last_frame_for_concepts is not None
+                        else self._decoder_output_size(last_rgb_frame)
+                    ),
+                    saliency_maps=saliency_maps_for_concepts,
+                    return_losses=return_concept_losses,
+                )
+                # One bank and one loss contribution; stage3 only reuses evidence.
+                for stage in ("stage3", "stage4"):
+                    if stage in concept_outs:
+                        concept_outs[stage]["temporal_out"] = temporal_out
+                if return_concept_losses:
+                    stage_losses = concept_outs["stage4"]["losses"]
+                    stage_losses.update(temporal_out["losses"])
+                    stage_losses["loss_total_concept"] = (
+                        stage_losses["loss_total_concept"]
+                        + stage_losses["loss_total_temporal"]
+                    )
+            elif cached_optical_flow is not None:
+                raise ValueError(
+                    "cached_optical_flow supplied but temporal_cache_dir is not configured."
+                )
             pred_out = self.saliency_prediction(
                 concept_outs=concept_outs,
                 features_dict=decoder_features_dict,
@@ -598,7 +930,6 @@ class ExplainableVidSalModel(nn.Module):
                 "concept_features_shape": concept_features_shape,
                 "decoder_features_shape": decoder_features_shape,
                 "features_shape": concept_features_shape,
-                "temporal_diagnostics": self.get_temporal_diagnostics(),
             }
 
 
@@ -663,7 +994,7 @@ def capture_diagnostic_trace() -> Iterator[List[Dict[str, Any]]]:
         _TRACE_COUNTS.reset(token_counts)
 
 
-# Temporal feature infusion
+# Shared normalization helper
 
 
 def _pick_num_groups(channels: int, preferred: int = 8) -> int:
@@ -673,161 +1004,9 @@ def _pick_num_groups(channels: int, preferred: int = 8) -> int:
     return 1
 
 
-class Factorized3DResBlock(nn.Module):
-    """Factorized 3D residual block with temporal then spatial depthwise conv."""
-
-    def __init__(
-        self,
-        dim: int,
-        *,
-        mlp_ratio: float = 4.0,
-        num_groups: int = 8,
-        layer_scale_init: float = 0.001,
-        dropout: float = 0.0,
-    ):
-        super().__init__()
-        groups = _pick_num_groups(dim, num_groups)
-        self.temporal_dw = nn.Conv3d(
-            dim, dim, kernel_size=(3, 1, 1), padding=(1, 0, 0), groups=dim, bias=False
-        )
-        self.spatial_dw = nn.Conv3d(
-            dim, dim, kernel_size=(1, 3, 3), padding=(0, 1, 1), groups=dim, bias=False
-        )
-        self.pointwise = nn.Conv3d(dim, dim, kernel_size=1, bias=False)
-        self.norm = nn.GroupNorm(groups, dim)
-        self.act = nn.ReLU()
-        hidden = max(int(dim * mlp_ratio), dim)
-        self.ffn = nn.Sequential(
-            nn.Conv3d(dim, hidden, kernel_size=1, bias=True),
-            nn.ReLU(),
-            nn.Dropout3d(dropout) if dropout > 0.0 else nn.Identity(),
-            nn.Conv3d(hidden, dim, kernel_size=1, bias=True),
-        )
-        self.layer_scale = nn.Parameter(
-            torch.full((1, dim, 1, 1, 1), float(layer_scale_init))
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        y = self.temporal_dw(x)
-        y = self.spatial_dw(y)
-        y = self.pointwise(y)
-        y = self.norm(y)
-        y = self.act(y)
-        y = self.ffn(y)
-        return residual + self.layer_scale * y
-
-
-class SpatioTemporal3DFeatureInfusion(nn.Module):
-    """Factorized 3D spatiotemporal residual infusion for stage features."""
-
-    def __init__(
-        self,
-        in_channels: int,
-        temporal_dim: int = 256,
-        num_layers: int = 2,
-        num_blocks: Optional[int] = None,
-        mlp_ratio: float = 4.0,
-        dropout: float = 0.0,
-        use_temporal_difference: bool = True,
-        residual_init: Optional[float] = None,
-        residual_gate_init: float = -2.0,
-        enhance_last_only: bool = False,
-        num_groups: int = 8,
-        layer_scale_init: float = 0.001,
-    ):
-        super().__init__()
-        if num_blocks is not None:
-            num_layers = int(num_blocks)
-        if residual_init is not None:
-            gate_init = float(residual_init)
-        else:
-            gate_init = float(residual_gate_init)
-        self.in_channels = int(in_channels)
-        self.use_temporal_difference = bool(use_temporal_difference)
-        self.enhance_last_only = bool(enhance_last_only)
-        self.input_proj = nn.Conv3d(in_channels, temporal_dim, kernel_size=1, bias=True)
-        if self.use_temporal_difference:
-            self.delta_proj = nn.Conv3d(
-                temporal_dim * 2, temporal_dim, kernel_size=1, bias=True
-            )
-        else:
-            self.delta_proj = None
-        self.blocks = nn.ModuleList(
-            [
-                Factorized3DResBlock(
-                    temporal_dim,
-                    mlp_ratio=mlp_ratio,
-                    num_groups=num_groups,
-                    layer_scale_init=layer_scale_init,
-                    dropout=dropout,
-                )
-                for _ in range(int(num_layers))
-            ]
-        )
-        self.output_proj = nn.Conv3d(
-            temporal_dim, in_channels, kernel_size=1, bias=True
-        )
-        self.residual_gate = nn.Parameter(torch.tensor(gate_init))
-        self._last_diagnostics: Dict[str, float] = {}
-
-    def get_last_diagnostics(self) -> Dict[str, float]:
-        """Return detached diagnostics from the most recent forward pass."""
-        return dict(self._last_diagnostics)
-
-    def _apply_temporal_difference(self, x: torch.Tensor) -> torch.Tensor:
-        if self.delta_proj is None:
-            return x
-        delta = torch.zeros_like(x)
-        if x.shape[2] > 1:
-            delta[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
-        return self.delta_proj(torch.cat([x, delta], dim=1))
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """Args:
-        features: [B, C, T, H, W]"""
-        if features.dim() != 5:
-            raise ValueError(
-                f"Expected features [B,C,T,H,W], got {tuple(features.shape)}"
-            )
-        B, C, T, H, W = features.shape
-        if C != self.in_channels:
-            raise ValueError(f"Expected {self.in_channels} channels, got {C}")
-        x = self.input_proj(features)
-        x = self._apply_temporal_difference(x)
-        for block in self.blocks:
-            x = block(x)
-        temporal_residual = self.output_proj(x)
-        gate = torch.sigmoid(self.residual_gate)
-        if self.enhance_last_only:
-            out = features.clone()
-            out[:, :, -1:] = features[:, :, -1:] + gate * temporal_residual[:, :, -1:]
-        else:
-            out = features + gate * temporal_residual
-        with torch.no_grad():
-            input_abs_mean = features.detach().abs().mean().item()
-            temporal_residual_abs_mean = temporal_residual.detach().abs().mean().item()
-            enhanced_delta_abs_mean = (
-                (out.detach() - features.detach()).abs().mean().item()
-            )
-            self._last_diagnostics = {
-                "temporal_gate": gate.detach().item(),
-                "temporal_residual_abs_mean": temporal_residual_abs_mean,
-                "input_abs_mean": input_abs_mean,
-                "residual_to_input_ratio": temporal_residual_abs_mean
-                / (input_abs_mean + 1e-06),
-                "enhanced_delta_abs_mean": enhanced_delta_abs_mean,
-                "enhanced_delta_to_input_ratio": enhanced_delta_abs_mean
-                / (input_abs_mean + 1e-06),
-            }
-        return out
-
-
 # Patch prototypes and immutable reference bank
 
-DEFAULT_PATCH_CLUSTER_DIR = (
-    "/data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0"
-)
+DEFAULT_PATCH_CLUSTER_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0"
 
 PATCH_CLUSTER_REFERENCE_FORMAT = "patch_cluster_reference_v1"
 
@@ -842,11 +1021,7 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
     Patch-concept assignments are computed on the last frame only; earlier
     frames in the window are retained in metadata via ``window_T`` for the
     decoder. Each normalized last-frame patch feature is encoded and matched
-    to a visual concept bank via ``visual_encoder`` and ``visual_concepts``.
-    Stage4 defaults to fixed composite-distance medoid routing. Learned cosine
-    logits/probabilities remain auxiliary loss inputs; ``visual_activations``
-    and active indices are the actual prediction assignments. Stages1-3 retain
-    cosine routing because the supplied reference bank contains only stage4."""
+    to a visual concept bank via ``visual_encoder`` and ``visual_concepts``."""
 
     DROPOUT_P = 0.2
 
@@ -874,7 +1049,6 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         visual_cluster_max_patches_per_prototype: int = 0,
         visual_cluster_seed: int = 42,
         visual_cluster_expected_checkpoint_sha256: Optional[str] = None,
-        visual_routing_mode: str = "medoid",
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -894,10 +1068,6 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
                 in_channels
             )
         )
-        if visual_routing_mode not in ("medoid", "cosine"):
-            raise ValueError("visual_routing_mode must be 'medoid' or 'cosine'.")
-        self.visual_routing_mode = visual_routing_mode
-        self.uses_medoid_routing = self.stage_name == "stage4" and visual_routing_mode == "medoid"
         self._appearance_stage_source = (
             "explicit" if stage_name is not None else "video_swin_channels"
         )
@@ -1024,26 +1194,15 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         self._cluster_counts = torch.empty(0, dtype=torch.long)
         self._cluster_rgb_sorted = ()
         self._cluster_rgb_prefix = ()
-        # Small immutable routing references are reloaded from the bank rather
-        # than duplicating all descriptors in every model checkpoint.
-        self._medoid_feature = torch.empty(0, dtype=torch.float32)
-        self._medoid_rgb = torch.empty(0, dtype=torch.float32)
-        self._medoid_structure = torch.empty(0, dtype=torch.float32)
-        self._medoid_flat = torch.empty(0, dtype=torch.bool)
-        self._medoid_weights = torch.empty(0, dtype=torch.float32)
-        self._medoid_loaded = False
-        self.register_buffer("_medoid_initialized", torch.tensor(False))
-        self.register_buffer("_medoid_reference_digest", torch.zeros(32, dtype=torch.uint8))
         self._appearance_forward_count = 0
         self.reset_appearance_forward_counter()
         if (
             self.stage_name == "stage4"
-            and (self.uses_medoid_routing or (
-                self.loss_weights["visual_appearance"] > 0 and any(
-                    self.loss_weights[k] > 0
-                    for k in ("visual_rgb", "visual_feature", "visual_structure")
-                )
-            ))
+            and self.loss_weights["visual_appearance"] > 0
+            and any(
+                self.loss_weights[k] > 0
+                for k in ("visual_rgb", "visual_feature", "visual_structure")
+            )
             and (Path(self.visual_cluster_dir) / "manifest.json").is_file()
         ):
             self.load_visual_patch_clusters()
@@ -1052,12 +1211,8 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         "_cluster_feature_mean",
         "_cluster_structure_mean",
         "_cluster_flat_fraction",
-        "_medoid_feature",
-        "_medoid_rgb",
-        "_medoid_structure",
-        "_medoid_weights",
     )
-    _CLUSTER_INT_TENSORS = ("_cluster_counts", "_medoid_flat")
+    _CLUSTER_INT_TENSORS = ("_cluster_counts",)
 
     def _apply(self, fn, recurse=True):
         # References move with the module but retain FP32, including under half().
@@ -1083,163 +1238,6 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
     def _init_concept_parameters(self) -> None:
         with torch.no_grad():
             self.visual_concepts.copy_(F.normalize(self.visual_concepts, dim=-1))
-
-    def _load_from_state_dict(
-        self, state_dict, prefix, local_metadata, strict,
-        missing_keys, unexpected_keys, error_msgs,
-    ):
-        # Legacy checkpoints already contain learned vectors: preserve them.
-        # Never re-seed a resumed model from medoids after loading those vectors.
-        init_key = prefix + "_medoid_initialized"
-        digest_key = prefix + "_medoid_reference_digest"
-        if init_key not in state_dict:
-            state_dict[init_key] = torch.tensor(prefix + "visual_concepts" in state_dict)
-        if digest_key not in state_dict:
-            state_dict[digest_key] = self._medoid_reference_digest.clone()
-        incoming_digest = state_dict[digest_key]
-        if (
-            self.uses_medoid_routing and self._medoid_loaded
-            and incoming_digest.shape == self._medoid_reference_digest.shape
-            and bool(incoming_digest.any())
-            and not torch.equal(incoming_digest.cpu(), self._medoid_reference_digest.cpu())
-        ):
-            error_msgs.append(prefix + "checkpoint medoid bank differs from the loaded reference bank")
-        super()._load_from_state_dict(
-            state_dict, prefix, local_metadata, strict,
-            missing_keys, unexpected_keys, error_msgs,
-        )
-
-    @torch.no_grad()
-    def _load_visual_medoids(self, root: Path, manifest: Dict[str, Any]) -> None:
-        """Load fixed medoids in prototype-ID order and initialize embeddings once.
-
-        Called by load_visual_patch_clusters, outside forward and before optimizer
-        construction. The Parameter object is preserved (copy_, not replacement).
-        """
-        with np.load(root / "cluster_references.npz", allow_pickle=False) as bank:
-            required = {"prototype_ids", "descriptor_indices", "feature", "rgb", "structure", "flat", "weights"}
-            if not required.issubset(bank.files):
-                raise ValueError(f"Medoid bank lacks fields: {sorted(required - set(bank.files))}")
-            ids = np.asarray(bank["prototype_ids"])
-            if ids.dtype.kind not in "iu" or ids.shape != (self.num_visual_concepts,):
-                raise ValueError("Invalid medoid prototype IDs.")
-            order = np.argsort(ids)
-            if not np.array_equal(ids[order], np.arange(self.num_visual_concepts)):
-                raise ValueError("Medoid IDs must contain every prototype ID exactly once.")
-            f = np.array(bank["feature"][order], dtype=np.float32)
-            rgb = np.array(bank["rgb"][order], dtype=np.float32)
-            structure = np.array(bank["structure"][order], dtype=np.float32)
-            flat = np.asarray(bank["flat"])[order]
-            indices = np.asarray(bank["descriptor_indices"])[order]
-            weights = np.array(bank["weights"], dtype=np.float32)
-        m, r = self.num_visual_concepts, self.visual_appearance_patch_size
-        d = self.visual_appearance_dim
-        if f.shape != (m, self.in_channels) or rgb.shape != (m, d) or structure.shape != (m, d) or flat.shape != (m,):
-            raise ValueError("Medoid descriptor dimensions disagree with the model.")
-        if not all(np.isfinite(a).all() for a in (f, rgb, structure, weights)) or rgb.min() < 0 or rgb.max() > 1:
-            raise ValueError("Medoid descriptors must be finite; RGB must be in [0,1].")
-        if indices.shape != (m,) or indices.dtype.kind not in "iu" or np.any(indices < 0) or np.any(indices >= int(manifest["num_patches"])):
-            raise ValueError("Invalid medoid descriptor indices.")
-        labels = np.load(root / "descriptors/prototype_ids.npy", mmap_mode="r", allow_pickle=False)
-        if not np.array_equal(labels[indices], np.arange(m)):
-            raise ValueError("A medoid must belong to its assigned reference cluster.")
-        source_weights = manifest.get("weights", {})
-        expected_weights = np.asarray([
-            source_weights.get("feature", np.nan), source_weights.get("rgb_mae", np.nan),
-            source_weights.get("structure", np.nan),
-        ], dtype=np.float32)
-        if weights.shape != (3,) or np.any(weights < 0) or not np.any(weights > 0) or not np.array_equal(weights, expected_weights):
-            raise ValueError("Medoid metric weights must match the clustering manifest.")
-        scales = np.max(np.abs(f), axis=1, keepdims=True)
-        scaled = f.astype(np.float64) / np.maximum(scales, 1e-12)
-        norms = np.linalg.norm(scaled, axis=1, keepdims=True)
-        if np.any(norms * scales < 1e-12):
-            raise ValueError("Medoid features must be nonzero.")
-        f = (scaled / norms).astype(np.float32)
-        # Recompute centering in float64, exactly as structure_descriptor in the
-        # clustering script. Store CHW to match the model's RGB query helper.
-        centered = rgb.astype(np.float64).reshape(m, r * r, 3)
-        centered = centered - centered.mean(axis=1, keepdims=True)
-        snorm = np.linalg.norm(centered.reshape(m, d), axis=1)
-        actual_flat = snorm < 1e-12
-        unit = centered / np.maximum(snorm[:, None, None], 1e-12)
-        unit[actual_flat] = 0
-        if not np.array_equal(flat.astype(bool), actual_flat) or not np.allclose(structure, unit.reshape(m, d), atol=2e-6):
-            raise ValueError("Medoid structure descriptors disagree with the clustering formula.")
-        def chw(a):
-            return np.ascontiguousarray(a.reshape(m, r, r, 3).transpose(0, 3, 1, 2).reshape(m, d))
-        device = self.visual_concepts.device
-        digest = torch.tensor(list(bytes.fromhex(manifest["references_sha256"])), dtype=torch.uint8, device=device)
-        if bool(self._medoid_reference_digest.any()) and not torch.equal(digest, self._medoid_reference_digest):
-            raise ValueError("Cannot change the medoid bank of an initialized/restored model.")
-        self._medoid_feature = torch.from_numpy(f).to(device)
-        self._medoid_rgb = torch.from_numpy(chw(rgb)).to(device)
-        self._medoid_structure = torch.from_numpy(chw(unit.astype(np.float32))).to(device)
-        self._medoid_flat = torch.from_numpy(actual_flat).to(device)
-        self._medoid_weights = torch.from_numpy(weights).to(device)
-        self._medoid_reference_digest.copy_(digest)
-        self._medoid_loaded = True
-        if self.uses_medoid_routing and not bool(self._medoid_initialized):
-            # Disable dropout only for this one-time projection; restore even
-            # mixed per-layer train/eval states, and leave requires_grad intact.
-            modes = [(module, module.training) for module in self.visual_encoder.modules()]
-            try:
-                self.visual_encoder.eval()
-                with torch.autocast(device_type=device.type, enabled=False):
-                    encoded = self.visual_encoder(self._medoid_feature.to(self.visual_concepts.dtype))
-                    initialized = F.normalize(encoded.float(), dim=-1)
-                if not torch.isfinite(initialized).all() or (initialized.norm(dim=-1) < 1e-12).any():
-                    raise ValueError("Medoid encoder produced invalid prototype initializations.")
-                self.visual_concepts.copy_(initialized.to(self.visual_concepts.dtype))
-                self._medoid_initialized.fill_(True)
-            finally:
-                for module, mode in modes:
-                    module.training = mode
-
-    @torch.no_grad()
-    def _compute_medoid_distances(
-        self, rgb_last_frame: Optional[torch.Tensor],
-        cached_backbone_features: Optional[torch.Tensor], H: int, W: int,
-    ) -> torch.Tensor:
-        """Composite distances to actual medoids, never cluster-mean costs.
-
-        Inputs are fixed; gradients intentionally do not flow through routing.
-        No straight-through estimator is used. The separate learned cosine
-        logits continue to support the existing prototype auxiliary losses.
-        """
-        if not self._medoid_loaded:
-            raise RuntimeError("Medoid bank not loaded. Call load_visual_patch_clusters(path) before optimizer construction/forward.")
-        if rgb_last_frame is None:
-            raise ValueError("Medoid routing requires unnormalized last-frame RGB during training AND evaluation.")
-        with torch.autocast(device_type=self.visual_concepts.device.type, enabled=False):
-            rgb = self._rgb_appearance_descriptors(rgb_last_frame, H, W)
-            feature = None
-            if float(self._medoid_weights[0]) > 0:
-                if cached_backbone_features is None:
-                    raise ValueError("Medoid feature routing requires frozen-reference features. Supply cached_backbone_features; the parent model also accepts its frozen live backbone.")
-                feature, valid = self._cached_feature_descriptors(cached_backbone_features)
-                if not bool(valid.all()):
-                    raise ValueError("Medoid routing cannot assign a zero/near-zero frozen feature vector.")
-                if feature.shape[0] != rgb.shape[0]:
-                    raise ValueError("Medoid RGB and feature query counts differ.")
-            pixels = rgb.double().reshape(-1, 3, self.visual_appearance_patch_size**2)
-            centered = (pixels - pixels.mean(dim=-1, keepdim=True)).flatten(1)
-            norm = torch.linalg.vector_norm(centered, dim=-1, keepdim=True)
-            flat = norm[:, 0] < 1e-12
-            structure = (centered / norm.clamp_min(1e-12)).float()
-            structure[flat] = 0
-            distances = []
-            for start in range(0, rgb.shape[0], self.visual_appearance_query_chunk_size):
-                stop = start + self.visual_appearance_query_chunk_size
-                sc = (structure[start:stop] @ self._medoid_structure.T).clamp(-1, 1)
-                sc = (sc + flat[start:stop, None].float() * self._medoid_flat[None].float()).clamp(-1, 1)
-                rgb_mae = torch.cdist(rgb[start:stop], self._medoid_rgb, p=1) / self.visual_appearance_dim
-                cost = self._medoid_weights[1] * rgb_mae + self._medoid_weights[2] * (1 - sc)
-                if feature is not None:
-                    fc = (feature[start:stop] @ self._medoid_feature.T).clamp(-1, 1)
-                    cost = cost + self._medoid_weights[0] * (1 - fc)
-                distances.append(cost.clamp_min(0))
-            return torch.cat(distances, dim=0)
 
     @torch.no_grad()
     def reset_appearance_forward_counter(self) -> None:
@@ -1319,9 +1317,11 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         self._appearance_forward_count = state["step"]
         self.visual_appearance_diagnostics = self._appearance_status(
             False,
-            "legacy_fifo_ignored"
-            if state["legacy_ignored"]
-            else "fixed_reference_identity_restored",
+            (
+                "legacy_fifo_ignored"
+                if state["legacy_ignored"]
+                else "fixed_reference_identity_restored"
+            ),
         )
 
     @torch.no_grad()
@@ -1347,7 +1347,8 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
     ) -> torch.Tensor:
         """Normalized patch coordinates in [-1, 1].
         Returns:
-            grid: [N, 2] with N=H*W, order (x, y) matching row-major flatten of H x W."""
+            grid: [N, 2] with N=H*W, order (x, y) matching row-major flatten of H x W.
+        """
         ys = torch.linspace(-1.0, 1.0, H, device=device, dtype=dtype)
         xs = torch.linspace(-1.0, 1.0, W, device=device, dtype=dtype)
         yy, xx = torch.meshgrid(ys, xs, indexing="ij")
@@ -1495,9 +1496,7 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         }
 
     def _build_visual_concepts_from_patches(
-        self, features: torch.Tensor,
-        rgb_last_frame: Optional[torch.Tensor] = None,
-        cached_backbone_features: Optional[torch.Tensor] = None,
+        self, features: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """Build visual-only concept assignments from the last-frame patch features.
         Args:
@@ -1526,18 +1525,8 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         assignment_out = self._compute_visual_assignments(raw_similarity)
         visual_logits = assignment_out["visual_logits"]
         visual_probs = assignment_out["visual_probs"]
-        # Learned logits/probs retain their original meaning for losses.py and
-        # external entropy/usage/flip losses. They do NOT select stage4 members.
-        routing_out = assignment_out
-        medoid_distances = None
-        if self.uses_medoid_routing:
-            medoid_distances = self._compute_medoid_distances(
-                rgb_last_frame, cached_backbone_features, H, W
-            )
-            # Reuse only top-k/softmax machinery: larger negative distance wins.
-            routing_out = self._compute_visual_assignments(-medoid_distances)
-        visual_indices = routing_out["visual_indices"]
-        visual_activations = routing_out["visual_activations"]
+        visual_indices = assignment_out["visual_indices"]
+        visual_activations = assignment_out["visual_activations"]
         visual_repr = visual_activations @ c_vis
         if self.visual_concept_residual_weight > 0:
             visual_repr = visual_repr + self.visual_concept_residual_weight * q_vis
@@ -1571,7 +1560,7 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             T=T,
             H=H,
             W=W,
-            selected_indices=routing_out["topk_indices"],
+            selected_indices=assignment_out["topk_indices"],
         )
         _diag_label = getattr(self, "_diagnostic_label", "concept")
         _diag_record(f"{_diag_label}.patch_embeddings", q_vis)
@@ -1580,18 +1569,12 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
         _diag_record(f"{_diag_label}.topk_indices", active_visual_prototype_indices)
         _diag_record(f"{_diag_label}.active_prototypes", active_visual_prototypes)
         _diag_record(f"{_diag_label}.concept_representation", visual_repr)
-        _diag_record(f"{_diag_label}.routing_logits", routing_out["visual_logits"])
         return {
             "active_visual_prototypes": active_visual_prototypes,
             "active_visual_prototype_indices": active_visual_prototype_indices,
             "visual_validity_mask": visual_validity_mask,
             "visual_patch_embeddings": q_vis,
             "visual_concept_logits": visual_logits,
-            "visual_routing_logits": routing_out["visual_logits"],
-            "visual_routing_probs": routing_out["visual_probs"],
-            "visual_medoid_distances": medoid_distances,
-            "visual_assignment_source": "fixed_medoid_composite" if self.uses_medoid_routing else "learned_cosine",
-            "visual_auxiliary_logits_source": "learned_cosine",
             "visual_concept_indices": visual_indices,
             "visual_activations": visual_activations,
             "visual_concept_representation": visual_repr,
@@ -1618,20 +1601,17 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             return_losses: whether to compute visual concept auxiliary losses.
             rgb_last_frame: optional unnormalized RGB last frame, float32 in [0, 1],
                 shaped [B, 3, H_rgb, W_rgb], on the same device as ``features``.
-                Required for stage4 medoid routing even without losses/in eval.
                 Prepared by the parent model to match the backbone spatial canvas
                 (``resize_to``) without ImageNet mean/std. Existing callers may omit
                 it. Appearance descriptors use the actual ``features`` H,W grid,
                 in batch-major, row-major patch order. RGB appearance cost is fixed;
-                gradients reach model parameters through learned auxiliary scores.
+                gradients reach model parameters through live soft assignments.
             cached_backbone_features: optional detached frozen-reference last-slice
                 tensor shaped [B, C, 1, H, W], aligned with ``features[:, :, -1:]``.
                 Flattening order matches live visual patches:
                 [B,C,1,H,W] -> [B,H,W,C] -> [B*H*W,C]. Each frozen vector is
                 L2 normalized for fixed-cluster cosine-distance supervision. It remains
-                separate from learned ``visual_patch_embeddings`` and also drives
-                medoid matching. Standalone stage4 callers must supply it when
-                the clustering feature weight is positive. When the
+                separate from learned ``visual_patch_embeddings``. When the
                 feature component is enabled, missing cached features raise an error.
                 Zero vectors are excluded from every component.
                 Set visual_feature=0 for an RGB/structure-only ablation.
@@ -1707,9 +1687,7 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
                 raise ValueError(
                     f"rgb_last_frame must be on the same device as features: {rgb_last_frame.device} vs {features.device}"
                 )
-        visual_out = self._build_visual_concepts_from_patches(
-            features, rgb_last_frame, cached_backbone_features
-        )
+        visual_out = self._build_visual_concepts_from_patches(features)
         losses, align_out = self._compute_concept_losses(
             visual_out,
             saliency_maps,
@@ -1733,11 +1711,6 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             ],
             "visual_activations": visual_out["visual_activations"],
             "visual_concept_logits": visual_out["visual_concept_logits"],
-            "visual_routing_logits": visual_out["visual_routing_logits"],
-            "visual_routing_probs": visual_out["visual_routing_probs"],
-            "visual_medoid_distances": visual_out["visual_medoid_distances"],
-            "visual_assignment_source": visual_out["visual_assignment_source"],
-            "visual_auxiliary_logits_source": visual_out["visual_auxiliary_logits_source"],
             "visual_concept_indices": visual_out["visual_concept_indices"],
             "visual_assignment_probs": visual_out["visual_assignment_probs"],
             "visual_assignment_entropy": visual_out["visual_assignment_entropy"],
@@ -1764,12 +1737,12 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             "concept_dim": self.concept_dim,
             "top_n": top_n,
             "visual_norm_mean": c_vis.norm(dim=-1).mean().item(),
-            "visual_pairwise_cos_max": off_diag.max().item()
-            if off_diag.numel() > 0
-            else 0.0,
-            "visual_pairwise_cos_mean": off_diag.mean().item()
-            if off_diag.numel() > 0
-            else 0.0,
+            "visual_pairwise_cos_max": (
+                off_diag.max().item() if off_diag.numel() > 0 else 0.0
+            ),
+            "visual_pairwise_cos_mean": (
+                off_diag.mean().item() if off_diag.numel() > 0 else 0.0
+            ),
         }
 
     @torch.no_grad()
@@ -2044,8 +2017,6 @@ class VisualConceptCreation(VisualConceptLossMixin, nn.Module):
             fixed_prefix,
         )
         self._cluster_metadata, self._cluster_loaded = (metadata, True)
-        if self.uses_medoid_routing:
-            self._load_visual_medoids(root, manifest)
         self.visual_cluster_dir = str(root)
         self.visual_appearance_diagnostics = self._appearance_status(
             False, "fixed_clusters_loaded"
@@ -2747,6 +2718,7 @@ class DecoderBlock(nn.Module):
         prototype_spatial_mask_strength: float = 1.0,
         fine_unary_mask_strength: float = 1.0,
         include_backbone_in_fusion: bool = True,
+        temporal_concept_dim: Optional[int] = None,
     ):
         super().__init__()
         if assignment_temperature <= 0.0:
@@ -2791,7 +2763,16 @@ class DecoderBlock(nn.Module):
         self.factorized_rank = int(factorized_rank)
         self.pos_num_frequencies = int(pos_num_frequencies)
         self.pos_dim = 4 * self.pos_num_frequencies
-        self.token_dim = self.mask_embed_dim + self.pos_dim + 1
+        self.temporal_proto_proj = (
+            nn.Linear(temporal_concept_dim, self.mask_embed_dim)
+            if temporal_concept_dim is not None
+            else None
+        )
+        self.token_dim = (
+            self.mask_embed_dim * (2 if self.temporal_proto_proj is not None else 1)
+            + self.pos_dim
+            + 1
+        )
         self.prototype_spatial_mask_strength = float(prototype_spatial_mask_strength)
         self.prototype_application_position = "post_refine"
         self.fine_unary_mask_strength = float(fine_unary_mask_strength)
@@ -3123,6 +3104,64 @@ class DecoderBlock(nn.Module):
         )
         return (context, stats)
 
+    def _joint_temporal_modality(self, visual, temporal):
+        """Concatenate both modalities inside each activation token, in patch order.
+
+        Visual slots: [visual prototype, temporal weighted set].
+        Temporal slots: [visual weighted set, temporal prototype].
+        Each selected prototype has its own slot; no Kv*Kt cross-product. All
+        slots are interleaved per patch BEFORE priority scoring/aggregation.
+        """
+        if temporal is None:
+            raise ValueError(
+                "Joint priority tokens require the stage-4 temporal assignments."
+            )
+        projected_visual = F.normalize(visual["projected_prototypes"], dim=-1)
+        B, T, H, W, Kv, E = projected_visual.shape
+        active = temporal["active_temporal_prototypes"]
+        valid = temporal["temporal_validity_mask"]
+        weights = temporal["temporal_topk_weights"]
+        # Stage 3 reuses the stage-4 cell assignment by nearest spatial coverage;
+        # it never extracts flow, interpolates descriptors, or creates another bank.
+        hs, ws = active.shape[2:4]
+        rows = torch.arange(H, device=active.device) * hs // H
+        cols = torch.arange(W, device=active.device) * ws // W
+        active = active.index_select(2, rows).index_select(3, cols)
+        valid = valid.index_select(2, rows).index_select(3, cols)
+        weights = weights.index_select(2, rows).index_select(3, cols)
+        projected_temporal = F.normalize(self.temporal_proto_proj(active), dim=-1)
+        projected_temporal = projected_temporal * valid[..., None]
+        a_vis = visual["activations"].permute(0, 1, 3, 4, 2)
+        a_temp = weights * valid
+        mean_visual = (projected_visual * a_vis[..., None]).sum(-2)
+        mean_visual = mean_visual / a_vis.sum(-1, keepdim=True).clamp_min(_PRIORITY_EPS)
+        mean_temporal = (projected_temporal * a_temp[..., None]).sum(-2)
+        mean_temporal = mean_temporal / a_temp.sum(-1, keepdim=True).clamp_min(
+            _PRIORITY_EPS
+        )
+        Kt = projected_temporal.shape[-2]
+        visual_joint = torch.cat(
+            [
+                projected_visual,
+                mean_temporal.unsqueeze(-2).expand(-1, -1, -1, -1, Kv, -1),
+            ],
+            -1,
+        )
+        temporal_joint = torch.cat(
+            [
+                mean_visual.unsqueeze(-2).expand(-1, -1, -1, -1, Kt, -1),
+                projected_temporal,
+            ],
+            -1,
+        )
+        return {
+            "projected_prototypes": torch.cat([visual_joint, temporal_joint], -2),
+            "activations": torch.cat([a_vis, a_temp], -1)
+            .permute(0, 1, 4, 2, 3)
+            .contiguous(),
+            "validity_mask": torch.cat([visual["validity_mask"], valid], -1),
+        }
+
     def _prioritize_concept_patch_activations(
         self, modality_outs: List[Dict[str, torch.Tensor]]
     ) -> Dict[str, torch.Tensor]:
@@ -3273,7 +3312,14 @@ class DecoderBlock(nn.Module):
                 visual_validity_mask,
                 concept_out,
             )
-            priority_out = self._prioritize_concept_patch_activations([visual_out])
+            token_modality = (
+                self._joint_temporal_modality(
+                    visual_out, (concept_out or {}).get("temporal_out")
+                )
+                if self.temporal_proto_proj is not None
+                else visual_out
+            )
+            priority_out = self._prioritize_concept_patch_activations([token_modality])
             priority_mask_last = priority_out["priority_mask"]
             expected_mask_shape = (
                 decoded.shape[0],
@@ -3309,7 +3355,7 @@ class DecoderBlock(nn.Module):
             mask_outputs.update(
                 {
                     "priority_mask": priority_mask,
-                    "concept_patch_activations": visual_out["activations"],
+                    "concept_patch_activations": token_modality["activations"],
                     "prototype_application_position": "post_refine_spatial_mask",
                     "spatial_mask_strength": film_features.new_tensor(
                         mask_strength
@@ -3372,6 +3418,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
         prototype_spatial_mask_strength: float = 1.0,
         fine_unary_mask_strength: float = 1.0,
         stage2_backbone_fusion_enabled: bool = True,
+        temporal_concept_dim: Optional[int] = None,
     ):
         super().__init__()
         if output_activation not in ("sigmoid", "none"):
@@ -3423,9 +3470,16 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                     factorized_rank=factorized_rank,
                     prototype_spatial_mask_strength=self.prototype_spatial_mask_strength,
                     fine_unary_mask_strength=self.fine_unary_mask_strength,
-                    include_backbone_in_fusion=True
-                    if stage != "stage2"
-                    else self.stage2_backbone_fusion_enabled,
+                    include_backbone_in_fusion=(
+                        True
+                        if stage != "stage2"
+                        else self.stage2_backbone_fusion_enabled
+                    ),
+                    temporal_concept_dim=(
+                        temporal_concept_dim
+                        if stage in _PAIRWISE_PRIORITY_STAGES
+                        else None
+                    ),
                 )
                 for stage, channels in self.stage_channels.items()
             }
@@ -3595,9 +3649,7 @@ class ConceptGatedMultiScaleSaliencyDecoder(nn.Module):
                 prev_decoder=prev_decoder,
                 active_visual_prototypes=active_visual_prototypes,
                 visual_validity_mask=visual_validity_mask,
-                concept_out=stage_concept_out
-                if self.use_shared_concept_activations
-                else None,
+                concept_out=stage_concept_out,
             )
             if "patch_priority_distribution" in mask_outputs:
                 stage_patch_priority_distributions[stage] = mask_outputs[

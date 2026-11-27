@@ -1,5 +1,18 @@
+"""Training with optional fixed temporal flow inputs (one stage-4 bank).
+
+Defaults use the supplied temporal cache and cluster directories. The cache root
+is resolved to one matching namespace. Training uses random window starts, so
+precache --window-len 32 --stride 1 --splits train val --augmentations original hflip,
+or export the exact trainer window index. Use --no-temporal-concepts for a visual
+baseline. The cache_optical_flow.py module belongs under src/build_prototype_clusters/.
+No optical flow or trainable temporal embeddings are computed by this loader;
+the model's temporal encoder stays live on every forward.
+"""
+
 import argparse
 import os
+import json
+from pathlib import Path
 
 # Reduce CUDA fragmentation (must be set before the first CUDA allocation).
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -33,6 +46,7 @@ from metrics import prepare_target_last_map
 from pre_process.dataloader import DatasetLoader
 from model.model import (
     ExplainableVidSalModel,
+    pack_temporal_flow_batch,
     DEFAULT_PATCH_CLUSTER_DIR,
     VisualConceptCreation,
     build_patch_cluster_reference_checkpoint_metadata,
@@ -112,9 +126,21 @@ USE_AMP = True
 # Default GPU index when --gpu is not provided (backbone + head on same device).
 DEFAULT_GPU_ID = 1
 
-# Auxiliary-loss switches; these do not disable the model's visual modules.
+# Visual auxiliary-loss switch; the visual prediction modules stay enabled.
 VISUAL_CONCEPT_ON = True
-TEMPORAL_CONCEPTS_ON = False
+# Enable the temporal bank by default; --no-temporal-concepts is an ablation.
+TEMPORAL_CONCEPTS_ON = True
+TEMPORAL_CACHE_DIR = (
+    "/data/quantization/zaima/videosal_datasets/dhf1k/cached_temporal_feats"
+)
+TEMPORAL_CLUSTER_DIR = "/data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/temporal_cluster"
+TEMPORAL_TOP_K = None  # None inherits MODEL_TOP_K.
+TEMPORAL_EXPECTED_CLUSTERS = 1042
+TEMPORAL_LOSS_WEIGHTS = {
+    "temporal": 0.1,
+    "temporal_div": 1.0,
+    "temporal_optical_flow": 1.0,
+}
 MODEL_TOP_K = 1  # Shared by train/eval; recorded in new checkpoints.
 
 # Last-slice residual priority masking at stages3/4:
@@ -208,9 +234,42 @@ def get_model_kwargs(
     visual_cluster_dir: Optional[str] = None,
     visual_cluster_max_patches_per_prototype: Optional[int] = None,
     visual_cluster_seed: Optional[int] = None,
+    temporal_concepts_on: bool = TEMPORAL_CONCEPTS_ON,
+    temporal_cache_dir: Optional[str] = None,
+    temporal_cluster_dir: Optional[str] = None,
+    temporal_top_k: Optional[int] = TEMPORAL_TOP_K,
+    temporal_expected_clusters: int = TEMPORAL_EXPECTED_CLUSTERS,
+    temporal_loss_weights: Optional[Dict[str, float]] = None,
+    window_len: int = WINDOW_LEN,
 ) -> Dict[str, Any]:
-    """One architecture configuration shared by training and evaluation."""
+    """One architecture configuration shared by training and evaluation.
+
+    The model reads its fixed temporal references from the verified cache
+    snapshot. temporal_cluster_dir verifies that snapshot; it is not an
+    unsupported extra model constructor argument.
+    """
+    resolved_temporal_cache = (
+        _resolve_temporal_cache_dir(
+            TEMPORAL_CACHE_DIR if temporal_cache_dir is None else temporal_cache_dir,
+            (
+                TEMPORAL_CLUSTER_DIR
+                if temporal_cluster_dir is None
+                else temporal_cluster_dir
+            ),
+            window_len,
+        )
+        if temporal_concepts_on
+        else None
+    )
     return {
+        "temporal_cache_dir": resolved_temporal_cache,
+        "temporal_top_k": temporal_top_k,
+        "temporal_expected_clusters": temporal_expected_clusters,
+        "temporal_loss_weights": dict(
+            TEMPORAL_LOSS_WEIGHTS
+            if temporal_loss_weights is None
+            else temporal_loss_weights
+        ),
         "backbone_stages": ("stage1", "stage2", "stage3", "stage4"),
         "pretrained_backbone": True,
         "freeze_backbone": FREEZE_BACKBONE,
@@ -225,20 +284,21 @@ def get_model_kwargs(
         "output_activation": "none",
         "return_details": True,
         "visual_concept_residual_weight": 1.0,
-        "use_temporal_feature_infusion": False,
         "use_shared_concept_activations": True,
         "prototype_spatial_mask_strength": PROTOTYPE_SPATIAL_MASK_STRENGTH,
         "fine_unary_mask_strength": FINE_UNARY_MASK_STRENGTH,
         "stage2_backbone_fusion_enabled": STAGE2_BACKBONE_FUSION_ENABLED,
-        "visual_cluster_dir": VISUAL_CLUSTER_DIR
-        if visual_cluster_dir is None
-        else visual_cluster_dir,
-        "visual_cluster_max_patches_per_prototype": VISUAL_CLUSTER_MAX_PATCHES_PER_PROTOTYPE
-        if visual_cluster_max_patches_per_prototype is None
-        else visual_cluster_max_patches_per_prototype,
-        "visual_cluster_seed": VISUAL_CLUSTER_SEED
-        if visual_cluster_seed is None
-        else visual_cluster_seed,
+        "visual_cluster_dir": (
+            VISUAL_CLUSTER_DIR if visual_cluster_dir is None else visual_cluster_dir
+        ),
+        "visual_cluster_max_patches_per_prototype": (
+            VISUAL_CLUSTER_MAX_PATCHES_PER_PROTOTYPE
+            if visual_cluster_max_patches_per_prototype is None
+            else visual_cluster_max_patches_per_prototype
+        ),
+        "visual_cluster_seed": (
+            VISUAL_CLUSTER_SEED if visual_cluster_seed is None else visual_cluster_seed
+        ),
     }
 
 
@@ -397,6 +457,8 @@ def _return_concept_losses(
 ) -> bool:
     """True when concept auxiliaries or stage4 appearance need return_losses=True."""
     loss_lambda = _effective_loss_lambda()
+    if model is not None and model.temporal_concept_creation is not None:
+        return True
     if any(
         loss_lambda.get(k, 0) > 0
         for k in (
@@ -678,6 +740,177 @@ def _resolve_cached_backbone_features(
         )
 
 
+def _resolve_temporal_cache_dir(
+    directory: str, cluster_dir: Optional[str], window_len: int
+) -> str:
+    """Accept a cache namespace or its output root; never guess among banks."""
+    root = Path(directory).expanduser().resolve()
+    if root.is_file() and root.name == "index.sqlite":
+        root = root.parent
+    bank = None
+    if cluster_dir:
+        bank = json.loads(
+            (Path(cluster_dir).expanduser() / "manifest.json").read_text()
+        )
+        if (
+            bank.get("status") != "complete"
+            or bank.get("format_version")
+            != "fixed_stage4_temporal_clusters_v2_flow_only"
+        ):
+            raise ValueError(
+                "temporal_cluster_dir must contain a complete flow-only temporal bank."
+            )
+    candidates = (
+        [root]
+        if (root / "index.sqlite").is_file()
+        else sorted(
+            set(
+                p.parent
+                for pattern in (
+                    "optical_flow_training_inputs_v1/*/index.sqlite",
+                    "*/index.sqlite",
+                )
+                for p in root.glob(pattern)
+            )
+        )
+    )
+    matches = []
+    for candidate in candidates:
+        manifest = json.loads((candidate / "manifest.json").read_text())
+        contract = manifest.get("contract", {})
+        if (
+            manifest.get("schema") != "optical_flow_training_inputs_v1"
+            or manifest.get("status") != "complete"
+        ):
+            continue
+        if int(contract.get("window_len", -1)) != window_len:
+            continue
+        if bank is not None and any(
+            (
+                contract.get("bank_reference_sha256") != bank.get("references_sha256"),
+                contract.get("num_prototypes") != bank.get("num_prototypes"),
+                contract.get("descriptor") != bank.get("descriptor"),
+                contract.get("normalization") != bank.get("normalization"),
+                contract.get("flow_config") != bank.get("flow_provenance"),
+            )
+        ):
+            continue
+        matches.append(candidate)
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one complete temporal cache for window_len={window_len} and the selected bank under {root}; found {len(matches)}. "
+            "Pass --temporal-cache-dir pointing directly to the matching namespace. "
+            "Generate coverage with cache_optical_flow.py --window-len <model length> --stride 1 "
+            "--splits train val --augmentations original hflip."
+        )
+    return str(matches[0])
+
+
+class TemporalFlowCache:
+    """Load fixed descriptors only; no flow estimator or learned embeddings.
+
+    Batch metadata selects the exact sample window and augmentation. Missing
+    entries fail instead of changing the flow gap or computing flow in training.
+    """
+
+    def __init__(self, directory: str, model: ExplainableVidSalModel):
+        from build_prototype_clusters.cache_optical_flow import load_cached_window
+
+        self.load_window = load_cached_window
+        self.index = Path(directory) / "index.sqlite"
+        if not self.index.is_file():
+            raise FileNotFoundError(self.index)
+        temporal = model.temporal_concept_creation
+        self.bank_identity = temporal.bank_identity
+        self.window_len = int(temporal.contract["window_len"])
+        print(
+            f"Temporal flow cache | {self.index} | bank={self.bank_identity[:12]} | gaps={temporal.flow_gaps}"
+        )
+
+    def resolve(
+        self, sample_metadata, rgb_batch, n_frames, *, split: str, flipped: bool = False
+    ):
+        if sample_metadata is None or len(sample_metadata) != rgb_batch.shape[0]:
+            raise ValueError(
+                "Temporal flow requires one DatasetLoader metadata record per RGB clip."
+            )
+        items = []
+        for i, meta in enumerate(sample_metadata):
+            frames = int(n_frames[i])
+            if (
+                frames != self.window_len
+                or frames != rgb_batch.shape[1]
+                or int(meta.get("window_len", frames)) != frames
+            ):
+                raise ValueError(
+                    "Temporal cache/model window lengths differ or the RGB window contains temporal padding."
+                )
+            content_hw = meta.get("content_hw") or (
+                meta.get("padded_input_geometry") or {}
+            ).get("content_hw")
+            if content_hw is not None and tuple(content_hw) != tuple(
+                rgb_batch.shape[-2:]
+            ):
+                raise ValueError(
+                    "Spatial RGB padding changes flow coordinates. Use fixed-size unpadded RGB inputs matching the cached preprocessing."
+                )
+            view = meta.get(
+                "view_id",
+                meta.get(
+                    "augmentation",
+                    (meta.get("padded_input_geometry") or {}).get(
+                        "view_id", "identity"
+                    ),
+                ),
+            )
+            if view not in ("identity", "original", "hflip"):
+                raise ValueError(
+                    f"Unsupported cached temporal view: {view!r}; only original/hflip are available."
+                )
+            augmentation = "hflip" if (view == "hflip") != flipped else "original"
+            video, start = str(meta["video_id"]), int(meta["window_start"])
+            try:
+                item = self.load_window(
+                    self.index,
+                    split,
+                    video,
+                    start,
+                    augmentation=augmentation,
+                    load_dense=False,
+                    expected_bank_identity=self.bank_identity,
+                )
+            except KeyError as exc:
+                raise KeyError(
+                    f"Missing temporal cache entry: {split}/{video}, start={start}, view={augmentation}. "
+                    "Training samples random starts, so cache --stride 1 or export the exact trainer window index."
+                ) from exc
+            cached = item["metadata"]
+            names = [Path(str(name)).name for name in meta["frame_names"]]
+            if len(names) != frames or names[-1] != cached["target_name"]:
+                raise ValueError(
+                    "Temporal cache target frame does not match the RGB window."
+                )
+            for pair in cached["pairs"]:
+                if names[-1 - int(pair["gap"])] != pair["previous_name"]:
+                    raise ValueError(
+                        "Temporal cache flow endpoints do not match the sampled RGB frames."
+                    )
+            items.append(item)
+        return pack_temporal_flow_batch(items)
+
+
+def _cached_temporal_view(
+    cache, sample_metadata, rgb_batch, n_frames, *, split, flipped=False
+):
+    return (
+        None
+        if cache is None
+        else cache.resolve(
+            sample_metadata, rgb_batch, n_frames, split=split, flipped=flipped
+        )
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train ExplainableSaliency model.")
     parser.add_argument(
@@ -733,6 +966,46 @@ def _parse_args() -> argparse.Namespace:
             f"Default: {VISUAL_CLUSTER_SEED}."
         ),
     )
+    parser.add_argument("--window-len", type=int, default=WINDOW_LEN)
+    parser.add_argument(
+        "--temporal-concepts",
+        action=argparse.BooleanOptionalAction,
+        default=TEMPORAL_CONCEPTS_ON,
+    )
+    parser.add_argument(
+        "--temporal-cache-dir",
+        default=TEMPORAL_CACHE_DIR,
+        help="Namespaced flow cache or root containing optical_flow_training_inputs_v1/<namespace>.",
+    )
+    parser.add_argument(
+        "--temporal-cluster-dir",
+        default=TEMPORAL_CLUSTER_DIR,
+        help="Original fixed temporal bank; verifies cached bank identity.",
+    )
+    parser.add_argument(
+        "--temporal-top-k",
+        type=int,
+        default=TEMPORAL_TOP_K,
+        help="Temporal top-k; default inherits MODEL_TOP_K.",
+    )
+    parser.add_argument(
+        "--temporal-expected-clusters", type=int, default=TEMPORAL_EXPECTED_CLUSTERS
+    )
+    parser.add_argument(
+        "--temporal-loss-weight", type=float, default=TEMPORAL_LOSS_WEIGHTS["temporal"]
+    )
+    parser.add_argument(
+        "--temporal-div-weight",
+        type=float,
+        default=TEMPORAL_LOSS_WEIGHTS["temporal_div"],
+    )
+    parser.add_argument(
+        "--temporal-optical-flow-weight",
+        type=float,
+        default=TEMPORAL_LOSS_WEIGHTS["temporal_optical_flow"],
+    )
+    parser.add_argument("--temporal-train-split", default="train")
+    parser.add_argument("--temporal-val-split", default="val")
     args = parser.parse_args()
     if args.phase in ("finetune", "resume") and not args.checkpoint:
         parser.error(
@@ -742,6 +1015,22 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--visual-cluster-max-patches-per-prototype must be >= 0.")
     if args.visual_cluster_seed < 0:
         parser.error("--visual-cluster-seed must be >= 0.")
+    if (
+        args.window_len < 1
+        or args.temporal_expected_clusters < 1
+        or (args.temporal_top_k is not None and args.temporal_top_k < 1)
+    ):
+        parser.error(
+            "Window length, temporal cluster count, and temporal top-k must be positive."
+        )
+    for name in (
+        "temporal_loss_weight",
+        "temporal_div_weight",
+        "temporal_optical_flow_weight",
+    ):
+        value = getattr(args, name)
+        if not math.isfinite(value) or value < 0:
+            parser.error(f"--{name.replace('_', '-')} must be finite and nonnegative.")
     return args
 
 
@@ -1625,6 +1914,8 @@ def train_one_epoch(
     calculate_metrics: bool = True,
     scaler: Optional[GradScaler] = None,
     feature_cache: Optional[FrozenBackboneFeatureCache] = None,
+    temporal_cache: Optional[TemporalFlowCache] = None,
+    temporal_split: str = "train",
 ) -> Tuple[float, Optional[Dict[str, float]], Dict[str, Any]]:
     model.train()
     reference_stats_before = (
@@ -1657,6 +1948,13 @@ def train_one_epoch(
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
         # Hash/read before uploading RGB; retain the CPU view for optional flips.
         rgb_batch_cpu, n_frames_cpu = rgb_batch, n_frames
+        cached_optical_flow = _cached_temporal_view(
+            temporal_cache,
+            sample_metadata,
+            rgb_batch_cpu,
+            n_frames_cpu,
+            split=temporal_split,
+        )
         cached_backbone_features = None
         if _needs_reference_features(model):
             cached_backbone_features = _resolve_cached_backbone_features(
@@ -1686,6 +1984,7 @@ def train_one_epoch(
                 return_concept_losses=_return_concept_losses(model),
                 return_decoder_diagnostics=(batch_idx == 0),
                 cached_backbone_features=cached_backbone_features,
+                cached_optical_flow=cached_optical_flow,
             )
             # Capture main-forward appearance stats before any flipped forward.
             appearance_batch_stats = _collect_main_forward_appearance_stats(model_out)
@@ -1702,6 +2001,14 @@ def train_one_epoch(
                         n_frames_cpu,
                         view_id="hflip",
                     )
+                cached_optical_flow_flip = _cached_temporal_view(
+                    temporal_cache,
+                    sample_metadata,
+                    rgb_batch_cpu,
+                    n_frames_cpu,
+                    split=temporal_split,
+                    flipped=True,
+                )
                 equiv_model_out = model(
                     rgb_batch_flip,
                     saliency_maps=sal_batch,
@@ -1709,6 +2016,7 @@ def train_one_epoch(
                     return_concept_losses=_return_concept_losses(model),
                     return_decoder_diagnostics=False,
                     cached_backbone_features=cached_backbone_features_flip,
+                    cached_optical_flow=cached_optical_flow_flip,
                 )
 
             if batch_idx == 0:
@@ -1810,6 +2118,7 @@ def train_one_epoch(
             fix_batch,
             rgb_batch_cpu,
             cached_backbone_features,
+            cached_optical_flow,
         )
         if equiv_model_out is not None:
             del equiv_model_out
@@ -1881,6 +2190,8 @@ def validate_one_epoch(
     epoch: int,
     output_dir: str,
     feature_cache: Optional[FrozenBackboneFeatureCache] = None,
+    temporal_cache: Optional[TemporalFlowCache] = None,
+    temporal_split: str = "val",
 ) -> Tuple[float, Dict[str, float], None]:
     model.eval()
     running_loss = 0.0
@@ -1905,6 +2216,9 @@ def validate_one_epoch(
         ) = _unpack_loader_batch(batch)
         if not torch.is_tensor(sal_batch):
             raise ValueError("sal_batch must be a torch.Tensor for loss calculation.")
+        cached_optical_flow = _cached_temporal_view(
+            temporal_cache, sample_metadata, rgb_batch, n_frames, split=temporal_split
+        )
         rgb_batch, sal_batch, fix_batch = model.prepare_training_batch(
             rgb_batch,
             sal_batch,
@@ -1927,6 +2241,7 @@ def validate_one_epoch(
                 return_concept_losses=_return_concept_losses(model),
                 return_decoder_diagnostics=(batch_idx == 0),
                 cached_backbone_features=cached_backbone_features,
+                cached_optical_flow=cached_optical_flow,
             )
             if batch_idx == 0:
                 _print_decoder_priority_debug(model, model_out)
@@ -2025,7 +2340,7 @@ def main() -> None:
     print(
         "Auxiliary-loss switches | "
         f"visual_concept_on={VISUAL_CONCEPT_ON} | "
-        f"temporal_concepts_on={TEMPORAL_CONCEPTS_ON} | "
+        f"temporal_concepts_on={args.temporal_concepts} | "
         f"priority_map_loss_weight={PRIORITY_MAP_LOSS_WEIGHT} | "
         f"top_k={MODEL_TOP_K}"
     )
@@ -2057,19 +2372,35 @@ def main() -> None:
         flush=True,
     )
 
+    model_kwargs = get_model_kwargs(
+        visual_cluster_dir=args.visual_cluster_dir,
+        visual_cluster_max_patches_per_prototype=args.visual_cluster_max_patches_per_prototype,
+        visual_cluster_seed=args.visual_cluster_seed,
+        temporal_concepts_on=args.temporal_concepts,
+        temporal_cache_dir=args.temporal_cache_dir,
+        temporal_cluster_dir=args.temporal_cluster_dir,
+        temporal_top_k=args.temporal_top_k,
+        temporal_expected_clusters=args.temporal_expected_clusters,
+        temporal_loss_weights={
+            "temporal": args.temporal_loss_weight,
+            "temporal_div": args.temporal_div_weight,
+            "temporal_optical_flow": args.temporal_optical_flow_weight,
+        },
+        window_len=args.window_len,
+    )
     train_dataset = DatasetLoader(
         TRAIN_DATASET_DIR,
-        window_len=WINDOW_LEN,
+        window_len=args.window_len,
         stride=1,
         random_train_sampling=True,
-        return_sample_metadata=USE_CACHED_BACKBONE_FEATURES,
+        return_sample_metadata=USE_CACHED_BACKBONE_FEATURES or args.temporal_concepts,
     )
     val_dataset = DatasetLoader(
         VAL_DATASET_DIR,
-        window_len=WINDOW_LEN,
+        window_len=args.window_len,
         stride=32,
         random_train_sampling=False,
-        return_sample_metadata=USE_CACHED_BACKBONE_FEATURES,
+        return_sample_metadata=USE_CACHED_BACKBONE_FEATURES or args.temporal_concepts,
     )
 
     # g = torch.Generator().manual_seed(SEED)
@@ -2105,15 +2436,15 @@ def main() -> None:
     print(
         f"Train: {len(train_dataset)} windows ({TRAIN_DATASET_DIR}) | "
         f"Val: {len(val_dataset)} windows ({VAL_DATASET_DIR}) | "
-        f"window_len={WINDOW_LEN}"
+        f"window_len={args.window_len}"
     )
 
-    model_kwargs = get_model_kwargs(
-        visual_cluster_dir=args.visual_cluster_dir,
-        visual_cluster_max_patches_per_prototype=args.visual_cluster_max_patches_per_prototype,
-        visual_cluster_seed=args.visual_cluster_seed,
-    )
     model = build_model(backbone_device, head_device, model_kwargs=model_kwargs)
+    temporal_cache = (
+        TemporalFlowCache(model_kwargs["temporal_cache_dir"], model)
+        if args.temporal_concepts
+        else None
+    )
 
     # Immutable stage4 appearance bank must be loaded/compatible before any batch.
     _verify_stage4_patch_cluster_bank(model)
@@ -2182,6 +2513,8 @@ def main() -> None:
             device,
             OUTPUT_DIR,
             feature_cache=feature_cache,
+            temporal_cache=temporal_cache,
+            temporal_split=args.temporal_train_split,
         )
         return
 
@@ -2239,6 +2572,8 @@ def main() -> None:
             calculate_metrics=False,
             scaler=scaler,
             feature_cache=feature_cache,
+            temporal_cache=temporal_cache,
+            temporal_split=args.temporal_train_split,
         )
         run_validation = epoch % val_every_n_epochs == 0
         if run_validation:
@@ -2249,6 +2584,8 @@ def main() -> None:
                 epoch,
                 OUTPUT_DIR,
                 feature_cache=feature_cache,
+                temporal_cache=temporal_cache,
+                temporal_split=args.temporal_val_split,
             )
         else:
             val_loss = None
@@ -2309,6 +2646,20 @@ def main() -> None:
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "model_config": dict(model_kwargs),
+            "temporal_data_config": {
+                "cluster_dir": (
+                    args.temporal_cluster_dir if args.temporal_concepts else None
+                ),
+                "cache_dir": model_kwargs["temporal_cache_dir"],
+                "bank_identity": (
+                    model.temporal_concept_creation.bank_identity
+                    if args.temporal_concepts
+                    else None
+                ),
+                "window_len": args.window_len,
+                "train_split": args.temporal_train_split,
+                "val_split": args.temporal_val_split,
+            },
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
             "train_losses": train_losses,
@@ -2356,6 +2707,8 @@ def _run_overfit_one_batch(
     device: torch.device,
     output_dir: str,
     feature_cache: Optional[FrozenBackboneFeatureCache] = None,
+    temporal_cache: Optional[TemporalFlowCache] = None,
+    temporal_split: str = "train",
 ) -> None:
     """Debug mode: repeatedly train on the first batch."""
     print(f"OVERFIT_ONE_BATCH: {OVERFIT_STEPS} steps on first batch")
@@ -2371,6 +2724,9 @@ def _run_overfit_one_batch(
         sample_metadata,
     ) = _unpack_loader_batch(batch)
     model.train()
+    cached_optical_flow = _cached_temporal_view(
+        temporal_cache, sample_metadata, rgb_batch, n_frames, split=temporal_split
+    )
     cached_backbone_features = None
     if _needs_reference_features(model):
         cached_backbone_features = _resolve_cached_backbone_features(
@@ -2397,6 +2753,7 @@ def _run_overfit_one_batch(
             return_concept_losses=_return_concept_losses(model),
             return_decoder_diagnostics=True,
             cached_backbone_features=cached_backbone_features,
+            cached_optical_flow=cached_optical_flow,
         )
         if step == 1:
             save_first_batch_maps(

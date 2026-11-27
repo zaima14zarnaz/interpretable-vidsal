@@ -1,83 +1,38 @@
 #!/usr/bin/env python3
-"""Precompute fixed optical-flow inputs against an existing temporal concept bank.
+"""Cache compact optical-flow training inputs against an existing frozen bank.
 
-Place beside the FLOW-ONLY form_temporal_clusters.py used to build your bank,
-inside src/patch_clusters/, or supply --clustering-script. No training model,
-backbone, image embeddings or trainable temporal encoder is loaded.
+Example:
+  python cache_optical_flow.py --gpu 0 --bank-dir /path/to/bank \
+      --dataset-root /path/to/dhf1k --cache-root /path/to/cache \
+      --splits train val --augmentations original hflip --stride 1
 
-Examples (run from src/):
-  python patch_clusters/cache_optical_flow.py \
-      --bank-dir /path/to/temporal_bank --cache-root /path/to/flow_training_cache \
-      --dataset-root /path/to/dhf1k --splits train val test \
-      --augmentations original hflip --expected-clusters 131
+--gpu N selects CUDA Farneback for a Farneback bank, or CUDA for a RAFT bank.
+CUDA Farneback requires CUDA-enabled OpenCV; there is no CPU fallback.
+Without --gpu, --farneback-backend cuda --cuda-device N is also supported.
 
-  # Match your TRAINER's window starts. Default stride is the bank window stride.
-  # For arbitrary/random window starts, --stride 1 covers every complete window.
-  # If the model uses 16-frame windows, add --window-len 16. Bank gaps stay fixed.
-  python patch_clusters/cache_optical_flow.py --bank-dir /path/to/bank \
-      --cache-root /path/to/cache --stride 1 --splits train
+Only compact windows, SQLite indexing, manifests and frozen references are
+written. Raw forward/backward flow and dense processed pairs stay in memory
+for the current window and are then released. Existing compatible raw flow
+may be read, but raw_pairs/ and pairs/ are never created, changed or deleted.
+Flow is quantized to the bank dtype before descriptors are computed, preserving
+numeric behavior. Original/hflip views share one flow estimate per pair.
 
-  # Different split directory names/strides are explicit, never silently skipped.
-  python patch_clusters/cache_optical_flow.py --bank-dir /path/to/bank \
-      --cache-root /path/to/cache --split-root val=/data/dhf1k/validation \
-      --split-stride train=8 --split-stride val=1 --split-stride test=1
+This is a training-cache builder: --bank-dir is required and no clustering is
+fitted. Flow/descriptor helpers from the newly supplied source are included;
+--clustering-script is optional. All bank normalization/thresholds stay frozen.
+The bank must be a complete fixed_stage4_temporal_clusters_v2_flow_only bank.
+CUDA overrides use separate provenance and recompute labels against that bank.
 
-Dependencies: numpy scipy opencv-python[-headless]; tqdm optional. RAFT imports
-Torch/torchvision only on a raw-flow cache MISS and requires local weights.
-CPU Farneback/DIS need no Torch. The estimator, frame gaps, canvas, patch grid,
-static/validity thresholds, camera compensation, metric, weights and TRAINING
-normalization scales come from manifest.json. They cannot be overridden here.
-The bank must be fixed_stage4_temporal_clusters_v2_flow_only and complete.
+For arbitrary trainer starts use --stride 1 and the trainer's --window-len.
+Point the trainer to the printed index.sqlite with load_dense=False. Dense
+loading is unavailable for newly generated compact windows.
 
-For a target t, only (t-gap,t) is decoded for EACH recorded gap; the full window
-and backbone stride do not define the flow interval. Flow/consistency/camera fit
-operate on the FULL resized canvas before pooling patches. Units: canvas px/frame.
-Multiple gaps are pooled exactly as the bank builder did, with its validity rule.
-No validation/test statistics, prototypes, normalization or clusters are fitted.
-
-Existing raw NPZ flow entries are reused from the bank's recorded namespace or
---reuse-flow-cache-dir overrides. New pairs are written under cache-root/raw_pairs;
-existing bank/cache files are never overwritten. Every raw field is quantized to
-the bank's recorded storage dtype BEFORE processing, matching bank generation.
-Forward/backward fields stay as displacement; processed residual/global velocities
-and FB validity masks are cached separately, with pair keys and provenance.
-
-Horizontal flip is an explicit derived view: reverse the pixel lattice and
-negate dx in forward/backward and residual/global vector fields; flip validity.
-Camera compensation is transformed, not refit on a crop. Histograms, patch means
-and cluster targets are recomputed. Original cluster IDs are NEVER simply flipped.
-Transformed estimates are stored in a derived namespace, never masquerading as
-fresh estimator results for flipped RGB inputs. Other spatial/color augmentations
-are not implemented and must not reuse these views as though they were identical.
-
-Training targets use frozen role-routed nearest reference medoids. Matching
-original training windows reuse their exact saved labels (including medoid tie
-ownership) after content pair keys are verified. New train/val/test/flip windows
-are assigned to the SAME fixed references. A role absent from the reference bank
-gets label -1 and assignment_valid=False. Static flow is distinct from invalid.
-
-Output: cache-root/SCHEMA/<namespace>/index.sqlite, manifest.json, frozen bank
-contract/references, and compressed per-window descriptors. Dense derived pairs
-are deduplicated. Reruns are content-addressed and resumable; RGB pair decoding
-still checks content. Each invocation records its own run/window membership.
-Use the JSONL --window-index option for an exact exported trainer window list:
-  {"split":"train","video":"001","window_start":0}
-Optional target_index must equal window_start+model_window_len-1. Window length
-defaults to the bank window length; --window-len may match a different model
-context, provided it contains all the bank's end-of-window flow pairs.
-Directory layout is split_root/<video>/images/<naturally sorted RGB files>.
-
-Training usage (no Torch dependency in this module):
-  from cache_optical_flow import load_cached_window
-  item = load_cached_window('/cache/.../index.sqlite', 'train', '001', 0,
-                            augmentation='original', load_dense=False)
-  # encoder_inputs: [Hgrid*Wgrid,D], finite float32, row-major patch order.
-  # cluster_ids: [N]; assignment_valid/temporal_train_mask select supervised rows.
-  # Run E_temporal(item['encoder_inputs']) LIVE during each model forward.
-  # No learned embeddings are cached. load_dense=True also returns [G,H,W,2]
-  # residual/global velocity, forward/backward displacement and [G,H,W] validity.
-Do not pass cluster_ids as encoder inputs. Use exactly the cached augmentation.
-The cache does not integrate itself into your dataloader/model automatically.
+Resume this compact build by rerunning the command. To continue an older dense
+cache without rebuilding its completed windows, provide --resume-index with
+its exact index.sqlite. Bank, geometry, flow and descriptor contracts must match;
+source hashes for the current run are recorded separately. Completed windows
+are verified against decoded RGB content, without loading or estimating flow.
+Keep the old job stopped while resuming its index. No existing files are deleted.
 """
 
 from __future__ import annotations
@@ -105,6 +60,350 @@ SCHEMA = "optical_flow_training_inputs_v1"
 PAIR_SCHEMA = "target_aligned_flow_training_pair_v1"
 BANK_FORMAT = "fixed_stage4_temporal_clusters_v2_flow_only"
 ROLES = ("invalid", "static", "moving")
+
+
+# Flow/descriptor implementation retained from the newly attached source.
+import re
+from scipy.spatial.distance import cdist
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
+
+FLOW_CACHE_SCHEMA = "bidirectional_selected_rgb_flow_npz_v2"
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+def target_flow_validity(forward, backward, absolute=1.0, relative=0.05):
+    """Forward/backward consistency at CURRENT-frame pixels."""
+    import cv2
+
+    h, w = backward.shape[:2]
+    y, x = np.mgrid[:h, :w].astype(np.float32)
+    px, py = x + backward[..., 0], y + backward[..., 1]
+    sampled = cv2.remap(
+        forward, px, py, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT
+    )
+    error = np.linalg.norm(backward + sampled, axis=-1)
+    tolerance = absolute + relative * (
+        np.linalg.norm(backward, axis=-1) + np.linalg.norm(sampled, axis=-1)
+    )
+    return (px >= 0) & (px <= w - 1) & (py >= 0) & (py <= h - 1) & (error <= tolerance)
+
+def compensate_camera(motion, valid, mode="median", seed=42, threshold=1.5):
+    """Fit global apparent motion on the target pixel lattice; retain it separately."""
+    import cv2
+
+    h, w = motion.shape[:2]
+    y, x = np.mgrid[:h, :w].astype(np.float32)
+    model = {"requested": mode, "used": mode, "valid_fraction": float(valid.mean())}
+    if mode == "none":
+        global_flow = np.zeros_like(motion)
+    else:
+        if not valid.any():
+            global_flow = np.zeros_like(motion)
+            model.update(used="no_valid_flow", vector=[0.0, 0.0])
+        else:
+            median = np.median(motion[valid], axis=0)
+            global_flow = np.broadcast_to(median, motion.shape).copy()
+            model["vector"] = median.astype(float).tolist()
+            if mode == "affine":
+                positions = np.stack((x, y), axis=-1)[valid]
+                destinations = positions + motion[valid]
+                select = np.linspace(
+                    0, len(positions) - 1, min(4096, len(positions)), dtype=np.int64
+                )
+                cv2.setRNGSeed(int(seed) % (2**31 - 1))
+                affine, inliers = (
+                    cv2.estimateAffine2D(
+                        positions[select],
+                        destinations[select],
+                        method=cv2.RANSAC,
+                        ransacReprojThreshold=threshold,
+                        maxIters=2000,
+                        confidence=0.99,
+                        refineIters=10,
+                    )
+                    if len(select) >= 6
+                    else (None, None)
+                )
+                if (
+                    affine is not None
+                    and np.isfinite(affine).all()
+                    and int(inliers.sum()) >= 6
+                ):
+                    grid = np.stack((x, y, np.ones_like(x)), axis=-1)
+                    global_flow = (grid @ affine.T - np.stack((x, y), axis=-1)).astype(
+                        np.float32
+                    )
+                    model.update(
+                        affine=affine.tolist(), inlier_fraction=float(inliers.mean())
+                    )
+                else:
+                    model["used"] = "median_fallback"
+    return motion - global_flow, global_flow, model
+
+class FlowEstimator:
+    def __init__(self, args):
+        import cv2
+
+        self.cv2 = cv2
+        self.kind = args.flow_estimator
+        self.model = None
+        self.dis = None
+        self.updates = args.raft_updates
+        self.config = {
+            "estimator": self.kind,
+            "opencv_version": cv2.__version__,
+            "canvas": list(args.resize_to),
+            "bidirectional": True,
+            "input": "RGB uint8; cv2 INTER_LINEAR canvas resize before grayscale",
+            "flow_units": "canvas pixels over recorded frame interval",
+        }
+        if self.kind == "farneback":
+            self.config["parameters"] = dict(
+                pyr_scale=0.5,
+                levels=3,
+                winsize=15,
+                iterations=3,
+                poly_n=5,
+                poly_sigma=1.2,
+                flags=0,
+            )
+        elif self.kind.startswith("dis-"):
+            preset = (
+                cv2.DISOPTICAL_FLOW_PRESET_FAST
+                if self.kind == "dis-fast"
+                else cv2.DISOPTICAL_FLOW_PRESET_ULTRAFAST
+            )
+            self.dis = cv2.DISOpticalFlow_create(preset)
+            self.config["preset"] = int(preset)
+        else:
+            import torch
+            import torchvision
+            from torchvision.models.optical_flow import raft_large, raft_small
+
+            if not args.raft_weights or not args.raft_weights.is_file():
+                raise FileNotFoundError(
+                    "RAFT requires --raft-weights with a local torchvision state_dict."
+                )
+            if min(args.resize_to) < 128:
+                raise ValueError("RAFT requires a canvas of at least 128x128.")
+            self.torch = torch
+            self.device = (
+                args.flow_device
+                or args.device
+                or (f"cuda:{args.gpu}" if args.gpu is not None else "cpu")
+            )
+            factory = raft_small if self.kind == "raft-small" else raft_large
+            self.model = factory(weights=None, progress=False).to(self.device).eval()
+            state = torch.load(args.raft_weights, map_location="cpu", weights_only=True)
+            if isinstance(state, dict) and "state_dict" in state:
+                state = state["state_dict"]
+            self.model.load_state_dict(state, strict=True)
+            self.config.update(
+                torch_version=str(torch.__version__),
+                torchvision_version=torchvision.__version__,
+                iterations=self.updates,
+                checkpoint_sha256=sha256_file(args.raft_weights),
+                normalization="uint8 RGB -> [-1,1]; replicate pad to multiple of 8",
+            )
+
+    def estimate(self, previous, current):
+        cv2 = self.cv2
+        if self.model is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            a = cv2.cvtColor(previous, cv2.COLOR_RGB2GRAY)
+            b = cv2.cvtColor(current, cv2.COLOR_RGB2GRAY)
+            # OpenCV releases the GIL inside Farneback/DIS, so both directions
+            # can run concurrently on CPU. CUDA OpenCV Farneback is unavailable
+            # in typical wheels; RAFT (below) is the GPU estimator path.
+            if self.dis is not None:
+                # No initial flow: each pair and direction is estimated independently.
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    fut_f = pool.submit(self.dis.calc, a, b, None)
+                    fut_b = pool.submit(self.dis.calc, b, a, None)
+                    f, bwd = fut_f.result(), fut_b.result()
+            else:
+                params = self.config["parameters"]
+
+                def _farneback(src, dst):
+                    return cv2.calcOpticalFlowFarneback(src, dst, None, **params)
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    fut_f = pool.submit(_farneback, a, b)
+                    fut_b = pool.submit(_farneback, b, a)
+                    f, bwd = fut_f.result(), fut_b.result()
+            return f.astype(np.float32), bwd.astype(np.float32)
+        torch = self.torch
+        import torch.nn.functional as F
+
+        with torch.inference_mode():
+
+            def tensor(rgb):
+                return (
+                    torch.from_numpy(rgb.copy())
+                    .permute(2, 0, 1)[None]
+                    .float()
+                    .to(self.device)
+                    / 127.5
+                    - 1
+                )
+
+            a, b = tensor(previous), tensor(current)
+            h, w = a.shape[-2:]
+            pad = (0, (-w) % 8, 0, (-h) % 8)
+            a, b = F.pad(a, pad, mode="replicate"), F.pad(b, pad, mode="replicate")
+
+            def run(x, y):
+                return (
+                    self.model(x, y, num_flow_updates=self.updates)[-1][0, :, :h, :w]
+                    .permute(1, 2, 0)
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32)
+                )
+
+            return run(a, b), run(b, a)
+
+def natural_key(value):
+    return tuple(
+        (1, int(p)) if p.isdigit() else (0, p.casefold())
+        for p in re.split(r"(\d+)", str(value))
+    )
+
+def read_canvas(path, hw):
+    import cv2
+
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise OSError(f"Cannot decode RGB frame: {path}")
+    image = cv2.resize(image, (hw[1], hw[0]), interpolation=cv2.INTER_LINEAR)
+    return np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+def soft_histogram(vectors, threshold):
+    """Eight circular direction bins + static mass; valid vectors only."""
+    out = np.zeros(9, np.float32)
+    magnitude = np.linalg.norm(vectors, axis=-1)
+    moving = magnitude > threshold
+    out[-1] = 1.0 - moving.mean()
+    if moving.any():
+        angle = np.mod(np.arctan2(vectors[moving, 1], vectors[moving, 0]), 2 * np.pi)
+        bins = angle * 8 / (2 * np.pi)
+        lower = np.floor(bins).astype(np.int64)
+        fraction = bins - lower
+        # Log weights prevent a few fast/outlier pixels dominating direction.
+        weight = np.log1p(magnitude[moving])
+        counts = np.bincount(lower % 8, weights=weight * (1 - fraction), minlength=8)
+        counts += np.bincount((lower + 1) % 8, weights=weight * fraction, minlength=8)
+        out[:8] = moving.mean() * counts / counts.sum()
+    return out
+
+def circular_hist_distance(a, b):
+    """Exact circular EMD for conditional equal-mass direction histograms.
+
+    Eight-bin circle, unit neighbor cost. Optimal circulation subtracts median
+    cumulative imbalance; divide by four (opposite directions). Static fraction
+    is a separate mass, with unit static/moving transition cost.
+    """
+    ma, mb = a[:, :8].sum(axis=1), b[:, :8].sum(axis=1)
+    pa = np.divide(
+        a[:, :8], ma[:, None], out=np.zeros_like(a[:, :8]), where=ma[:, None] > 1e-12
+    )
+    pb = np.divide(
+        b[:, :8], mb[:, None], out=np.zeros_like(b[:, :8]), where=mb[:, None] > 1e-12
+    )
+    result = np.empty((len(a), len(b)), dtype=np.float64)
+    # Chunk to avoid [4096,4096,8] temporaries during sample fitting.
+    for start in range(0, len(a), 64):
+        c = np.cumsum(
+            pa[start : start + 64, None, :].astype(np.float64) - pb[None, :, :], axis=-1
+        )
+        emd = np.abs(c - np.median(c, axis=-1, keepdims=True)).sum(axis=-1) / 4
+        result[start : start + 64] = np.minimum(
+            ma[start : start + 64, None], mb[None, :]
+        ) * emd + np.abs(ma[start : start + 64, None] - mb[None, :])
+    return result
+
+def temporal_distance(a, b, weights, metric="circular-emd"):
+    ha, ma, ca, ga, va = a
+    hb, mb, cb, gb, vb = b
+    # weights retain the legacy four positions: flow, removed direction, mag, global.
+    if metric == "circular-emd":
+        flow = circular_hist_distance(ha, hb)
+    elif metric == "l1":
+        flow = cdist(ha, hb, metric="cityblock") / 2
+    else:
+        flow = cdist(ca, cb, metric="euclidean") / np.sqrt(3)
+    both = va[:, None] & vb[None, :]
+    flow[~va[:, None] & ~vb[None, :]] = 0
+    flow[va[:, None] != vb[None, :]] = 1
+    # Column 0 is ONLY residual-flow magnitude. Column 1 is rate dispersion across
+    # requested gaps. No feature-change magnitude enters either column.
+    magnitude = np.abs(ma[:, None, 0] - mb[None, :, 0])
+    variance = np.abs(ma[:, None, 1] - mb[None, :, 1])
+    global_motion = cdist(ga, gb, metric="cityblock") / 2
+    return np.maximum(
+        0,
+        weights[0] * flow
+        + both
+        * (weights[2] * magnitude + weights[1] * variance + weights[3] * global_motion),
+    )
+
+def descriptor_config(args):
+    return dict(
+        mode="flow-only",
+        image_features_extracted=False,
+        backbone_loaded=False,
+        grid_source="explicit spatial patch size; no backbone geometry inference",
+        patch_size=list(args.patch_size),
+        flow_frame_gaps=args.flow_gaps,
+        units="canvas pixels per frame index (not pixels per second)",
+        flow_anchor="All pairs end at current-frame pixels; apparent forward motion = -backward flow",
+        histogram="8 circular, linearly interpolated, log-speed-weighted direction bins plus static fraction",
+        histogram_metric=args.flow_metric,
+        direction_axes="x right, y down; +x bin0, clockwise",
+        camera_motion=args.camera_motion,
+        camera_ransac_threshold=args.camera_ransac_threshold,
+        flow_static_threshold=args.flow_static_threshold,
+        static_threshold_units="canvas pixels/frame",
+        static_patch_fraction=args.static_patch_fraction,
+        min_flow_valid_fraction=args.min_flow_valid_fraction,
+        min_valid_gap_fraction=args.min_valid_gap_fraction,
+        forward_backward_absolute=args.flow_fb_absolute,
+        forward_backward_relative=args.flow_fb_relative,
+        consistency_units="displacement canvas pixels before division by gap",
+        static_policy="valid cells with >= static_patch_fraction static pixels route to one static reference; moving fit sample excludes them",
+        invalid_policy="insufficient valid gaps routes to one unknown-flow reference; never treated as static",
+        pooling="equal mean of usable per-gap descriptors at same target spatial cell; not Lagrangian tracking",
+        variation="sqrt(mean squared spread of per-gap patch mean residual velocity); not acceleration",
+        legacy_change_fields="zero placeholders; change_direction [N,0]; change_valid false",
+        assignment="nearest medoid within role; reference rows own themselves on distance ties",
+    )
+
+_FLOW_CORE = SimpleNamespace(
+    FORMAT_VERSION=BANK_FORMAT, FLOW_CACHE_SCHEMA=FLOW_CACHE_SCHEMA,
+    IMAGE_SUFFIXES=IMAGE_SUFFIXES, tqdm=tqdm,
+    FlowEstimator=FlowEstimator,
+    circular_hist_distance=circular_hist_distance,
+    compensate_camera=compensate_camera,
+    descriptor_config=descriptor_config,
+    natural_key=natural_key,
+    read_canvas=read_canvas,
+    sha256_file=sha256_file,
+    soft_histogram=soft_histogram,
+    target_flow_validity=target_flow_validity,
+    temporal_distance=temporal_distance,
+)
+
 
 
 def now():
@@ -172,27 +471,135 @@ def readonly(path):
 
 
 def load_core(path=None):
-    candidates = (
-        [Path(path)]
-        if path
-        else [
-            Path(__file__).with_name("form_temporal_clusters.py"),
-            Path(__file__).parent / "patch_clusters/form_temporal_clusters.py",
-        ]
-    )
-    selected = next(
-        (p.expanduser().resolve() for p in candidates if p.expanduser().is_file()), None
-    )
-    if selected is None:
-        raise FileNotFoundError(
-            "Put this file beside your flow-only form_temporal_clusters.py, or pass --clustering-script."
-        )
+    if path is None:
+        return _FLOW_CORE, Path(__file__).resolve()
+    selected = Path(path).expanduser().resolve()
+    if not selected.is_file():
+        raise FileNotFoundError(f"Clustering helper not found: {selected}")
     spec = importlib.util.spec_from_file_location("_fixed_flow_bank_core", selected)
     core = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(core)
     if getattr(core, "FORMAT_VERSION", None) != BANK_FORMAT:
-        raise ValueError("The clustering helper must be the v2 FLOW-ONLY bank builder.")
+        raise ValueError("The clustering helper must be the v2 flow-only bank builder.")
     return core, selected
+
+
+class CudaFarnebackEstimator:
+    """Bidirectional Farneback via OpenCV CUDA, without Torch or CPU fallback."""
+
+    def __init__(self, recorded_config, device=0):
+        self.device = int(device)
+        self.model = None
+        self.gpu_previous = None
+        self.gpu_current = None
+        cuda = getattr(cv2, "cuda", None)
+        error = (
+            "CUDA Farneback requires an NVIDIA GPU, compatible driver and an OpenCV "
+            "build with CUDA + opencv_contrib/cudaoptflow. Standard opencv-python/"
+            "opencv-contrib-python PyPI wheels are CPU-only. No CPU fallback was used."
+        )
+        if cuda is None or not hasattr(cuda, "getCudaEnabledDeviceCount"):
+            raise RuntimeError(error)
+        try:
+            count = cuda.getCudaEnabledDeviceCount()
+        except cv2.error as exc:
+            raise RuntimeError(error) from exc
+        if count <= 0:
+            raise RuntimeError(f"{error} OpenCV reports {count} usable CUDA devices.")
+        if not 0 <= self.device < count:
+            raise ValueError(f"--cuda-device {self.device} is out of range; {count} device(s) available.")
+        factory_class = getattr(cv2, "cuda_FarnebackOpticalFlow", None)
+        if factory_class is None:
+            factory_class = getattr(cuda, "FarnebackOpticalFlow", None)
+        self.factory = getattr(factory_class, "create", None)
+        if self.factory is None:
+            self.factory = getattr(cuda, "FarnebackOpticalFlow_create", None)
+        self.gpu_mat_factory = getattr(cv2, "cuda_GpuMat", None)
+        if self.gpu_mat_factory is None:
+            self.gpu_mat_factory = getattr(cuda, "GpuMat", None)
+        if self.factory is None or self.gpu_mat_factory is None:
+            raise RuntimeError(f"{error} CUDA Farneback/GpuMat Python bindings are missing.")
+        try:
+            cuda.setDevice(self.device)
+        except cv2.error as exc:
+            raise RuntimeError(f"Cannot select OpenCV CUDA device {self.device}: {exc}") from exc
+        self.config = json.loads(json.dumps(recorded_config))
+        if self.config.get("estimator") not in ("farneback", "farneback-cuda"):
+            raise ValueError("--farneback-backend cuda requires a Farneback bank (not DIS/RAFT).")
+        parameters = self.config.get("parameters", {})
+        required = {"pyr_scale", "levels", "winsize", "iterations", "poly_n", "poly_sigma", "flags"}
+        if not required.issubset(parameters):
+            raise ValueError("The bank must record all Farneback parameters for CUDA mapping.")
+        # The module estimates every direction independently with no initial flow.
+        if parameters["flags"] != 0 or parameters.get("fast_pyramids", False):
+            raise ValueError("CUDA mode currently requires flags=0 and fast_pyramids=False.")
+        self.config.update(
+            estimator="farneback-cuda",
+            backend="opencv_cuda",
+            opencv_build_sha256=hashlib.sha256(cv2.getBuildInformation().encode()).hexdigest(),
+            cuda_implementation="bidirectional_grayscale_farneback_v1",
+        )
+        self.config["parameters"]["fast_pyramids"] = False
+        if recorded_config["estimator"] == "farneback-cuda" and self.config != recorded_config:
+            raise ValueError("CUDA Farneback build/settings differ from the GPU bank's recorded provenance.")
+
+    def estimate(self, previous, current):
+        try:
+            cv2.cuda.setDevice(self.device)
+            if self.model is None:
+                p = self.config["parameters"]
+                # Positional order follows cv::cuda::FarnebackOpticalFlow::create.
+                self.model = self.factory(
+                    int(p["levels"]), float(p["pyr_scale"]), False,
+                    int(p["winsize"]), int(p["iterations"]), int(p["poly_n"]),
+                    float(p["poly_sigma"]), int(p["flags"]),
+                )
+                self.gpu_previous = self.gpu_mat_factory()
+                self.gpu_current = self.gpu_mat_factory()
+            # Match the CPU bank's RGB -> grayscale conversion exactly; only
+            # flow estimation runs on CUDA. Reuse uploaded inputs both ways.
+            self.gpu_previous.upload(cv2.cvtColor(previous, cv2.COLOR_RGB2GRAY))
+            self.gpu_current.upload(cv2.cvtColor(current, cv2.COLOR_RGB2GRAY))
+            forward = self.model.calc(self.gpu_previous, self.gpu_current, None).download()
+            backward = self.model.calc(self.gpu_current, self.gpu_previous, None).download()
+            values = tuple(np.asarray(v, dtype=np.float32) for v in (forward, backward))
+            if any(v.shape != (*previous.shape[:2], 2) or not np.isfinite(v).all() for v in values):
+                raise ValueError("CUDA Farneback returned invalid flow; no entry written.")
+            return values
+        except cv2.error as exc:
+            raise RuntimeError(f"CUDA Farneback failed on device {self.device}; no CPU fallback: {exc}") from exc
+
+
+def configure_flow_backend(bank, options):
+    """Keep frozen bank identity, but fingerprint an explicitly changed estimator."""
+    bank.bank_flow_config = bank.flow_config
+    bank.cuda_estimator = None
+    bank.flow_backend_changed = False
+    requested = options.farneback_backend
+    recorded_kind = bank.estimator_config["estimator"]
+    if options.gpu is not None:
+        if recorded_kind in ("farneback", "farneback-cuda"):
+            requested = "cuda"
+        elif recorded_kind.startswith("raft-"):
+            bank.args.device = f"cuda:{options.gpu}"
+            bank.args.flow_device = f"cuda:{options.gpu}"
+        else:
+            raise ValueError("--gpu requires a Farneback or RAFT bank; DIS is CPU-only.")
+    if requested != "cuda" and recorded_kind != "farneback-cuda":
+        return
+    if recorded_kind not in ("farneback", "farneback-cuda"):
+        raise ValueError("--farneback-backend cuda requires a Farneback bank (not DIS/RAFT).")
+    bank.cuda_estimator = CudaFarnebackEstimator(bank.estimator_config, options.cuda_device)
+    bank.estimator_config = bank.cuda_estimator.config
+    bank.flow_config = dict(bank.flow_config, estimator=bank.estimator_config)
+    bank.raw_namespace = digest(bank.flow_config)
+    bank.flow_backend_changed = bank.flow_config != bank.bank_flow_config
+    print(
+        f"CUDA Farneback selected on device {options.cuda_device}; separate raw namespace "
+        f"{bank.raw_namespace}; frozen bank assignments will be recomputed"
+        if bank.flow_backend_changed else f"Using bank's CUDA Farneback on device {options.cuda_device}",
+        flush=True,
+    )
 
 
 class Bank:
@@ -341,7 +748,7 @@ class Bank:
             self.db.close()
 
     def original_training_labels(self, video, start, target, pair_keys):
-        if self.db is None:
+        if self.db is None or getattr(self, "flow_backend_changed", False):
             return None
         # The model may use another context length. The same target and
         # verified RGB flow pairs still define exactly the same descriptor.
@@ -371,23 +778,22 @@ class Bank:
 
 
 class RawFlowCache:
-    """Read old caches, lazily estimate misses into a new create-only cache."""
+    """Read existing raw entries or estimate in memory; never write dense flow."""
 
     def __init__(
         self, bank, core, root, reuse_dirs=(), read_only=False, copy_reused=False
     ):
         self.bank = bank
         self.core = core
-        self.estimator = None
+        self.estimator = getattr(bank, "cuda_estimator", None)
         self.directory = (
             Path(root) / "raw_pairs" / core.FLOW_CACHE_SCHEMA / bank.raw_namespace
         )
-        self.directory.mkdir(parents=True, exist_ok=True)
+        if copy_reused:
+            raise ValueError("This compact-only builder does not support --copy-reused-flow.")
         manifest = self.directory / "manifest.json"
         if manifest.exists() and json.loads(manifest.read_text()) != bank.flow_config:
             raise ValueError("Raw output namespace has incompatible metadata.")
-        if not manifest.exists():
-            atomic_json(manifest, bank.flow_config)
         self.sources = [self.directory]
         candidates = []
         if bank.manifest.get("flow_cache_directory"):
@@ -414,6 +820,10 @@ class RawFlowCache:
         self.read_only = read_only
         self.copy_reused = copy_reused
         self.stats = dict(hits=0, reused=0, misses=0, estimator_calls=0, writes=0)
+        self.active = {}
+
+    def begin_window(self):
+        self.active.clear()
 
     def _read(self, path, key):
         p = load_npz(path)
@@ -446,6 +856,8 @@ class RawFlowCache:
         h.update(np.ascontiguousarray(previous).tobytes())
         h.update(np.ascontiguousarray(current).tobytes())
         key = h.hexdigest()
+        if key in self.active:
+            return self.active[key]
         relative = Path("entries") / key[:2] / (key + ".npz")
         destination = self.directory / relative
         for i, directory in enumerate(self.sources):
@@ -456,18 +868,9 @@ class RawFlowCache:
             self.stats["hits"] += 1
             if i:
                 self.stats["reused"] += 1
-                if self.copy_reused:
-                    if save_npz_once(
-                        destination,
-                        forward=fields[0].astype(self.dtype),
-                        backward=fields[1].astype(self.dtype),
-                        namespace=np.array(self.bank.raw_namespace),
-                        pair_sha256=np.array(key),
-                    ):
-                        self.stats["writes"] += 1
-                    self._read(destination, key)
-                    path = destination
-            return *fields, key, path
+            result = (*fields, key, path)
+            self.active[key] = result
+            return result
         self.stats["misses"] += 1
         if self.read_only:
             raise FileNotFoundError(
@@ -488,15 +891,9 @@ class RawFlowCache:
             for v in (f, b)
         ):
             raise ValueError("Invalid estimated flow; no cache entry written.")
-        if save_npz_once(
-            destination,
-            forward=f,
-            backward=b,
-            namespace=np.array(self.bank.raw_namespace),
-            pair_sha256=np.array(key),
-        ):
-            self.stats["writes"] += 1
-        return *self._read(destination, key), key, destination
+        result = (f.astype(np.float32), b.astype(np.float32), key, None)
+        self.active[key] = result
+        return result
 
 
 def flip_vectors(field):
@@ -511,6 +908,10 @@ class ProcessedPairs:
         self.core = core
         self.directory = Path(directory) / "pairs"
         self.stats = dict(hits=0, writes=0)
+        self.active = {}
+
+    def begin_window(self):
+        self.active.clear()
 
     def get(self, forward, backward, raw_key, raw_path, gap, augmentation):
         key = digest(
@@ -523,11 +924,8 @@ class ProcessedPairs:
             )
         )
         path = self.directory / key[:2] / (key + ".npz")
-        if path.is_file():
-            payload = load_npz(path)
-            meta = json.loads(str(payload["metadata"]))
-            if meta["key"] != key or meta["bank_identity"] != self.bank.identity:
-                raise ValueError(f"Derived-pair identity mismatch; preserved: {path}")
+        if key in self.active:
+            payload = self.active[key]
             self.stats["hits"] += 1
         else:
             if augmentation == "original":
@@ -565,7 +963,7 @@ class ProcessedPairs:
                 key=key,
                 bank_identity=self.bank.identity,
                 raw_pair_key=raw_key,
-                raw_path=str(raw_path),
+                raw_path=None,
                 gap=int(gap),
                 augmentation=augmentation,
                 camera_model=camera,
@@ -573,15 +971,13 @@ class ProcessedPairs:
                 anchor="current frame",
                 flip_policy="reverse columns and negate dx; transform camera field and validity; no refit",
             )
-            if save_npz_once(
-                path,
+            payload = dict(
                 residual_velocity=residual.astype(np.float32),
                 global_velocity=global_flow.astype(np.float32),
                 valid=valid.astype(bool),
                 metadata=np.array(json.dumps(meta, sort_keys=True, allow_nan=False)),
-            ):
-                self.stats["writes"] += 1
-            payload = load_npz(path)
+            )
+            self.active[key] = payload
         for name in ("residual_velocity", "global_velocity"):
             if (
                 payload[name].shape != (*self.bank.canvas, 2)
@@ -593,7 +989,7 @@ class ProcessedPairs:
             or payload["valid"].dtype != np.bool_
         ):
             raise ValueError(f"Invalid derived validity mask: {path}")
-        return payload, path
+        return payload, None
 
 
 def pool_pair(payload, bank, core):
@@ -921,13 +1317,26 @@ def validate_location(root, bank, split_roots):
     return root
 
 
-def prepare_pairs(paths, start, bank, core, raw):
+def prepare_canvases(paths, start, bank, core):
     target = start + bank.window_len - 1
     current = core.read_canvas(paths[target], bank.canvas)
     return [
-        (gap, *raw.get(core.read_canvas(paths[target - gap], bank.canvas), current))
+        (gap, core.read_canvas(paths[target - gap], bank.canvas), current)
         for gap in bank.gaps
     ]
+
+
+def canvas_pair_key(previous, current):
+    h = hashlib.sha256(str(previous.shape).encode())
+    h.update(np.ascontiguousarray(previous).tobytes())
+    h.update(np.ascontiguousarray(current).tobytes())
+    return h.hexdigest()
+
+
+def prepare_pairs(paths, start, bank, core, raw, canvases=None):
+    if canvases is None:
+        canvases = prepare_canvases(paths, start, bank, core)
+    return [(gap, *raw.get(previous, current)) for gap, previous, current in canvases]
 
 
 def process_window(
@@ -943,12 +1352,15 @@ def process_window(
     directory,
     contract,
     prepared=None,
+    canvases=None,
 ):
     target = start + bank.window_len - 1
-    prepared = (
-        prepare_pairs(paths, start, bank, core, raw) if prepared is None else prepared
-    )
-    keys = [p[3] for p in prepared]
+    if prepared is not None:
+        keys = [p[3] for p in prepared]
+    else:
+        if canvases is None:
+            canvases = prepare_canvases(paths, start, bank, core)
+        keys = [canvas_pair_key(previous, current) for _, previous, current in canvases]
     key = digest(
         dict(
             namespace=contract["namespace"],
@@ -966,8 +1378,28 @@ def process_window(
         meta = json.loads(str(old["metadata"]))
         if meta["cache_key"] != key or meta["bank_identity"] != bank.identity:
             raise ValueError(f"Window cache identity mismatch; preserved: {path}")
-        if all((directory / p["processed_path"]).is_file() for p in meta["pairs"]):
-            return path, key, old, True
+        if (
+            meta.get("namespace") != contract["namespace"]
+            or meta.get("split") != split
+            or meta.get("video") != video
+            or meta.get("window_start") != start
+            or meta.get("target_index") != target
+            or meta.get("augmentation") != augmentation
+            or [p["raw_pair_key"] for p in meta["pairs"]] != keys
+        ):
+            raise ValueError(f"Window metadata/content identity mismatch; preserved: {path}")
+        n = int(np.prod(bank.grid))
+        if (
+            old["encoder_inputs"].shape != (n, sum(int(d) for _, d in bank.components))
+            or not np.isfinite(old["encoder_inputs"]).all()
+            or old["cluster_ids"].shape != (n,)
+            or np.any((old["cluster_ids"] < -1) | (old["cluster_ids"] >= bank.count))
+            or old["temporal_train_mask"].shape != (n,)
+        ):
+            raise ValueError(f"Invalid compact window arrays; preserved: {path}")
+        return path, key, old, True
+    if prepared is None:
+        prepared = prepare_pairs(paths, start, bank, core, raw, canvases)
     summaries = []
     pairs = []
     for gap, forward, backward, raw_key, raw_path in prepared:
@@ -983,8 +1415,8 @@ def process_window(
                 previous_name=paths[target - gap].name,
                 target_name=paths[target].name,
                 raw_pair_key=raw_key,
-                raw_path=str(raw_path),
-                processed_path=str(pair_path.relative_to(directory)),
+                raw_path=None,
+                processed_path=None,
             )
         )
     arrays = merge_pairs(summaries, bank)
@@ -1025,6 +1457,7 @@ def process_window(
         flow_units="canvas pixels/frame",
         assignment_invalid_label=-1,
         learned_embeddings_cached=False,
+        dense_saved=False,
     )
     if not save_npz_once(
         path,
@@ -1034,7 +1467,9 @@ def process_window(
         old = load_npz(path)
         if json.loads(str(old["metadata"]))["cache_key"] != key:
             raise ValueError("Concurrent cache identity mismatch.")
-    return path, key, load_npz(path), False
+        winner = load_npz(path)
+        return path, key, winner, True
+    return path, key, dict(metadata=np.array(json.dumps(meta, sort_keys=True, allow_nan=False)), **arrays), False
 
 
 def build(options):
@@ -1042,6 +1477,7 @@ def build(options):
     bank = Bank(options.bank_dir, core, options)
     con = None
     try:
+        configure_flow_backend(bank, options)
         windows, files, roots, strides = source_windows(options, bank, core)
         cache_root = validate_location(options.cache_root, bank, roots)
         recipe = dict(
@@ -1066,9 +1502,41 @@ def build(options):
             augmentation_recipe="hflip_full_lattice_negate_dx_v1",
             learned_embeddings_cached=False,
         )
-        namespace = digest(recipe)
-        contract = json.loads(json.dumps(dict(namespace=namespace, **recipe)))
-        directory = cache_root / SCHEMA / namespace
+        if bank.flow_backend_changed:
+            recipe.update(
+                bank_flow_config=bank.bank_flow_config,
+                flow_backend_override="cuda_farneback_reassign_to_frozen_bank",
+            )
+        if options.resume_index is not None:
+            index_path = options.resume_index.expanduser().resolve()
+            if not index_path.is_file() or index_path.name != "index.sqlite":
+                raise FileNotFoundError("--resume-index must name an existing index.sqlite.")
+            if index_path.parent.parent != cache_root / SCHEMA:
+                raise ValueError("--resume-index must be inside this --cache-root's training-cache directory.")
+            with closing(readonly(index_path)) as previous_index:
+                row = previous_index.execute(
+                    "SELECT value FROM metadata WHERE key='contract'"
+                ).fetchone()
+            if row is None:
+                raise ValueError("The resume index has no bank contract.")
+            contract = json.loads(row[0])
+            # Program source hashes are run provenance, not flow/descriptor
+            # settings. Preserve the old contract and record current hashes below.
+            excluded = {"namespace", "implementation_sha256", "core_sha256"}
+            expected = {k: v for k, v in recipe.items() if k not in excluded}
+            recorded = {k: v for k, v in contract.items() if k not in excluded}
+            expected = json.loads(json.dumps(expected))
+            if recorded != expected:
+                changed = sorted(k for k in recorded.keys() | expected.keys()
+                                 if recorded.get(k) != expected.get(k))
+                raise ValueError("Resume bank/flow/descriptor contract differs: " + ", ".join(changed))
+            directory = index_path.parent
+            if directory.name != contract["namespace"]:
+                raise ValueError("Resume directory and recorded namespace disagree.")
+        else:
+            namespace = digest(recipe)
+            contract = json.loads(json.dumps(dict(namespace=namespace, **recipe)))
+            directory = cache_root / SCHEMA / namespace
         directory.mkdir(parents=True, exist_ok=True)
         manifest_path = directory / "manifest.json"
         if manifest_path.is_file():
@@ -1116,6 +1584,11 @@ def build(options):
             augmentations=options.augmentations,
             window_index=str(options.window_index) if options.window_index else None,
             max_windows_per_split=options.max_windows,
+            farneback_backend=options.farneback_backend,
+            cuda_device=options.cuda_device if bank.cuda_estimator is not None else None,
+            storage_mode="compact_only",
+            current_implementation_sha256=file_sha(__file__),
+            current_core_sha256=file_sha(core_path),
         )
         stats = dict(
             source_windows=0,
@@ -1140,8 +1613,12 @@ def build(options):
             bank_directory=str(bank.directory),
             bank_manifest_sha256=file_sha(bank.manifest_path),
             source_builder=str(core_path),
-            raw_cache_directory=str(raw.directory),
-            raw_cache_sources=[str(p) for p in raw.sources],
+            raw_cache_directory=None,
+            raw_cache_sources=[str(p) for p in raw.sources if p.is_dir()],
+            raw_flow_saved=False,
+            dense_processed_pairs_saved=False,
+            flow_backend_changed=bank.flow_backend_changed,
+            flow_estimator=bank.estimator_config["estimator"],
             index="index.sqlite",
             last_run_id=run_id,
             last_run_started_at=started,
@@ -1168,7 +1645,9 @@ def build(options):
                 windows, desc="Cache optical flow", unit="window"
             ):
                 stats["source_windows"] += 1
-                prepared = prepare_pairs(files[(split, video)], start, bank, core, raw)
+                raw.begin_window()
+                processed.begin_window()
+                canvases = prepare_canvases(files[(split, video)], start, bank, core)
                 for augmentation in options.augmentations:
                     path, key, payload, hit = process_window(
                         split,
@@ -1182,7 +1661,7 @@ def build(options):
                         processed,
                         directory,
                         contract,
-                        prepared=prepared,
+                        canvases=canvases,
                     )
                     meta = json.loads(str(payload["metadata"]))
                     con.execute(
@@ -1321,6 +1800,11 @@ def load_cached_window(
     ):
         raise ValueError("Invalid cached fixed cluster IDs.")
     if load_dense:
+        if meta.get("dense_saved") is False:
+            raise ValueError(
+                "This window is a compact-only cache entry. Use load_dense=False; "
+                "raw_pairs/ and pairs/ are intentionally not saved."
+            )
         residual = []
         global_flow = []
         valid = []
@@ -1385,6 +1869,10 @@ def parser():
     p.add_argument("--bank-dir", type=Path, required=True)
     p.add_argument("--cache-root", type=Path, required=True)
     p.add_argument(
+        "--resume-index", type=Path,
+        help="Continue an existing index.sqlite with matching bank/flow settings; completed compact windows need no dense files.",
+    )
+    p.add_argument(
         "--dataset-root",
         type=Path,
         default=Path("/data/quantization/zaima/videosal_datasets/dhf1k"),
@@ -1439,7 +1927,7 @@ def parser():
     p.add_argument(
         "--copy-reused-flow",
         action="store_true",
-        help="Copy reused raw entries into output cache for portability; references/bank are never changed.",
+        help=argparse.SUPPRESS,
     )
     p.add_argument(
         "--raft-weights",
@@ -1449,9 +1937,22 @@ def parser():
     p.add_argument(
         "--device",
         default="cpu",
-        help="RAFT device if needed; Farneback/DIS remain CPU.",
+        help="RAFT device if needed. CUDA Farneback uses --farneback-backend cuda --cuda-device N.",
     )
     p.add_argument("--flow-device", default=None)
+    p.add_argument(
+        "--gpu", type=int,
+        help="CUDA device index. Enables CUDA Farneback for a Farneback bank, or CUDA for a RAFT bank.",
+    )
+    p.add_argument(
+        "--farneback-backend", choices=("bank", "cuda"), default="bank",
+        help="Default bank preserves the bank's estimator. cuda explicitly switches Farneback "
+             "to OpenCV CUDA, using separate cache namespaces and new assignments; no CPU fallback.",
+    )
+    p.add_argument(
+        "--cuda-device", type=int, default=0,
+        help="OpenCV CUDA device index for CUDA Farneback (default 0); requires CUDA-enabled OpenCV.",
+    )
     p.add_argument("--threads", type=int, default=4)
     return p
 
@@ -1459,6 +1960,12 @@ def parser():
 def parse_args(argv=None):
     p = parser()
     args = p.parse_args(argv)
+    if args.copy_reused_flow:
+        p.error("Remove --copy-reused-flow: this builder never saves raw or processed dense pairs.")
+    if args.gpu is not None:
+        if args.gpu < 0:
+            p.error("--gpu must be nonnegative.")
+        args.cuda_device = args.gpu
     args.splits = list(dict.fromkeys(args.splits))
     args.augmentations = list(dict.fromkeys(args.augmentations))
     for split in args.splits:
@@ -1472,6 +1979,8 @@ def parse_args(argv=None):
             p.error(f'--{name.replace("_","-")} must be positive.')
     if args.threads < 1:
         p.error("--threads must be positive.")
+    if args.cuda_device < 0:
+        p.error("--cuda-device must be nonnegative.")
     return args
 
 

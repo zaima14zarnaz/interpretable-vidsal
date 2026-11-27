@@ -1,0 +1,52 @@
+# To form patch clusters at different FINCH levels:
+python form_patch_clusters.py \
+  --gpu 0 \
+  --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref
+
+# To form patch clusters at a particular level
+python form_patch_clusters.py \
+    --gpu 0 \
+    --clustering finch \
+    --finch-level 0 \
+    --output-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0
+
+# To view the patch clusters
+python view_patch_clusters.py \
+    --cluster-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/patch_cluster_frozen_ref/patch_cluster_level0
+
+# To form temporal clusters at difference FINCH levels
+export DHF1K_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k
+
+python form_temporal_clusters.py \
+  --from-window-cache "$DHF1K_ROOT/cached_temporal_feats" \
+  --dataset-root "$DHF1K_ROOT" \
+  --output-dir "$DHF1K_ROOT/concept_clusters/temporal_cluster" \
+  --clustering finch \
+  --finch-level 0 \
+  --viewer-examples 12 \
+  --gpu 0
+
+
+# To view the temporal clusters
+python view_temporal_clusters.py \
+  --cluster-dir /data/quantization/zaima/videosal_datasets/dhf1k/concept_clusters/temporal_cluster \
+  --top-k 12 \
+  --min-arrow-fraction 0.1 \
+  --columns 4
+
+#Cache backbone features
+
+#Cache temporal features (optical flow)
+# --gpu accelerates Torch patch pooling; Farneback bank flow stays OpenCV CPU.
+DHF1K_ROOT=/data/quantization/zaima/videosal_datasets/dhf1k
+
+nohup python cache_optical_flow.py \
+  --gpu 0 \
+  --bank-dir "$DHF1K_ROOT/concept_clusters/temporal_cluster/temporal_cluster_level0" \
+  --dataset-root "$DHF1K_ROOT" \
+  --cache-root "$DHF1K_ROOT/cached_temporal_feats" \
+  --splits train val \
+  --augmentations original hflip \
+  --expected-clusters 130 \
+  --stride 1 \
+  > out.log 2>&1 &

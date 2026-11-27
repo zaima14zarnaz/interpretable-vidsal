@@ -363,19 +363,19 @@ class VisualConceptLossMixin:
         )
         self.visual_appearance_diagnostics.update(
             feature_active_this_forward=feature_descriptors is not None,
-            feature_reason="fixed_reference_cluster_comparison"
-            if w_feature > 0
-            else "zero_weight",
+            feature_reason=(
+                "fixed_reference_cluster_comparison" if w_feature > 0 else "zero_weight"
+            ),
             structure_active_this_forward=w_structure > 0,
             app_loss_patch_count_total=cov_zero + float(num_patches),
             app_loss_patch_count=evaluated,
             app_loss_rgb_patch_count=evaluated if w_rgb > 0 else cov_zero.clone(),
-            app_loss_feature_patch_count=evaluated
-            if w_feature > 0
-            else cov_zero.clone(),
-            app_loss_structure_patch_count=evaluated
-            if w_structure > 0
-            else cov_zero.clone(),
+            app_loss_feature_patch_count=(
+                evaluated if w_feature > 0 else cov_zero.clone()
+            ),
+            app_loss_structure_patch_count=(
+                evaluated if w_structure > 0 else cov_zero.clone()
+            ),
         )
         return result
 
@@ -605,6 +605,179 @@ class VisualConceptLossMixin:
                 + w["visual_appearance"] * loss_appearance,
             }
         return (losses, align_out)
+
+
+class TemporalConceptLossMixin:
+    """Temporal counterparts of visual reconstruction/diversity/assignment losses.
+
+    Fixed flow costs and cached cluster labels anchor prototype j to saved cluster j.
+    Only supported, valid flow is supervised. Static patches remain valid samples.
+    No RGB, appearance, backbone-feature or structure loss is used for this bank.
+    """
+
+    DEFAULT_TEMPORAL_LOSS_WEIGHTS = {
+        "temporal": 0.1,
+        "temporal_div": 1.0,
+        "temporal_optical_flow": 1.0,
+    }
+
+    def _temporal_flow_cost(self, fixed: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """The frozen bank's exact descriptor distance; no learned cost targets."""
+        h = fixed["flow_hist"].float()
+        r = self.reference_flow_hist.float()
+        if self.metric == "circular-emd":
+            ma, mb = h[:, :8].sum(-1), r[:, :8].sum(-1)
+            pa = h[:, :8] / ma[:, None].clamp_min(1e-12)
+            pb = r[:, :8] / mb[:, None].clamp_min(1e-12)
+            cumulative = (pa[:, None, :] - pb[None, :, :]).cumsum(-1)
+            # Either middle value minimizes L1; torch.median matches this optimum.
+            centered = cumulative - cumulative.median(-1, keepdim=True).values
+            flow = ma[:, None].minimum(mb[None, :]) * centered.abs().sum(-1) / 4
+            flow = flow + (ma[:, None] - mb[None, :]).abs()
+        elif self.metric == "l1":
+            flow = (h[:, None, :] - r[None, :, :]).abs().sum(-1) / 2
+        elif self.metric == "compact":
+            flow = (
+                fixed["compact"][:, None, :]
+                - self.reference_compact.float()[None, :, :]
+            ).norm(dim=-1) / math.sqrt(3)
+        else:
+            raise ValueError(f"Unsupported temporal flow metric: {self.metric}")
+        magnitude = (
+            fixed["magnitude"][:, None, :]
+            - self.reference_magnitude.float()[None, :, :]
+        ).abs()
+        global_cost = (
+            fixed["global_motion"][:, None, :]
+            - self.reference_global_motion.float()[None, :, :]
+        ).abs().sum(-1) / 2
+        w = self.distance_weights.float()
+        return (
+            (
+                w[0] * flow
+                + w[2] * magnitude[..., 0]
+                + w[1] * magnitude[..., 1]
+                + w[3] * global_cost
+            )
+            .clamp_min(0)
+            .detach()
+        )
+
+    def _compute_temporal_losses(self, out, fixed, saliency_maps):
+        q = out["temporal_patch_embeddings"].float()
+        bank = F.normalize(self.temporal_concepts.float(), dim=-1)
+        probs = out["temporal_assignment_probs"].float()
+        valid = out["temporal_patch_valid"] & fixed["temporal_train_mask"]
+        zero = q.sum() * 0 + bank.sum() * 0
+        off_diag = ~torch.eye(self.num_concepts, dtype=torch.bool, device=q.device)
+        loss_div = (
+            F.relu((bank @ bank.T)[off_diag] - self.diversity_margin).square().mean()
+            if off_diag.any()
+            else zero
+        )
+        loss_recon = entropy = usage = flow = cluster_ce = reference_ce = align = zero
+        if valid.any():
+            recon = out["temporal_activations"].float() @ bank
+            loss_recon = (
+                1 - F.cosine_similarity(recon[valid], q[valid], dim=-1)
+            ).mean()
+            p = probs[valid]
+            entropy = -(p * p.clamp_min(1e-8).log()).sum(-1).mean()
+            # Same KL formula as visual usage, within each supported role.
+            # A static-only batch cannot be asked to activate moving prototypes.
+            usage = zero
+            for role in (1, 2):
+                rows = valid & (fixed["role"] == role)
+                columns = self.reference_role == role
+                if rows.any() and columns.any():
+                    mean_usage = probs[rows][:, columns].mean(0)
+                    uniform = torch.full_like(mean_usage, 1 / mean_usage.numel())
+                    usage = usage + rows.sum() / valid.sum() * F.kl_div(
+                        mean_usage.clamp_min(1e-8).log(), uniform, reduction="batchmean"
+                    )
+            cost = self._temporal_flow_cost(fixed)
+            flow = (p * cost[valid]).sum(-1).mean()
+            cluster_ce = F.cross_entropy(
+                out["temporal_concept_logits"][valid].float(),
+                fixed["cluster_ids"][valid],
+            )
+            # Evaluate the SAME live encoder at saved medoids to fix prototype IDs.
+            ref_q = F.normalize(
+                self.temporal_encoder(
+                    self.reference_inputs.to(self.temporal_concepts.dtype)
+                ).float(),
+                dim=-1,
+            )
+            ref_logits = (ref_q @ bank.T / self.temperature).masked_fill(
+                self.reference_role[:, None] != self.reference_role[None, :], -1e4
+            )
+            ref_valid = self.reference_role != 0
+            reference_ce = F.cross_entropy(
+                ref_logits[ref_valid],
+                torch.arange(self.num_concepts, device=q.device)[ref_valid],
+            )
+            if self.use_saliency_alignment and saliency_maps is not None:
+                fs = out["temporal_metadata"]["feature_shape"]
+                # Reuse the established target normalization and last-frame policy.
+                targets, target_valid = (
+                    VisualConceptLossMixin._downsample_saliency_to_concept_grid(
+                        self,
+                        prepare_saliency_sequence(saliency_maps)[:, :, -1],
+                        fs["B"],
+                        1,
+                        fs["H"],
+                        fs["W"],
+                        q.device,
+                        q.dtype,
+                    )
+                )
+                ys = (torch.arange(fs["H"], device=q.device, dtype=q.dtype) + 0.5) / fs[
+                    "H"
+                ]
+                xs = (torch.arange(fs["W"], device=q.device, dtype=q.dtype) + 0.5) / fs[
+                    "W"
+                ]
+                yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+                coords = torch.stack([xx, yy], -1).reshape(-1, 2).repeat(fs["B"], 1)
+                head_input = torch.cat(
+                    [q, out["temporal_concept_representation"].float(), coords], -1
+                )
+                saliency_logits = (
+                    self.temporal_saliency_head(
+                        head_input.to(self.temporal_concepts.dtype)
+                    )
+                    .squeeze(-1)
+                    .float()
+                )
+                rows = valid & target_valid
+                if rows.any():
+                    align = F.binary_cross_entropy_with_logits(
+                        saliency_logits[rows], targets[rows]
+                    )
+        optical = flow + cluster_ce + reference_ce
+        w = self.loss_weights
+        total = (
+            w["temporal"] * loss_recon
+            + w["temporal_div"] * loss_div
+            + self.entropy_weight * entropy
+            + self.usage_weight * usage
+            + self.saliency_align_weight * align
+            + w["temporal_optical_flow"] * optical
+        )
+        return {
+            "loss_temporal": loss_recon,
+            "loss_temporal_div": loss_div,
+            "loss_temporal_assignment_entropy": entropy,
+            "loss_temporal_assignment_usage": usage,
+            "loss_temporal_saliency_align": align,
+            "loss_temporal_optical_flow": optical,
+            "loss_temporal_flow_distance": flow,
+            "loss_temporal_cluster_ce": cluster_ce,
+            "loss_temporal_reference_ce": reference_ce,
+            "loss_total_temporal": total,
+        }
+
+    _to_float_saliency = staticmethod(VisualConceptLossMixin._to_float_saliency)
 
 
 # Full training objective and helpers from src/losses.py (formulas preserved).
@@ -2103,6 +2276,18 @@ def compute_total_loss(
         "target_patch_grid": fid_out["target_patch_grid"],
         "source_mixture_grid": fid_out["source_mixture_grid"],
     }
+    stage4_losses = (
+        concept_out.get("stage4", {}).get("losses", {})
+        if isinstance(concept_out, dict)
+        else {}
+    )
+    result.update(
+        {
+            key: value
+            for key, value in stage4_losses.items()
+            if key.startswith("loss_temporal") or key == "loss_total_temporal"
+        }
+    )
     for key, value in side_loss_out.items():
         if key != "loss_decoder_side_aux":
             result[key] = value
